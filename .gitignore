@@ -1,2 +1,18 @@
 __pycache__/
 *.pyc
+# Node dependencies
+node_modules/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Local environment files
+.env
+.venv/
+venv/
