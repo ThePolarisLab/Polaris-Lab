@@ -6,6 +6,8 @@ from app.models.company import Company
 from app.api.company import router as company_router
 from app.models.truck import Truck
 from app.api.truck import router as truck_router
+from app.models.memory import MemoryEntry
+from app.api.memory import router as memory_router
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -30,6 +32,7 @@ app.add_middleware(
 # Register API routes
 app.include_router(company_router)
 app.include_router(truck_router)
+app.include_router(memory_router)
 @app.get("/")
 def root():
     return {
