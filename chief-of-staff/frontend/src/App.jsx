@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
 
@@ -21,11 +21,21 @@ function Card({title, children}) {
 }
 
 function App() {
+  const [company, setCompany] = useState(null);
+
+useEffect(() => {
+    fetch("http://127.0.0.1:8000/company")
+        .then(res => res.json())
+        .then(data => setCompany(data))
+        .catch(console.error);
+}, []);
   return (
     <main className="page">
       <header className="hero">
         <p>Polaris Chief of Staff v0.1</p>
-        <h1>Good Morning, Founder.</h1>
+        <h1>
+Good Morning, {company ? company.company_name : "Founder"}
+</h1>
         <h3>What requires your attention today?</h3>
       </header>
       <div className="grid">
