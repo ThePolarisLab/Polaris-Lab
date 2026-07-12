@@ -1,45 +1,97 @@
-from dataclasses import dataclass
+from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.models.relationship import KnowledgeRelationship
 
 
-@dataclass(frozen=True, slots=True)
-class Relationship:
-    source: str
-    target: str
-    relation: str
+def add_relationship(
+    db: Session,
+    *,
+    source: str,
+    target: str,
+    relation: str,
+) -> tuple[KnowledgeRelationship, bool]:
+    """
+    Create a persistent relationship.
 
+    Returns:
+        (relationship, created)
+    """
 
-class RelationshipRegistry:
-    def __init__(self) -> None:
-        self._relationships: list[Relationship] = []
-
-    def add(self, source: str, target: str, relation: str) -> Relationship:
-        relationship = Relationship(
-            source=source,
-            target=target,
-            relation=relation,
+    existing = (
+        db.query(KnowledgeRelationship)
+        .filter(
+            KnowledgeRelationship.source == source,
+            KnowledgeRelationship.target == target,
+            KnowledgeRelationship.relation == relation,
         )
+        .first()
+    )
 
-        if relationship not in self._relationships:
-            self._relationships.append(relationship)
+    if existing is not None:
+        return existing, False
 
-        return relationship
+    relationship = KnowledgeRelationship(
+        source=source,
+        target=target,
+        relation=relation,
+    )
 
-    def all(self) -> list[Relationship]:
-        return list(self._relationships)
+    db.add(relationship)
 
-    def for_entity(self, entity: str) -> list[Relationship]:
-        return [
-            relationship
-            for relationship in self._relationships
-            if relationship.source == entity
-            or relationship.target == entity
-        ]
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
 
-    def clear(self) -> None:
-        self._relationships.clear()
+        existing = (
+            db.query(KnowledgeRelationship)
+            .filter(
+                KnowledgeRelationship.source == source,
+                KnowledgeRelationship.target == target,
+                KnowledgeRelationship.relation == relation,
+            )
+            .one()
+        )
+        return existing, False
 
-    def count(self) -> int:
-        return len(self._relationships)
+    db.refresh(relationship)
+    return relationship, True
 
 
-relationship_registry = RelationshipRegistry()
+def list_relationships(
+    db: Session,
+    *,
+    limit: int = 200,
+) -> list[KnowledgeRelationship]:
+    return (
+        db.query(KnowledgeRelationship)
+        .order_by(KnowledgeRelationship.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def relationships_for_entity(
+    db: Session,
+    entity_key: str,
+    *,
+    limit: int = 200,
+) -> list[KnowledgeRelationship]:
+    return (
+        db.query(KnowledgeRelationship)
+        .filter(
+            or_(
+                KnowledgeRelationship.source == entity_key,
+                KnowledgeRelationship.target == entity_key,
+            )
+        )
+        .order_by(KnowledgeRelationship.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def relationship_count(db: Session) -> int:
+    return db.query(KnowledgeRelationship).count()

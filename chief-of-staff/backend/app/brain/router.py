@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.brain.intent import IntentType
 from app.knowledge.classifier import classify_memory
 from app.knowledge.duplicate import find_duplicate_memory
-from app.knowledge.relationships import relationship_registry
+from app.knowledge.relationships import add_relationship
 from app.models.memory import MemoryEntry
 from app.missions.models import Mission
 from app.missions.service import create_mission, list_missions
@@ -59,14 +59,22 @@ def _remember(*, message: str, db: Session) -> dict:
     title = _make_title(details)
     classification = classify_memory(details)
 
-    duplicate = find_duplicate_memory(db, details)
+    duplicate = find_duplicate_memory(
+        db,
+        details,
+    )
 
     if duplicate is not None:
         relationship_count = _create_memory_relationships(
+            db=db,
             memory_id=duplicate.memory.id,
             classification=classification,
         )
-        recognized = [entity.name for entity in classification.entities]
+
+        recognized = [
+            entity.name
+            for entity in classification.entities
+        ]
 
         return {
             "reply": (
@@ -78,10 +86,10 @@ def _remember(*, message: str, db: Session) -> dict:
                     else ""
                 )
                 + (
-                    f" Linked {relationship_count} relationship"
+                    f" Added {relationship_count} new persistent relationship"
                     f"{'s' if relationship_count != 1 else ''}."
                     if relationship_count
-                    else ""
+                    else " All relationships were already stored."
                 )
             ),
             "action": "MEMORY_DUPLICATE_FOUND",
@@ -101,10 +109,15 @@ def _remember(*, message: str, db: Session) -> dict:
     db.refresh(entry)
 
     relationship_count = _create_memory_relationships(
+        db=db,
         memory_id=entry.id,
         classification=classification,
     )
-    entity_names = [entity.name for entity in classification.entities]
+
+    entity_names = [
+        entity.name
+        for entity in classification.entities
+    ]
 
     return {
         "reply": (
@@ -115,7 +128,7 @@ def _remember(*, message: str, db: Session) -> dict:
                 else ""
             )
             + (
-                f" Linked {relationship_count} relationship"
+                f" Added {relationship_count} persistent relationship"
                 f"{'s' if relationship_count != 1 else ''}."
                 if relationship_count
                 else ""
@@ -126,25 +139,38 @@ def _remember(*, message: str, db: Session) -> dict:
     }
 
 
-def _create_memory_relationships(*, memory_id: int, classification) -> int:
+def _create_memory_relationships(
+    *,
+    db: Session,
+    memory_id: int,
+    classification,
+) -> int:
     memory_key = f"memory.{memory_id}"
-    before_count = relationship_registry.count()
+    created_count = 0
 
     for entity in classification.entities:
-        relationship_registry.add(
+        _, created = add_relationship(
+            db,
             source=memory_key,
             target=entity.id,
             relation="mentions",
         )
 
+        if created:
+            created_count += 1
+
         for related_entity_id in entity.related_entities:
-            relationship_registry.add(
+            _, created = add_relationship(
+                db,
                 source=memory_key,
                 target=related_entity_id,
                 relation="relates_to",
             )
 
-    return relationship_registry.count() - before_count
+            if created:
+                created_count += 1
+
+    return created_count
 
 
 def _recall(*, message: str, db: Session) -> dict:
@@ -171,13 +197,17 @@ def _recall(*, message: str, db: Session) -> dict:
 
     if not memories:
         subject = f" about {query}" if query else ""
+
         return {
             "reply": f"I couldn't find any Polaris memories{subject}.",
             "action": "MEMORY_SEARCHED",
             "items": [],
         }
 
-    lines = [f"• {memory.title}: {memory.details}" for memory in memories]
+    lines = [
+        f"• {memory.title}: {memory.details}"
+        for memory in memories
+    ]
 
     return {
         "reply": "Here is what I remember:\n" + "\n".join(lines),
@@ -199,6 +229,7 @@ def _start_q2(*, db: Session) -> dict:
 
     if existing is not None:
         next_task = _first_incomplete_task(existing)
+
         next_text = (
             f" Your next task is: {next_task.title}."
             if next_task is not None
@@ -222,8 +253,13 @@ def _start_q2(*, db: Session) -> dict:
         due_at=None,
     )
 
-    task_count = sum(len(workflow.tasks) for workflow in mission.workflows)
+    task_count = sum(
+        len(workflow.tasks)
+        for workflow in mission.workflows
+    )
+
     first_task = _first_incomplete_task(mission)
+
     next_text = (
         f" Your first task is: {first_task.title}."
         if first_task is not None
@@ -277,7 +313,10 @@ def _summarize(*, context: dict) -> dict:
     )
 
     memory_text = (
-        ", ".join(memory.title for memory in memories)
+        ", ".join(
+            memory.title
+            for memory in memories
+        )
         if memories
         else "no recent memories"
     )
@@ -331,7 +370,11 @@ def _extract_recall_query(message: str) -> str:
     )
 
     for pattern in patterns:
-        match = re.search(pattern, normalized, flags=re.IGNORECASE)
+        match = re.search(
+            pattern,
+            normalized,
+            flags=re.IGNORECASE,
+        )
 
         if match:
             return match.group(1).strip(" ?.!")
