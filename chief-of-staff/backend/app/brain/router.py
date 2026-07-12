@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.brain.intent import IntentType
 from app.knowledge.classifier import classify_memory
+from app.knowledge.duplicate import find_duplicate_memory
 from app.models.memory import MemoryEntry
 from app.missions.models import Mission
 from app.missions.service import create_mission, list_missions
@@ -58,6 +59,23 @@ def _remember(*, message: str, db: Session) -> dict:
     details = _clean_memory_message(message)
     title = _make_title(details)
     classification = classify_memory(details)
+
+    duplicate = find_duplicate_memory(db, details)
+    if duplicate is not None:
+        entity_names = [entity.name for entity in classification.entities]
+        return {
+            "reply": (
+                "I already have a matching memory: "
+                f"{duplicate.memory.details}"
+                + (
+                    f" Recognized: {', '.join(entity_names)}."
+                    if entity_names
+                    else ""
+                )
+            ),
+            "action": "MEMORY_DUPLICATE_FOUND",
+            "entity_id": duplicate.memory.id,
+        }
 
     entry = MemoryEntry(
         category=classification.category,
