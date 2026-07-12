@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.brain.intent import IntentType
 from app.knowledge.classifier import classify_memory
 from app.knowledge.duplicate import find_duplicate_memory
+from app.knowledge.relationships import relationship_registry
 from app.models.memory import MemoryEntry
 from app.missions.models import Mission
 from app.missions.service import create_mission, list_missions
@@ -18,8 +19,6 @@ def route_intent(
     db: Session,
     context: dict,
 ) -> dict:
-    """Delegate Builder intent to the correct Polaris capability."""
-
     if intent == IntentType.REMEMBER:
         return _remember(message=message, db=db)
 
@@ -61,15 +60,27 @@ def _remember(*, message: str, db: Session) -> dict:
     classification = classify_memory(details)
 
     duplicate = find_duplicate_memory(db, details)
+
     if duplicate is not None:
-        entity_names = [entity.name for entity in classification.entities]
+        relationship_count = _create_memory_relationships(
+            memory_id=duplicate.memory.id,
+            classification=classification,
+        )
+        recognized = [entity.name for entity in classification.entities]
+
         return {
             "reply": (
                 "I already have a matching memory: "
                 f"{duplicate.memory.details}"
                 + (
-                    f" Recognized: {', '.join(entity_names)}."
-                    if entity_names
+                    f" Recognized: {', '.join(recognized)}."
+                    if recognized
+                    else ""
+                )
+                + (
+                    f" Linked {relationship_count} relationship"
+                    f"{'s' if relationship_count != 1 else ''}."
+                    if relationship_count
                     else ""
                 )
             ),
@@ -89,10 +100,11 @@ def _remember(*, message: str, db: Session) -> dict:
     db.commit()
     db.refresh(entry)
 
-    entity_names = [
-        entity.name
-        for entity in classification.entities
-    ]
+    relationship_count = _create_memory_relationships(
+        memory_id=entry.id,
+        classification=classification,
+    )
+    entity_names = [entity.name for entity in classification.entities]
 
     return {
         "reply": (
@@ -102,10 +114,37 @@ def _remember(*, message: str, db: Session) -> dict:
                 if entity_names
                 else ""
             )
+            + (
+                f" Linked {relationship_count} relationship"
+                f"{'s' if relationship_count != 1 else ''}."
+                if relationship_count
+                else ""
+            )
         ),
         "action": "MEMORY_CREATED",
         "entity_id": entry.id,
     }
+
+
+def _create_memory_relationships(*, memory_id: int, classification) -> int:
+    memory_key = f"memory.{memory_id}"
+    before_count = relationship_registry.count()
+
+    for entity in classification.entities:
+        relationship_registry.add(
+            source=memory_key,
+            target=entity.id,
+            relation="mentions",
+        )
+
+        for related_entity_id in entity.related_entities:
+            relationship_registry.add(
+                source=memory_key,
+                target=related_entity_id,
+                relation="relates_to",
+            )
+
+    return relationship_registry.count() - before_count
 
 
 def _recall(*, message: str, db: Session) -> dict:
@@ -138,10 +177,7 @@ def _recall(*, message: str, db: Session) -> dict:
             "items": [],
         }
 
-    lines = [
-        f"• {memory.title}: {memory.details}"
-        for memory in memories
-    ]
+    lines = [f"• {memory.title}: {memory.details}" for memory in memories]
 
     return {
         "reply": "Here is what I remember:\n" + "\n".join(lines),
@@ -186,11 +222,7 @@ def _start_q2(*, db: Session) -> dict:
         due_at=None,
     )
 
-    task_count = sum(
-        len(workflow.tasks)
-        for workflow in mission.workflows
-    )
-
+    task_count = sum(len(workflow.tasks) for workflow in mission.workflows)
     first_task = _first_incomplete_task(mission)
     next_text = (
         f" Your first task is: {first_task.title}."
@@ -299,11 +331,7 @@ def _extract_recall_query(message: str) -> str:
     )
 
     for pattern in patterns:
-        match = re.search(
-            pattern,
-            normalized,
-            flags=re.IGNORECASE,
-        )
+        match = re.search(pattern, normalized, flags=re.IGNORECASE)
 
         if match:
             return match.group(1).strip(" ?.!")
