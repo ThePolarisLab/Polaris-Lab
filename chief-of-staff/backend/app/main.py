@@ -17,6 +17,7 @@ from app.api.truck import router as truck_router
 from app.api.memory import router as memory_router
 from app.api.missions import router as missions_router
 from app.api.relationships import router as relationships_router
+from app.api.memory_search import router as memory_search_router
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -45,7 +46,7 @@ app.include_router(memory_router)
 app.include_router(chat_router)
 app.include_router(missions_router)
 app.include_router(relationships_router)
-
+app.include_router(memory_search_router)
 
 @app.get("/")
 def root():
