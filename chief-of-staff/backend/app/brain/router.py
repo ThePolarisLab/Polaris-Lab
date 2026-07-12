@@ -4,6 +4,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.brain.intent import IntentType
+from app.knowledge.classifier import classify_memory
 from app.models.memory import MemoryEntry
 from app.missions.models import Mission
 from app.missions.service import create_mission, list_missions
@@ -56,12 +57,13 @@ def route_intent(
 def _remember(*, message: str, db: Session) -> dict:
     details = _clean_memory_message(message)
     title = _make_title(details)
+    classification = classify_memory(details)
 
     entry = MemoryEntry(
-        category=_infer_category(details),
+        category=classification.category,
         title=title,
         details=details,
-        importance=_infer_importance(details),
+        importance=classification.importance,
         source="Conversation",
     )
 
@@ -69,8 +71,20 @@ def _remember(*, message: str, db: Session) -> dict:
     db.commit()
     db.refresh(entry)
 
+    entity_names = [
+        entity.name
+        for entity in classification.entities
+    ]
+
     return {
-        "reply": f"I've saved this to Polaris Memory: {details}",
+        "reply": (
+            f"I've saved this to Polaris Memory: {details}"
+            + (
+                f" Recognized: {', '.join(entity_names)}."
+                if entity_names
+                else ""
+            )
+        ),
         "action": "MEMORY_CREATED",
         "entity_id": entry.id,
     }
@@ -78,7 +92,6 @@ def _remember(*, message: str, db: Session) -> dict:
 
 def _recall(*, message: str, db: Session) -> dict:
     query = _extract_recall_query(message)
-
     memories_query = db.query(MemoryEntry)
 
     if query:
@@ -137,6 +150,7 @@ def _start_q2(*, db: Session) -> dict:
             if next_task is not None
             else ""
         )
+
         return {
             "reply": (
                 f"Your Q2 Compliance mission is already active at "
@@ -158,6 +172,7 @@ def _start_q2(*, db: Session) -> dict:
         len(workflow.tasks)
         for workflow in mission.workflows
     )
+
     first_task = _first_incomplete_task(mission)
     next_text = (
         f" Your first task is: {first_task.title}."
@@ -228,7 +243,16 @@ def _summarize(*, context: dict) -> dict:
 
 def _clean_memory_message(message: str) -> str:
     cleaned = re.sub(
-        r"^\s*(remember(?:\s+that)?|save this|note that|record that|don't forget|do not forget)\s*[:,-]?\s*",
+        (
+            r"^\s*("
+            r"remember(?:\s+that)?|"
+            r"save this|"
+            r"note that|"
+            r"record that|"
+            r"don't forget|"
+            r"do not forget"
+            r")\s*[:,-]?\s*"
+        ),
         "",
         message,
         flags=re.IGNORECASE,
@@ -241,6 +265,7 @@ def _make_title(details: str) -> str:
     sentence = details.rstrip(".!?")
     words = sentence.split()
     short = " ".join(words[:8])
+
     return short[:80] or "Conversation Memory"
 
 
@@ -256,82 +281,16 @@ def _extract_recall_query(message: str) -> str:
     )
 
     for pattern in patterns:
-        match = re.search(pattern, normalized, flags=re.IGNORECASE)
+        match = re.search(
+            pattern,
+            normalized,
+            flags=re.IGNORECASE,
+        )
+
         if match:
             return match.group(1).strip(" ?.!")
 
     return ""
-
-
-def _infer_category(details: str) -> str:
-    text = details.lower()
-
-    if any(
-        word in text
-        for word in (
-            "truck",
-            "trailer",
-            "driver",
-            "motive",
-            "hunter",
-            "fleet",
-        )
-    ):
-        return "Fleet"
-
-    if any(
-        word in text
-        for word in (
-            "gst",
-            "invoice",
-            "quickbooks",
-            "cash",
-            "payment",
-            "payroll",
-            "accounts receivable",
-            "accounts payable",
-        )
-    ):
-        return "Finance"
-
-    if any(
-        word in text
-        for word in (
-            "ifta",
-            "kyu",
-            "compliance",
-            "tax",
-            "fuel",
-            "petroleum",
-            "eco petroleum",
-            "bvd petroleum",
-            "cra",
-        )
-    ):
-        return "Compliance"
-
-    if any(
-        word in text
-        for word in (
-            "constitution",
-            "founder",
-            "decision",
-            "history",
-            "policy",
-        )
-    ):
-        return "History"
-
-    return "General"
-
-
-def _infer_importance(details: str) -> str:
-    text = details.lower()
-
-    if any(word in text for word in ("urgent", "critical", "deadline", "overdue")):
-        return "High"
-
-    return "Medium"
 
 
 def _first_incomplete_task(mission: Mission):
