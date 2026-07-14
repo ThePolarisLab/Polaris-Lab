@@ -19,6 +19,8 @@ from app.api.missions import router as missions_router
 from app.api.relationships import router as relationships_router
 from app.api.memory_search import router as memory_search_router
 from app.api.reasoning import router as reasoning_router
+from app.models.team_note import TeamNote
+from app.api.team_notes import router as team_notes_router
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -49,6 +51,7 @@ app.include_router(missions_router)
 app.include_router(relationships_router)
 app.include_router(memory_search_router)
 app.include_router(reasoning_router)
+app.include_router(team_notes_router)
 
 @app.get("/")
 def root():
