@@ -22,6 +22,7 @@ from app.api.reasoning import router as reasoning_router
 from app.models.team_note import TeamNote
 from app.api.team_notes import router as team_notes_router
 from app.api.dashboard import router as dashboard_router
+from app.api.github_engine import router as github_engine_router
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -54,6 +55,7 @@ app.include_router(memory_search_router)
 app.include_router(reasoning_router)
 app.include_router(team_notes_router)
 app.include_router(dashboard_router)
+app.include_router(github_engine_router)
 
 @app.get("/")
 def root():
