@@ -34,6 +34,8 @@ def test_analyzer_extracts_module_structure():
 
     assert result["path"] == "worker.py"
     assert result["module_docstring"] == "Example module."
+    assert result["analysis_limit_bytes"] == 1_000_000
+    assert result["source_bytes"] == len(SOURCE.encode("utf-8"))
     assert result["metrics"] == {
         "lines": 23,
         "imports": 2,
@@ -93,9 +95,49 @@ def test_invalid_python_raises_analysis_error():
         PythonCodeAnalyzer().analyze("def broken(:")
 
 
-def test_source_size_limit_is_enforced():
+def test_default_source_size_limit_is_enforced():
     analyzer = PythonCodeAnalyzer()
-    oversized = "x" * (analyzer.MAX_SOURCE_BYTES + 1)
+    oversized = "x" * (analyzer.max_source_bytes + 1)
 
-    with pytest.raises(CodeAnalysisError, match="1 MB"):
+    with pytest.raises(CodeAnalysisError, match="configured analysis limit"):
         analyzer.analyze(oversized)
+
+
+def test_explicit_source_size_limit_is_supported():
+    analyzer = PythonCodeAnalyzer(max_source_bytes=20)
+
+    assert analyzer.max_source_bytes == 20
+    analyzer.analyze("value = 1")
+    with pytest.raises(CodeAnalysisError, match="20 bytes"):
+        analyzer.analyze("x" * 21)
+
+
+def test_environment_source_size_limit_is_supported(monkeypatch):
+    monkeypatch.setenv("POLARIS_CODE_ANALYSIS_MAX_BYTES", "2048")
+
+    analyzer = PythonCodeAnalyzer()
+
+    assert analyzer.max_source_bytes == 2048
+
+
+def test_explicit_limit_overrides_environment(monkeypatch):
+    monkeypatch.setenv("POLARIS_CODE_ANALYSIS_MAX_BYTES", "2048")
+
+    analyzer = PythonCodeAnalyzer(max_source_bytes=4096)
+
+    assert analyzer.max_source_bytes == 4096
+
+
+@pytest.mark.parametrize("value", ["abc", "0", "-10"])
+def test_invalid_environment_limit_is_rejected(monkeypatch, value):
+    monkeypatch.setenv("POLARIS_CODE_ANALYSIS_MAX_BYTES", value)
+
+    with pytest.raises(CodeAnalysisError):
+        PythonCodeAnalyzer()
+
+
+def test_hard_limit_cannot_be_exceeded(monkeypatch):
+    monkeypatch.setenv("POLARIS_CODE_ANALYSIS_MAX_BYTES", "10000001")
+
+    with pytest.raises(CodeAnalysisError, match="cannot exceed"):
+        PythonCodeAnalyzer()

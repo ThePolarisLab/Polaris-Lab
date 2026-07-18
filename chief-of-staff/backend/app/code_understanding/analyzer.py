@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import os
 from dataclasses import asdict, dataclass, field
 
 
@@ -46,11 +47,25 @@ class _CallCollector(ast.NodeVisitor):
 class PythonCodeAnalyzer:
     """Extracts deterministic structural intelligence from Python source."""
 
-    MAX_SOURCE_BYTES = 1_000_000
+    DEFAULT_MAX_SOURCE_BYTES = 1_000_000
+    HARD_MAX_SOURCE_BYTES = 10_000_000
+    MAX_SOURCE_BYTES_ENV = "POLARIS_CODE_ANALYSIS_MAX_BYTES"
+
+    def __init__(self, max_source_bytes: int | None = None) -> None:
+        self.max_source_bytes = self._resolve_max_source_bytes(max_source_bytes)
+
+    @property
+    def MAX_SOURCE_BYTES(self) -> int:
+        """Backward-compatible access to the active per-instance limit."""
+        return self.max_source_bytes
 
     def analyze(self, source: str, path: str = "<memory>") -> dict:
-        if len(source.encode("utf-8")) > self.MAX_SOURCE_BYTES:
-            raise CodeAnalysisError("Source exceeds the 1 MB analysis limit.")
+        source_bytes = len(source.encode("utf-8"))
+        if source_bytes > self.max_source_bytes:
+            raise CodeAnalysisError(
+                "Source exceeds the configured analysis limit of "
+                f"{self.max_source_bytes} bytes."
+            )
 
         try:
             tree = ast.parse(source, filename=path)
@@ -110,6 +125,8 @@ class PythonCodeAnalyzer:
             "classes": [asdict(item) for item in classes],
             "constants": constants,
             "call_graph": call_graph,
+            "analysis_limit_bytes": self.max_source_bytes,
+            "source_bytes": source_bytes,
             "metrics": {
                 "lines": len(source.splitlines()),
                 "imports": len(imports),
@@ -138,6 +155,29 @@ class PythonCodeAnalyzer:
             parts.append(f"Across its classes, it contains {metrics['methods']} methods.")
 
         return " ".join(parts)
+
+    @classmethod
+    def _resolve_max_source_bytes(cls, explicit_limit: int | None) -> int:
+        value = explicit_limit
+        if value is None:
+            raw = os.getenv(cls.MAX_SOURCE_BYTES_ENV, "").strip()
+            if not raw:
+                return cls.DEFAULT_MAX_SOURCE_BYTES
+            try:
+                value = int(raw)
+            except ValueError as exc:
+                raise CodeAnalysisError(
+                    f"{cls.MAX_SOURCE_BYTES_ENV} must be a positive integer."
+                ) from exc
+
+        if isinstance(value, bool) or value <= 0:
+            raise CodeAnalysisError("The analysis size limit must be a positive integer.")
+        if value > cls.HARD_MAX_SOURCE_BYTES:
+            raise CodeAnalysisError(
+                "The analysis size limit cannot exceed "
+                f"{cls.HARD_MAX_SOURCE_BYTES} bytes."
+            )
+        return value
 
     def _class_info(self, node: ast.ClassDef) -> ClassInfo:
         methods = [
