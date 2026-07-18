@@ -37,4 +37,12 @@ jobs:
       - name: Run backend tests
         env:
           PYTHONPATH: .
-        run: python -m pytest -v
+        run: python -m pytest -v 2>&1 | tee pytest-output.txt
+
+      - name: Upload pytest output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-output
+          path: chief-of-staff/backend/pytest-output.txt
+          if-no-files-found: warn
