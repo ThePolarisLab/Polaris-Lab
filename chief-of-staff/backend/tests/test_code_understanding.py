@@ -31,11 +31,12 @@ class Worker(BaseWorker):
 
 def test_analyzer_extracts_module_structure():
     result = PythonCodeAnalyzer().analyze(SOURCE, "worker.py")
-
     assert result["path"] == "worker.py"
     assert result["module_docstring"] == "Example module."
     assert result["analysis_limit_bytes"] == 1_000_000
     assert result["source_bytes"] == len(SOURCE.encode("utf-8"))
+    assert result["analysis_mode"] == "single"
+    assert result["chunks"] == []
     assert result["metrics"] == {
         "lines": 23,
         "imports": 2,
@@ -48,7 +49,6 @@ def test_analyzer_extracts_module_structure():
 
 def test_analyzer_extracts_imports_and_constant():
     result = PythonCodeAnalyzer().analyze(SOURCE)
-
     assert result["imports"][0]["module"] == "os"
     assert result["imports"][1] == {
         "module": "pathlib",
@@ -63,7 +63,6 @@ def test_analyzer_extracts_imports_and_constant():
 def test_analyzer_extracts_classes_methods_and_calls():
     result = PythonCodeAnalyzer().analyze(SOURCE)
     worker = result["classes"][0]
-
     assert worker["name"] == "Worker"
     assert worker["bases"] == ["BaseWorker"]
     assert worker["methods"][0]["decorators"] == ["classmethod"]
@@ -74,7 +73,6 @@ def test_analyzer_extracts_classes_methods_and_calls():
 def test_analyzer_extracts_function_signature():
     result = PythonCodeAnalyzer().analyze(SOURCE)
     helper = result["functions"][0]
-
     assert helper["parameters"] == ["value"]
     assert helper["returns"] == "str"
     assert helper["docstring"] == "Convert a value to text."
@@ -83,7 +81,6 @@ def test_analyzer_extracts_function_signature():
 
 def test_explain_produces_plain_english_summary():
     explanation = PythonCodeAnalyzer().explain(SOURCE, "worker.py")
-
     assert "worker.py is a Python module" in explanation
     assert "Worker" in explanation
     assert "helper" in explanation
@@ -98,14 +95,12 @@ def test_invalid_python_raises_analysis_error():
 def test_default_source_size_limit_is_enforced():
     analyzer = PythonCodeAnalyzer()
     oversized = "x" * (analyzer.max_source_bytes + 1)
-
     with pytest.raises(CodeAnalysisError, match="configured analysis limit"):
         analyzer.analyze(oversized)
 
 
 def test_explicit_source_size_limit_is_supported():
     analyzer = PythonCodeAnalyzer(max_source_bytes=20)
-
     assert analyzer.max_source_bytes == 20
     analyzer.analyze("value = 1")
     with pytest.raises(CodeAnalysisError, match="20 bytes"):
@@ -114,30 +109,60 @@ def test_explicit_source_size_limit_is_supported():
 
 def test_environment_source_size_limit_is_supported(monkeypatch):
     monkeypatch.setenv("POLARIS_CODE_ANALYSIS_MAX_BYTES", "2048")
-
-    analyzer = PythonCodeAnalyzer()
-
-    assert analyzer.max_source_bytes == 2048
+    assert PythonCodeAnalyzer().max_source_bytes == 2048
 
 
 def test_explicit_limit_overrides_environment(monkeypatch):
     monkeypatch.setenv("POLARIS_CODE_ANALYSIS_MAX_BYTES", "2048")
-
-    analyzer = PythonCodeAnalyzer(max_source_bytes=4096)
-
-    assert analyzer.max_source_bytes == 4096
+    assert PythonCodeAnalyzer(max_source_bytes=4096).max_source_bytes == 4096
 
 
 @pytest.mark.parametrize("value", ["abc", "0", "-10"])
 def test_invalid_environment_limit_is_rejected(monkeypatch, value):
     monkeypatch.setenv("POLARIS_CODE_ANALYSIS_MAX_BYTES", value)
-
     with pytest.raises(CodeAnalysisError):
         PythonCodeAnalyzer()
 
 
 def test_hard_limit_cannot_be_exceeded(monkeypatch):
     monkeypatch.setenv("POLARIS_CODE_ANALYSIS_MAX_BYTES", "10000001")
-
     with pytest.raises(CodeAnalysisError, match="cannot exceed"):
         PythonCodeAnalyzer()
+
+
+def test_chunked_analysis_handles_source_above_configured_limit():
+    source = "\n\n".join(
+        f"def function_{index}():\n    return {index}"
+        for index in range(12)
+    )
+    analyzer = PythonCodeAnalyzer(max_source_bytes=90)
+    result = analyzer.analyze_chunked(source, "large.py")
+    assert result["analysis_mode"] == "chunked"
+    assert result["source_bytes"] > analyzer.max_source_bytes
+    assert len(result["chunks"]) > 1
+    assert result["metrics"]["functions"] == 12
+    assert result["functions"][0]["name"] == "function_0"
+    assert result["functions"][-1]["name"] == "function_11"
+
+
+def test_chunks_preserve_top_level_symbol_boundaries():
+    source = "import os\n\nclass Large:\n    def one(self):\n        return os.getcwd()\n\ndef helper():\n    return Large()\n"
+    result = PythonCodeAnalyzer(max_source_bytes=45).analyze_chunked(source)
+    assert result["metrics"]["classes"] == 1
+    assert result["metrics"]["functions"] == 1
+    assert all(chunk["start_line"] <= chunk["end_line"] for chunk in result["chunks"])
+    assert sum(chunk["symbols"]["classes"] for chunk in result["chunks"]) == 1
+
+
+def test_chunked_explanation_reports_chunk_count():
+    analyzer = PythonCodeAnalyzer(max_source_bytes=40)
+    source = "def one():\n    pass\n\ndef two():\n    pass\n"
+    explanation = analyzer.explain(source, "large.py", chunked=True)
+    assert "syntax-aware chunks" in explanation
+
+
+def test_chunked_analysis_enforces_hard_ceiling():
+    analyzer = PythonCodeAnalyzer(max_source_bytes=100)
+    oversized = "x" * (analyzer.HARD_MAX_SOURCE_BYTES + 1)
+    with pytest.raises(CodeAnalysisError, match="hard analysis ceiling"):
+        analyzer.analyze_chunked(oversized)

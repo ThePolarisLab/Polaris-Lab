@@ -13,7 +13,7 @@ router = APIRouter(
 
 def _read_python(path: str, ref: str) -> str:
     if not path.lower().endswith(".py"):
-        raise CodeAnalysisError("PGE-003 v1 currently supports Python files only.")
+        raise CodeAnalysisError("PGE-003 currently supports Python files only.")
     return GitHubClient().read_file(path, ref)["content"]
 
 
@@ -28,14 +28,20 @@ def _run(operation):
 def analyze_file(
     path: str = Query(min_length=1, max_length=1000),
     ref: str = Query(default="main", min_length=1, max_length=200),
+    chunked: bool = Query(default=False),
 ):
     def operation():
         source = _read_python(path, ref)
-        analysis = PythonCodeAnalyzer().analyze(source, path)
+        analyzer = PythonCodeAnalyzer()
+        analysis = (
+            analyzer.analyze_chunked(source, path)
+            if chunked
+            else analyzer.analyze(source, path)
+        )
         analysis["ref"] = ref
         return GitHubOperationResult(
             success=True,
-            message=f"Analyzed {path}.",
+            message=f"Analyzed {path} in {analysis['analysis_mode']} mode.",
             data=analysis,
         )
 
@@ -46,6 +52,7 @@ def analyze_file(
 def explain_file(
     path: str = Query(min_length=1, max_length=1000),
     ref: str = Query(default="main", min_length=1, max_length=200),
+    chunked: bool = Query(default=False),
 ):
     def operation():
         source = _read_python(path, ref)
@@ -56,7 +63,8 @@ def explain_file(
             data={
                 "path": path,
                 "ref": ref,
-                "explanation": analyzer.explain(source, path),
+                "analysis_mode": "chunked" if chunked else "single",
+                "explanation": analyzer.explain(source, path, chunked=chunked),
             },
         )
 
