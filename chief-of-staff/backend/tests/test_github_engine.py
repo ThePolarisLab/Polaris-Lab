@@ -1,4 +1,5 @@
 import base64
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -92,8 +93,11 @@ def test_search_code_scopes_query_to_allowlisted_repository(monkeypatch):
     client.search_code("GitHubClient", per_page=10)
 
     assert calls
-    assert "%20repo%3AThePolarisLab%2FPolaris-Lab" in calls[0]
-    assert "per_page=10" in calls[0]
+    query = parse_qs(urlsplit(calls[0]).query)
+    assert query["q"] == [
+        "GitHubClient repo:ThePolarisLab/Polaris-Lab"
+    ]
+    assert query["per_page"] == ["10"]
 
 
 def test_commit_limit_is_capped(monkeypatch):
