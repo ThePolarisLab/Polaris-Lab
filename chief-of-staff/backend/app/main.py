@@ -23,13 +23,14 @@ from app.models.team_note import TeamNote
 from app.api.team_notes import router as team_notes_router
 from app.api.dashboard import router as dashboard_router
 from app.api.github_engine import router as github_engine_router
+from app.api.work_context import router as work_context_router
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="Polaris Chief of Staff API",
-    version="0.2"
+    version="0.3"
 )
 
 # Allow React frontend to access the API
@@ -56,11 +57,14 @@ app.include_router(reasoning_router)
 app.include_router(team_notes_router)
 app.include_router(dashboard_router)
 app.include_router(github_engine_router)
+app.include_router(work_context_router)
+
 
 @app.get("/")
 def root():
     return {
         "service": "Polaris Chief of Staff API",
-        "version": "0.2",
-        "database": "Connected"
+        "version": "0.3",
+        "database": "Connected",
+        "capabilities": ["EXP-014B Work Context Engine"],
     }
