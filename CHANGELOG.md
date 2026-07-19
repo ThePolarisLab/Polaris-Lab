@@ -2,6 +2,26 @@
 
 All notable changes to Polaris Lab are documented here.
 
+## [0.6.0] — 2026-07-19
+
+### Added
+- Atlas Entity Engine with typed, versioned entities and repository operations.
+- Atlas Relationship Engine with explicit relationship vocabulary and confidence metadata.
+- Knowledge Graph Core with endpoint validation, neighbor discovery, and graph integrity rules.
+- Graph Query Engine with bounded breadth-first traversal, shortest paths, cycle protection, and relationship filters.
+- Explainability Engine with deterministic narratives, structured evidence, and conservative confidence reporting.
+- ADR-004 through ADR-008 documenting the Atlas architecture.
+- Full TypeScript release verification covering Executive Memory and Atlas.
+
+### Changed
+- Package version advanced to `0.6.0`.
+- GitHub Actions now runs the complete TypeScript test suite on pull requests and pushes to `main` and feature branches.
+
+### Known limitations
+- Atlas repositories remain in memory.
+- Natural-language query parsing and Athena orchestration are not included yet.
+- Production authorization, tenant isolation, observability, and large-scale graph storage remain future work.
+
 ## [0.3.0] — 2026-07-17
 
 ### Added
