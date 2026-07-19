@@ -1,9 +1,12 @@
 {
   "name": "polaris-lab",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "scripts": {
-    "test": "jest --runInBand"
+    "test": "jest --runInBand",
+    "test:athena": "jest --runInBand tests/athena/ExecutiveMemory.test.ts",
+    "test:atlas": "jest --runInBand tests/atlas",
+    "verify:release": "npm test"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
