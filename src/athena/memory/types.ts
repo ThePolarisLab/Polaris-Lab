@@ -41,6 +41,16 @@ export interface MemoryQuery {
   now?: Date;
 }
 
+export interface MemoryUpdateInput {
+  userId: string;
+  title?: string;
+  content?: string;
+  tags?: string[];
+  importance?: number;
+  metadata?: Record<string, unknown>;
+  now?: Date;
+}
+
 export interface MemoryMatch {
   record: MemoryRecord;
   relevance: number;
