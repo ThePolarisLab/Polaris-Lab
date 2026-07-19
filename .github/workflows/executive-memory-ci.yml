@@ -1,0 +1,26 @@
+name: Executive Memory CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, "feature/v0.5.0-executive-memory"]
+
+permissions:
+  contents: read
+
+jobs:
+  verify-typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Typecheck and test
+        run: npm run verify
