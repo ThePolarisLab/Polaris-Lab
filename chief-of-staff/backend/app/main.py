@@ -24,6 +24,7 @@ from app.api.team_notes import router as team_notes_router
 from app.api.dashboard import router as dashboard_router
 from app.api.github_engine import router as github_engine_router
 from app.api.code_understanding import router as code_understanding_router
+from app.api.refactoring import router as refactoring_router
 from app.api.work_context import router as work_context_router
 
 # Create database tables
@@ -59,6 +60,7 @@ app.include_router(team_notes_router)
 app.include_router(dashboard_router)
 app.include_router(github_engine_router)
 app.include_router(code_understanding_router)
+app.include_router(refactoring_router)
 app.include_router(work_context_router)
 
 
@@ -72,5 +74,6 @@ def root():
             "EXP-014B Work Context Engine",
             "PGE-002 Repository Intelligence",
             "PGE-003 Code Understanding Engine",
+            "PGE-004.1 Complexity Engine",
         ],
     }
