@@ -73,7 +73,7 @@ describe("Atlas Knowledge Graph Core", () => {
     const graph = createGraph();
     await graph.addEntity({ id: "project", type: "project", name: "Atlas" });
     await graph.addEntity({ id: "release", type: "release", name: "v0.6.0" });
-    await graph.addRelationship({ sourceEntityId: "project", targetEntityId: "release", type: "produces" });
+    await graph.addRelationship({ sourceEntityId: "project", targetEntityId: "release", type: "contains" });
 
     const snapshot = await graph.snapshot();
     expect(snapshot.entities).toHaveLength(2);
