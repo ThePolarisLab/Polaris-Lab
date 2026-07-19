@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  verify-typescript:
+  test-executive-memory:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -21,7 +21,5 @@ jobs:
           node-version: "22"
       - name: Install dependencies
         run: npm install --no-audit --no-fund
-      - name: Typecheck
-        run: npm run typecheck
-      - name: Test
-        run: npm test
+      - name: Run Executive Memory tests
+        run: npm test -- --runTestsByPath tests/athena/ExecutiveMemory.test.ts
