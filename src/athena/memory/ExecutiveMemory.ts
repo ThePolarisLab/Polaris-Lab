@@ -5,6 +5,7 @@ import {
   MemoryMatch,
   MemoryQuery,
   MemoryRecord,
+  MemoryUpdateInput,
 } from "./types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -44,6 +45,28 @@ export class ExecutiveMemory {
 
     await this.repository.save(record);
     return record;
+  }
+
+  async updateMemory(id: string, input: MemoryUpdateInput): Promise<MemoryRecord | undefined> {
+    const existing = await this.repository.getById(id, input.userId);
+    if (!existing) return undefined;
+
+    const updated: MemoryRecord = {
+      ...existing,
+      title: input.title ?? existing.title,
+      content: input.content ?? existing.content,
+      tags: input.tags ? [...new Set(input.tags)] : existing.tags,
+      importance:
+        input.importance === undefined ? existing.importance : this.clamp(input.importance),
+      metadata: input.metadata ?? existing.metadata,
+      updatedAt: input.now ?? new Date(),
+    };
+
+    return (await this.repository.update(updated)) ? updated : undefined;
+  }
+
+  async forgetMemory(id: string, userId: string): Promise<boolean> {
+    return this.repository.delete(id, userId);
   }
 
   async retrieve(query: MemoryQuery): Promise<ExecutiveMemorySnapshot> {
