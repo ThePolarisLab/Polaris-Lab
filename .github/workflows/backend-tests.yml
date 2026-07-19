@@ -1,0 +1,48 @@
+name: Backend Tests
+
+on:
+  pull_request:
+    paths:
+      - "chief-of-staff/backend/**"
+      - ".github/workflows/backend-tests.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "chief-of-staff/backend/**"
+      - ".github/workflows/backend-tests.yml"
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: chief-of-staff/backend
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: chief-of-staff/backend/requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Run backend tests
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -v 2>&1 | tee pytest-output.txt
+
+      - name: Upload pytest output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-output
+          path: chief-of-staff/backend/pytest-output.txt
+          if-no-files-found: warn
