@@ -1,16 +1,16 @@
-name: Executive Memory CI
+name: Polaris TypeScript CI
 
 on:
   pull_request:
     branches: [main]
   push:
-    branches: [main, "feature/v0.5.0-executive-memory"]
+    branches: [main, "feature/**"]
 
 permissions:
   contents: read
 
 jobs:
-  test-executive-memory:
+  test-typescript-core:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -21,5 +21,5 @@ jobs:
           node-version: "22"
       - name: Install dependencies
         run: npm install --no-audit --no-fund
-      - name: Run Executive Memory tests
-        run: npm test -- --runTestsByPath tests/athena/ExecutiveMemory.test.ts
+      - name: Run Executive Memory and Atlas tests
+        run: npm run verify:release

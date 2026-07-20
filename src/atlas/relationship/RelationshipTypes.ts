@@ -11,6 +11,7 @@ export const RELATIONSHIP_TYPES = [
   "documents",
   "approved_by",
   "supersedes",
+  "produces",
 ] as const;
 
 export type RelationshipType = (typeof RELATIONSHIP_TYPES)[number];

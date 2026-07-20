@@ -73,7 +73,7 @@ export class AthenaOrchestrator {
         startedAt,
         "completed",
       );
-      await this.record(request.id, "request.completed", telemetry);
+      await this.record(request.id, "request.completed", { ...telemetry });
 
       return { requestId: request.id, answer, intent, plan, decision, telemetry };
     } catch (error) {
