@@ -1,4 +1,5 @@
-import { Decision, DecisionStatus } from "./Decision";
+import { Decision } from "./Decision";
+import { DecisionStatus } from "./DecisionTypes";
 
 export interface DecisionRepository {
   create(decision: Decision): Promise<Decision>;
