@@ -1,144 +1,87 @@
 # ARC-001 — Verified Repository Map
 
-## Primary application
+**Status:** Complete  
+**Baseline date:** 2026-07-20
+
+## Major repository areas
 
 ```text
-chief-of-staff/
-├── backend/
-│   ├── app/
-│   │   ├── api/
-│   │   ├── database/
-│   │   ├── dashboard/
-│   │   ├── github_engine/
-│   │   ├── missions/
-│   │   ├── models/
-│   │   ├── schemas/
-│   │   └── main.py
-│   ├── tests/
-│   └── .env.github.example
-└── frontend/
-    ├── src/
-    │   ├── components/
-    │   └── App.jsx
-    └── package.json
+Polaris-Lab/
+├── chief-of-staff/                 # legacy operational full-stack application
+│   ├── backend/                    # FastAPI, SQLAlchemy, domain and integration modules
+│   └── frontend/                   # React/Vite presentation
+├── src/                            # current TypeScript intelligence platform
+│   ├── athena/                     # orchestration and service ports
+│   ├── memory/                     # Executive Memory
+│   ├── atlas/                      # entities, relationships, graph, queries, explanations
+│   └── decision/                   # Decision Intelligence domain model
+├── tests/                          # TypeScript domain and release verification tests
+├── docs/
+│   ├── architecture/               # living architecture baseline and ADRs
+│   ├── engineering/                # roadmap and milestone documentation
+│   ├── releases/                   # release notes and verification records
+│   └── knowledge-base/             # operational engineering history
+├── .github/workflows/              # automated verification
+├── package.json                    # TypeScript package and release scripts
+└── CHANGELOG.md                    # release history
 ```
 
-This map includes only paths verified from repository files and commit history during the first ARC-001 inspection.
+The exact repository tree will evolve. This map defines ownership boundaries rather than promising that every file path remains permanent.
 
-## Backend application assembly
+## Domain ownership
 
-`app/main.py` imports database models and registers the current routers. Verified model/domain references include:
+### Athena
 
-- `Company`
-- `Truck`
-- `MemoryEntry`
-- `KnowledgeRelationship`
-- `Mission`
-- `MissionTask`
-- `Workflow`
-- `TeamNote`
+Athena is the orchestration entry point. It owns request interpretation, execution planning, service coordination, response construction, and telemetry contracts. Athena should depend on domain ports rather than concrete storage implementations.
 
-Verified API modules include:
+### Executive Memory
 
-- `app/api/chat.py`
-- `app/api/company.py`
-- `app/api/truck.py`
-- `app/api/memory.py`
-- `app/api/missions.py`
-- `app/api/relationships.py`
-- `app/api/memory_search.py`
-- `app/api/reasoning.py`
-- `app/api/team_notes.py`
-- `app/api/dashboard.py`
-- `app/api/github_engine.py`
-- `app/api/work_context.py`
+Executive Memory owns scoped memory records, retrieval, ranking, lifecycle operations, ownership enforcement, and Athena memory integration.
 
-## Confirmed service and engine packages
+### Atlas
 
-### Dashboard
+Atlas owns knowledge representation and graph reasoning:
 
-```text
-app/dashboard/service.py
-app/schemas/dashboard.py
-app/api/dashboard.py
-```
+- typed entities;
+- typed relationships;
+- graph integrity;
+- bounded traversal and shortest paths;
+- evidence-backed explanations.
 
-The API router delegates executive-dashboard construction to `build_executive_dashboard` and serializes domain results into response schemas.
+### Decision Intelligence
 
-### GitHub Engine — PGE-001
+Decision Intelligence owns typed decisions, options, evidence, constraints, risks, recommendations, outcomes, lifecycle rules, and repository contracts.
 
-```text
-app/github_engine/__init__.py
-app/github_engine/client.py
-app/github_engine/schemas.py
-app/api/github_engine.py
-```
+### Engineering Intelligence
 
-The client owns GitHub HTTP communication and write safeguards. The API module exposes the engine through FastAPI.
+The engineering area owns repository access and deterministic source analysis:
 
-### Missions
+- PGE-001 GitHub Engine;
+- PGE-002 Repository Intelligence;
+- PGE-003 Code Understanding;
+- PGE-003.1 configurable limits;
+- PGE-003.2 large-file chunking;
+- PGE-003.3 cross-file dependencies;
+- PGE-004.1 Complexity Engine.
 
-```text
-app/missions/models.py
-app/api/missions.py
-```
+Future code-smell detection and recommendation work should extend these verified analysis foundations instead of creating an unrelated analysis stack.
 
-The application entry point confirms the presence of Mission, MissionTask, and Workflow models.
+## Legacy application boundary
 
-## Persistence
+`chief-of-staff/` remains a verified application area with operational APIs, persistence, presentation, and integrations. New work must not assume its Python models or SQLite persistence are automatically shared with the TypeScript domains. Any cross-runtime integration requires an explicit contract and ADR when material.
 
-```text
-app/database/database.py
-```
+## Test and CI boundary
 
-Current persistence is a shared SQLite database using SQLAlchemy.
+Tests are part of each domain's definition of done. Release verification scripts and GitHub Actions are repository-wide quality gates. A milestone is not complete merely because implementation code exists.
 
-## Frontend
+## Documentation boundary
 
-```text
-frontend/src/App.jsx
-frontend/src/components/ExecutiveDashboard.jsx
-frontend/src/components/ExecutiveDashboard.css
-```
+- Architecture documents describe current boundaries and enduring rules.
+- ADRs explain important decisions and trade-offs.
+- Engineering milestone documents describe implementation scope.
+- Release notes describe shipped capability.
+- Knowledge-base logs preserve chronological decisions and commitments.
 
-The current application root directly renders `ExecutiveDashboard`. API access is currently performed inside the dashboard component through `fetch` calls to a hard-coded local backend base URL.
+## Maintenance rule
 
-## Tests
-
-PGE-001 introduced tests under:
-
-```text
-chief-of-staff/backend/tests/
-```
-
-Verified GitHub Engine tests cover:
-
-- write operations disabled by default;
-- repository allowlist enforcement.
-
-A complete test inventory remains an ARC-001 follow-up item.
-
-## Documentation and governance
-
-Existing GitHub Engine work introduced a decision document describing Builder authority, GitHub as source of truth, secret handling, safe write defaults, and pull-request preference.
-
-ARC-001 adds the living architecture area under:
-
-```text
-docs/architecture/
-```
-
-## PGE-002 placement
-
-Repository Intelligence should extend the existing GitHub Engine rather than create an unrelated top-level application.
-
-Recommended placement:
-
-```text
-chief-of-staff/backend/app/github_engine/
-├── client.py
-├── schemas.py
-└── repository_intelligence.py
-```
-
-API additions should remain in `app/api/github_engine.py` unless the router becomes large enough to justify a dedicated `repository_intelligence` API module while preserving the same `/api/v1/github` boundary.
+When a change introduces a domain, changes ownership, adds a persistence technology, changes a security boundary, or creates a new public integration, this map and the relevant ADR must be reviewed.
