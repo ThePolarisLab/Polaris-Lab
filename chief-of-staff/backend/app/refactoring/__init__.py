@@ -1,5 +1,11 @@
 """Polaris refactoring and maintainability analysis."""
 
 from app.refactoring.complexity import ComplexityAnalysisError, PythonComplexityAnalyzer
+from app.refactoring.smells import CodeSmellThresholds, PythonCodeSmellDetector
 
-__all__ = ["ComplexityAnalysisError", "PythonComplexityAnalyzer"]
+__all__ = [
+    "CodeSmellThresholds",
+    "ComplexityAnalysisError",
+    "PythonCodeSmellDetector",
+    "PythonComplexityAnalyzer",
+]
