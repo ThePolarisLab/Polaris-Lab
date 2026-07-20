@@ -1,87 +1,99 @@
 # Polaris Technical Debt Register
 
-This register records observed improvement opportunities without implying that they must all be fixed immediately.
+**Baseline date:** 2026-07-20
 
-## TD-001 — Hard-coded frontend API base URL
+This register records verified or strongly evidenced improvement opportunities. It is not a promise that every item must be fixed immediately.
 
-**Area:** Frontend configuration  
+## TD-001 — Dual-runtime architecture needs explicit integration contracts
+
+**Area:** Platform architecture  
+**Priority:** High  
+**Status:** Open  
+**Observation:** The repository contains a legacy Python/FastAPI operational application and a newer TypeScript intelligence platform.  
+**Risk:** Domain data, ownership, deployment, and integration assumptions may diverge.  
+**Recommendation:** Define explicit cross-runtime contracts before sharing persistence or runtime state.
+
+## TD-002 — Persistence strategy is intentionally incomplete
+
+**Area:** Data architecture  
+**Priority:** High before production persistence  
+**Status:** Accepted  
+**Observation:** New TypeScript domains use repository contracts and in-memory implementations.  
+**Risk:** Durability, concurrency, migrations, recovery, and multi-instance behavior are not yet established.  
+**Recommendation:** Select persistent adapters through domain-specific ADRs and preserve repository contracts.
+
+## TD-003 — Authentication and authorization require a unified model
+
+**Area:** Security  
+**Priority:** High  
+**Status:** Open  
+**Observation:** Domain ownership safeguards exist in selected components, but a repository-wide identity and authorization model is not yet documented.  
+**Risk:** Inconsistent access control across operational, memory, graph, decision, and engineering capabilities.  
+**Recommendation:** Define principals, scopes, tenant boundaries, service identities, and audit requirements before broad deployment.
+
+## TD-004 — Legacy application configuration and migrations need hardening
+
+**Area:** Legacy application  
 **Priority:** Medium  
-**Observation:** `ExecutiveDashboard.jsx` uses `http://127.0.0.1:8000` directly.  
-**Impact:** Deployment outside local development requires source changes.  
-**Recommendation:** Move the API base URL to Vite environment configuration and centralize API access.
+**Status:** Open  
+**Observation:** Earlier architecture inspection identified embedded local configuration and startup-time schema creation.  
+**Risk:** Environment portability and controlled schema evolution remain limited.  
+**Recommendation:** Confirm current state, externalize configuration, and introduce versioned migrations before production use.
 
-## TD-002 — API access embedded in a large presentation component
-
-**Area:** Frontend architecture  
-**Priority:** Medium  
-**Observation:** Dashboard rendering, form state, validation, network requests, and error handling are combined in one large component.  
-**Impact:** Reduced reuse and increased change risk as the UI grows.  
-**Recommendation:** Introduce a small API client and progressively extract focused components/hooks.
-
-## TD-003 — Database tables created during application import/startup
-
-**Area:** Persistence  
-**Priority:** Medium  
-**Observation:** `Base.metadata.create_all(bind=engine)` is executed by the application entry point.  
-**Impact:** Schema evolution is not explicitly versioned.  
-**Recommendation:** Introduce database migrations before production deployment or complex schema evolution.
-
-## TD-004 — SQLite configuration is embedded in source
-
-**Area:** Configuration  
-**Priority:** Medium  
-**Observation:** The database URL is hard-coded as `sqlite:///./polaris.db`.  
-**Impact:** Environment-specific database configuration is difficult.  
-**Recommendation:** Read the database URL from environment configuration with a safe local default.
-
-## TD-005 — Repeated database dependency patterns
-
-**Area:** Backend API  
-**Priority:** Low  
-**Observation:** Routers may define local `get_db` dependencies.  
-**Impact:** Duplication and possible inconsistency.  
-**Recommendation:** Verify all routers and centralize the shared database dependency where duplication exists.
-
-## TD-006 — GitHub client request method lacks pagination abstraction
-
-**Area:** GitHub Engine  
-**Priority:** High for PGE-002  
-**Observation:** Current branch listing requests a single page with `per_page=100`; the generic client does not yet provide pagination handling.  
-**Impact:** Repository Intelligence could silently return incomplete trees, commits, branches, or search results.  
-**Recommendation:** Add bounded pagination helpers before implementing collection-heavy PGE-002 operations.
-
-## TD-007 — GitHub API errors may expose raw response details
-
-**Area:** Security and integration errors  
-**Priority:** Medium  
-**Observation:** The client includes the raw GitHub error body in `GitHubEngineError`.  
-**Impact:** Internal or sensitive integration details may be returned through API error responses.  
-**Recommendation:** Log detailed errors internally and return sanitized public messages with stable error codes.
-
-## TD-008 — GitHub path encoding requires review
-
-**Area:** GitHub Engine correctness  
-**Priority:** High for PGE-002  
-**Observation:** Repository paths are interpolated directly into contents API paths after basic parent-directory validation.  
-**Impact:** Spaces, reserved characters, Unicode, and unusual branch/path names may fail or behave unexpectedly.  
-**Recommendation:** Add explicit URL encoding and tests for valid edge-case paths.
-
-## TD-009 — Incomplete architecture and API inventory
+## TD-005 — Architecture and ADR indexing is fragmented
 
 **Area:** Documentation  
-**Priority:** High during ARC-001  
-**Observation:** The first baseline confirms major modules but does not yet enumerate every endpoint, schema, model field, relationship, or test.  
-**Impact:** Change-impact analysis remains incomplete.  
-**Recommendation:** Continue evidence gathering before finalizing PGE-002 design.
-
-## TD-010 — Dependency versions use `latest`
-
-**Area:** Frontend build reproducibility  
 **Priority:** Medium  
-**Observation:** Frontend dependencies are declared using `latest`.  
-**Impact:** Fresh installs may receive breaking versions and produce non-reproducible builds.  
-**Recommendation:** Pin compatible versions and maintain the lock file.
+**Status:** Open  
+**Observation:** Architecture and release work introduced multiple ADRs across milestones.  
+**Risk:** Numbering, supersession, and discoverability may become inconsistent.  
+**Recommendation:** Maintain a canonical ADR index with status, date, domain, and supersession links.
+
+## TD-006 — CI quality gates remain uneven
+
+**Area:** Engineering quality  
+**Priority:** Medium  
+**Status:** In progress  
+**Observation:** Automated test workflows exist and TypeScript release verification has expanded, but linting, formatting, type checking, coverage expectations, and legacy application checks are not yet uniformly enforced.  
+**Risk:** Quality may vary by runtime and domain.  
+**Recommendation:** Establish repository-wide required checks with domain-specific test jobs.
+
+## TD-007 — Operational observability is not yet standardized
+
+**Area:** Operations  
+**Priority:** Medium  
+**Status:** Open  
+**Observation:** Domain logic and telemetry contracts exist, but structured logs, metrics, traces, retention, and incident diagnostics are not defined repository-wide.  
+**Risk:** Production failures may be difficult to diagnose.  
+**Recommendation:** Define an observability standard before production deployment.
+
+## TD-008 — Static-analysis false-positive governance needs expansion
+
+**Area:** Engineering intelligence  
+**Priority:** Medium for PGE-004.2 and later  
+**Status:** Open  
+**Observation:** Deterministic analysis foundations exist, including dependency and complexity analysis.  
+**Risk:** Code-smell and recommendation features may overstate ambiguous findings.  
+**Recommendation:** Add evidence levels, suppression mechanisms, confidence rules, and documented false-positive handling.
+
+## TD-009 — Release and branch lifecycle should be automated further
+
+**Area:** Repository operations  
+**Priority:** Low  
+**Status:** Open  
+**Observation:** Feature branches are manually cleaned after merge and release evidence is maintained through disciplined workflow.  
+**Risk:** Stale branches and inconsistent release housekeeping may recur.  
+**Recommendation:** Enable safe automatic branch deletion and standard release checklists where repository settings permit.
+
+## TD-010 — Knowledge-base summaries can drift from source documents
+
+**Area:** Documentation governance  
+**Priority:** Medium  
+**Status:** Open  
+**Observation:** Daily logs summarize repository state while roadmaps, ADRs, and release notes serve different source-of-truth purposes.  
+**Risk:** Chronological summaries may become inconsistent with authoritative documents.  
+**Recommendation:** Treat daily logs as historical records and update canonical roadmap or architecture documents separately when status changes.
 
 ## Review policy
 
-Each item should eventually receive an owner, target milestone, and status (`open`, `accepted`, `in progress`, `resolved`, or `deferred`). Priorities should be reassessed when the affected area is being changed.
+Each item must retain a status: `open`, `accepted`, `in progress`, `resolved`, or `deferred`. Priorities should be reassessed when the affected area changes. Resolved items should remain in history or move to a dated archive rather than disappearing without explanation.
