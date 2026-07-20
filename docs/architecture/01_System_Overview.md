@@ -1,137 +1,73 @@
 # ARC-001 — Polaris System Overview
 
-**Status:** Baseline in progress  
+**Status:** Complete  
 **Repository:** `ThePolarisLab/Polaris-Lab`  
-**Primary application:** `chief-of-staff`
+**Baseline date:** 2026-07-20
 
-## 1. Current system
+## Purpose
 
-Polaris is currently implemented as a full-stack Chief of Staff application with:
+ARC-001 records the verified architectural baseline for Polaris and establishes the rule that major capabilities must have an explicit architectural home, test strategy, security boundary, and documentation impact.
 
-- a FastAPI backend;
-- a React/Vite frontend;
-- a SQLite database accessed through SQLAlchemy;
-- modular backend packages for memory, knowledge relationships, reasoning, missions, dashboard aggregation, team notes, work context, and GitHub operations;
-- direct integration with the GitHub REST API through the Polaris GitHub Engine.
+## Current system
 
-## 2. Verified runtime architecture
+Polaris now contains two related implementation areas:
 
-```text
-React/Vite frontend
-        |
-        | HTTP/JSON
-        v
-FastAPI application
-        |
-        +--> API routers
-        |       |
-        |       +--> domain services / engines
-        |       |
-        |       +--> SQLAlchemy sessions
-        |
-        +--> SQLite database (polaris.db)
-        |
-        +--> GitHub REST API through GitHubClient
-```
+1. **Legacy Chief of Staff application** — a Python/FastAPI backend, React/Vite frontend, SQLite/SQLAlchemy persistence, operational dashboards, work context, memory, reasoning, missions, and GitHub integration.
+2. **Current TypeScript intelligence platform** — Athena orchestration, Executive Memory, Atlas knowledge-graph capabilities, and Decision Intelligence domain services with deterministic contracts, repository abstractions, tests, ADRs, and release verification.
 
-## 3. Backend entry point
+The repository is therefore a transitional modular platform rather than a single uniform runtime. New work must clearly identify whether it extends the legacy application, the TypeScript intelligence core, shared documentation, or an integration boundary.
 
-The backend application is assembled in:
+## Verified capability layers
 
 ```text
-chief-of-staff/backend/app/main.py
+Polaris Platform
+├── Experience and operational application
+│   ├── React/Vite presentation
+│   └── FastAPI operational APIs
+├── Athena orchestration
+│   ├── request and context contracts
+│   ├── intent classification and planning
+│   └── replaceable service ports
+├── Executive Memory
+│   ├── scoped memory contracts
+│   ├── lifecycle and retrieval
+│   └── Athena adapter
+├── Atlas knowledge platform
+│   ├── Entity Engine
+│   ├── Relationship Engine
+│   ├── Knowledge Graph Core
+│   ├── Graph Query Engine
+│   └── Explainability Engine
+├── Decision Intelligence
+│   ├── typed decision model
+│   ├── options, evidence, risks, and recommendations
+│   └── repository contract and in-memory implementation
+├── Engineering intelligence
+│   ├── GitHub Engine
+│   ├── Repository Intelligence
+│   ├── Code Understanding
+│   ├── Cross-file dependency analysis
+│   └── Complexity Engine
+└── Governance and evidence
+    ├── ADRs
+    ├── engineering roadmap
+    ├── release notes and verification
+    └── knowledge-base daily logs
 ```
 
-The current FastAPI application identifies itself as `Polaris Chief of Staff API`, version `0.3`.
+## Architectural principles
 
-Verified router registrations include:
+- Domain logic should remain independent from transport and storage where practical.
+- Repository interfaces should separate domain behavior from persistence choices.
+- Static-analysis engines must not execute analyzed source code.
+- External integrations require explicit configuration, bounded operations, error translation, and least privilege.
+- Deterministic evidence is preferred before AI-generated interpretation.
+- `main` remains stable; material work uses feature branches, pull requests, CI, review, and documented completion.
 
-- chat;
-- company;
-- truck;
-- memory;
-- missions;
-- knowledge relationships;
-- memory search;
-- reasoning;
-- team notes;
-- executive dashboard;
-- GitHub Engine;
-- work context.
+## Current architectural direction
 
-## 4. Data layer
+Polaris will continue as a modular platform with bounded domains rather than prematurely splitting into distributed services. Runtime and persistence choices may differ by domain, but public contracts, ownership, tests, and integration boundaries must remain explicit.
 
-The database configuration currently uses:
+## Completion statement
 
-```text
-sqlite:///./polaris.db
-```
-
-SQLAlchemy provides the engine, session factory, and declarative base. Database tables are created at application startup through `Base.metadata.create_all(bind=engine)`.
-
-## 5. Frontend
-
-The frontend is a Vite-powered React application. Its current root component renders the Executive Dashboard.
-
-The dashboard currently:
-
-- loads executive dashboard data from the backend;
-- shows business status, priorities, carry-forward items, upcoming items, and watch items;
-- allows the Builder to create a Team Note action;
-- refreshes dashboard data after a successful action is saved.
-
-## 6. GitHub Engine
-
-PGE-001 is implemented inside the backend as:
-
-```text
-chief-of-staff/backend/app/github_engine/
-```
-
-The API adapter is:
-
-```text
-chief-of-staff/backend/app/api/github_engine.py
-```
-
-Current capabilities include:
-
-- repository status and metadata retrieval;
-- branch listing;
-- protected branch creation through an explicit write gate;
-- file writing;
-- draft pull-request creation.
-
-Security controls currently include:
-
-- token supplied through environment configuration;
-- repository allowlisting;
-- writes disabled by default;
-- unsafe parent-path rejection;
-- pull requests preferred over direct changes to `main`.
-
-## 7. Architectural interpretation
-
-The repository currently follows an emerging modular-monolith pattern:
-
-- one deployable FastAPI backend;
-- one React frontend;
-- domain-oriented Python packages inside the backend;
-- shared database and API process;
-- external integrations isolated behind clients where implemented.
-
-This is a description of the current state, not a recommendation to split the system into microservices.
-
-## 8. Target architectural direction
-
-The proposed direction is to retain the modular monolith while strengthening boundaries between:
-
-1. **Application/API layer** — HTTP routing, request validation, response serialization.
-2. **Domain and intelligence layer** — memory, relationships, reasoning, missions, dashboard synthesis, work context.
-3. **Engineering layer** — GitHub operations and repository intelligence.
-4. **Persistence layer** — SQLAlchemy models, sessions, and repositories.
-5. **Presentation layer** — React components and future frontend services/hooks.
-
-## 9. ARC-001 limitations
-
-This baseline records components verified during the first repository inspection. Further ARC-001 work should expand the endpoint inventory, model relationships, test coverage, and full dependency map before PGE-002 implementation begins.
+ARC-001 is complete when these baseline documents are merged. Future architectural changes must update this baseline or add an ADR rather than reopening ARC-001.
