@@ -1,71 +1,51 @@
-# Polaris Engineering Standards v1.0
+# Polaris Engineering Standards v1.1
 
 ## 1. Evidence before design
 
-Repository structure, current behavior, and dependencies must be inspected before architectural changes are proposed. Documents must clearly separate verified facts from recommendations.
+Inspect repository structure, current behavior, dependencies, tests, and release history before proposing architectural changes. Clearly separate verified facts, assumptions, and future proposals.
 
 ## 2. Architecture before major implementation
 
 Every major feature must identify:
 
-- its purpose;
-- architectural layer and owning domain;
-- affected modules and interfaces;
-- security implications;
-- test strategy;
-- documentation impact.
+- purpose and work identifier;
+- owning domain and architectural layer;
+- affected contracts and dependencies;
+- security, privacy, and failure boundaries;
+- persistence and migration impact;
+- test and release strategy;
+- documentation and ADR impact.
 
-## 3. Layer responsibilities
+## 3. Domain boundaries
 
-### API layer
-
-FastAPI routers should handle transport concerns: validation, dependency injection, status mapping, and response serialization. Business and integration logic should be delegated to services or engine clients.
-
-### Domain/service layer
-
-Services and engines should implement reusable application behavior without depending on HTTP request objects.
-
-### Persistence layer
-
-Database setup, sessions, models, and future repository abstractions should remain isolated from frontend and external-integration code.
-
-### Integration layer
-
-External systems such as GitHub should be accessed through dedicated clients with explicit configuration, error translation, timeouts, and security safeguards.
-
-### Presentation layer
-
-React components should progressively separate display components, API access, and reusable state logic as the frontend grows.
+Domain services should express reusable behavior without depending directly on HTTP frameworks or concrete storage. Storage is accessed through repository contracts where practical. Cross-domain access should use explicit contracts rather than internal implementation details.
 
 ## 4. Safe change workflow
 
-Major changes should follow:
-
 1. Discover
 2. Design
-3. Builder approval
-4. Feature branch
-5. Small implementation commits
-6. Automated tests
-7. Documentation
-8. Pull request
-9. Review and merge
+3. Approve scope
+4. Create feature branch
+5. Implement in reviewable increments
+6. Add or update tests
+7. Run verification
+8. Update documentation
+9. Open or update pull request
+10. Resolve review and CI
+11. Merge
+12. Synchronize `main` and delete obsolete branches
 
 Direct feature development on `main` is not the normal workflow.
 
 ## 5. Branch and commit conventions
 
-Preferred branch pattern:
+Preferred branch patterns:
 
 ```text
 feature/<work-id>-<brief-description>
-```
-
-Examples:
-
-```text
-feature/arc-001-architecture-review
-feature/pge-002-repository-intelligence
+docs/<brief-description>
+fix/<brief-description>
+release/<version>
 ```
 
 Preferred commit pattern:
@@ -74,59 +54,79 @@ Preferred commit pattern:
 <type>(<scope>): <imperative summary>
 ```
 
-Common types include `feat`, `fix`, `docs`, `test`, `refactor`, `chore`, and `security`.
+Common types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`, `ci`, `release`, and `security`.
 
-## 6. Feature completion standard
+## 6. Definition of done
 
-A feature is complete when it has:
+A milestone is complete only when applicable conditions are satisfied:
 
-- working implementation;
-- automated tests covering critical behavior and failure paths;
-- documentation describing purpose, configuration, and interfaces;
-- a reviewable pull request.
+- approved scope implemented;
+- critical success and failure paths tested;
+- relevant automated suite passes;
+- public contracts and limits documented;
+- security and error behavior considered;
+- architecture or ADR updated when required;
+- pull request accurately describes the change;
+- CI passes and review concerns are resolved;
+- change is merged into `main`;
+- obsolete branches are removed;
+- local `main` is synchronized and clean.
 
-## 7. Security defaults
+## 7. Security and safety defaults
 
-- Never commit secrets or live tokens.
-- Prefer environment-based configuration.
-- Use least privilege.
-- Disable destructive or write operations by default.
-- Validate repository paths and user-controlled identifiers.
-- Use explicit allowlists for high-impact integrations where practical.
-- Preserve Builder approval for material engineering changes.
+- Never commit secrets or live credentials.
+- Use least privilege and explicit allowlists for high-impact integrations.
+- Disable writes or execution by default when safe read-only operation is possible.
+- Validate identifiers, paths, ownership, and bounded query limits.
+- Do not execute source code inside static-analysis engines.
+- Sanitize public errors while retaining useful internal diagnostics.
+- Report uncertainty instead of presenting ambiguous conclusions as facts.
 
-## 8. API conventions
+## 8. Contract conventions
 
-- Use stable, domain-oriented prefixes.
-- Use Pydantic schemas for external request and response contracts.
-- Translate internal errors into intentional HTTP responses.
-- Avoid exposing raw external-service payloads unless the endpoint explicitly promises them.
-- Add pagination or bounded limits to collection endpoints.
+- Prefer typed, domain-oriented contracts.
+- Validate inputs and cross-reference integrity at boundaries.
+- Keep transport models separate from core domain models when coupling would reduce reuse.
+- Use bounded collection operations and explicit pagination where needed.
+- Preserve backward compatibility or document migration requirements.
 
 ## 9. Testing conventions
 
-Critical areas should include tests for:
+Tests should cover:
 
-- expected success behavior;
-- validation failures;
-- permissions and disabled-write safeguards;
-- external API failure translation;
-- unsafe path and input rejection;
-- service behavior independent from HTTP routing.
+- expected behavior;
+- validation and malformed input;
+- authorization, ownership, and write safeguards;
+- boundaries and configured limits;
+- deterministic ordering and repeatability;
+- external failure translation;
+- defensive copying or immutability where contracts require it;
+- integration behavior at public boundaries.
 
-Network calls should be mocked in unit tests.
+Network and external service calls should be mocked in unit tests. Release verification should exercise the complete relevant suite.
 
 ## 10. Documentation conventions
 
-Architecture documentation is living documentation. Any change that modifies module ownership, public endpoints, persistence models, external integrations, or security boundaries must update the corresponding architecture document or ADR.
+Architecture documentation is living documentation. Update it whenever a change modifies domain ownership, public interfaces, persistence, runtime boundaries, integrations, security controls, or release gates.
+
+Documentation must distinguish:
+
+1. verified current state;
+2. accepted decisions;
+3. proposed future state;
+4. known limitations and debt.
 
 ## 11. ADR threshold
 
-Create an Architecture Decision Record when a decision:
+Create or update an ADR when a decision:
 
 - changes a major system boundary;
-- introduces a new platform or persistence technology;
-- affects security or authorization policy;
-- changes ownership between engines/domains;
-- is difficult or costly to reverse;
-- establishes a reusable engineering rule.
+- introduces a runtime, platform, or persistence technology;
+- changes security or authorization policy;
+- changes ownership between domains;
+- establishes a repository-wide engineering rule;
+- is difficult or costly to reverse.
+
+## 12. Decision rule
+
+When speed conflicts with safety, correctness, traceability, or maintainability, Polaris chooses the safer and more reviewable path unless the Builder explicitly approves a documented exception.
