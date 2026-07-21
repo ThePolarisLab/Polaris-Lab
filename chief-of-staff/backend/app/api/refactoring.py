@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.github_engine.client import GitHubClient, GitHubEngineError
 from app.github_engine.schemas import GitHubOperationResult
+from app.refactoring.advisor import PythonRefactoringAdvisor
 from app.refactoring.complexity import ComplexityAnalysisError, PythonComplexityAnalyzer
 from app.refactoring.smells import PythonCodeSmellDetector
 
@@ -17,7 +18,7 @@ router = APIRouter(
 def _run(operation):
     try:
         return operation()
-    except (GitHubEngineError, ComplexityAnalysisError) as exc:
+    except (GitHubEngineError, ComplexityAnalysisError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
@@ -69,6 +70,30 @@ def analyze_code_smells(
             message=(
                 f"Detected {analysis['metrics']['total_findings']} code-smell findings "
                 f"in {path}."
+            ),
+            data=analysis,
+        )
+
+    return _run(operation)
+
+
+@router.get("/recommendations", response_model=GitHubOperationResult)
+def analyze_refactoring_recommendations(
+    path: str = Query(min_length=1, max_length=1000),
+    ref: str = Query(default="main", min_length=1, max_length=200),
+):
+    """Generate a prioritized deterministic refactoring action plan."""
+
+    def operation():
+        client, source = _read_python_file(path, ref)
+        analysis = PythonRefactoringAdvisor().analyze(source, path)
+        analysis["ref"] = ref
+        analysis["repository"] = client.repository
+        return GitHubOperationResult(
+            success=True,
+            message=(
+                f"Generated {analysis['metrics']['total_recommendations']} refactoring "
+                f"recommendations for {path}."
             ),
             data=analysis,
         )
