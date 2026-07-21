@@ -6,6 +6,7 @@ from app.github_engine.client import GitHubClient, GitHubEngineError
 from app.github_engine.schemas import GitHubOperationResult
 from app.refactoring.advisor import PythonRefactoringAdvisor
 from app.refactoring.complexity import ComplexityAnalysisError, PythonComplexityAnalyzer
+from app.refactoring.planner import RefactoringExecutionPlanner
 from app.refactoring.smells import PythonCodeSmellDetector
 
 
@@ -94,6 +95,30 @@ def analyze_refactoring_recommendations(
             message=(
                 f"Generated {analysis['metrics']['total_recommendations']} refactoring "
                 f"recommendations for {path}."
+            ),
+            data=analysis,
+        )
+
+    return _run(operation)
+
+
+@router.get("/execution-plan", response_model=GitHubOperationResult)
+def analyze_refactoring_execution_plan(
+    path: str = Query(min_length=1, max_length=1000),
+    ref: str = Query(default="main", min_length=1, max_length=200),
+):
+    """Generate a dependency-aware deterministic refactoring execution plan."""
+
+    def operation():
+        client, source = _read_python_file(path, ref)
+        analysis = RefactoringExecutionPlanner().analyze(source, path)
+        analysis["ref"] = ref
+        analysis["repository"] = client.repository
+        return GitHubOperationResult(
+            success=True,
+            message=(
+                f"Generated {analysis['metrics']['total_steps']} ordered refactoring "
+                f"steps for {path}."
             ),
             data=analysis,
         )
