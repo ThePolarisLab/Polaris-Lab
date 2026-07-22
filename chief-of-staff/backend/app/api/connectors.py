@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, status
 
-from app.connectors.models import ConnectorHealth
+from app.connectors.models import ConnectorHealth, SyncResult
 from app.connectors.registry import connector_registry
 
 router = APIRouter(prefix="/api/v1/connectors", tags=["connectors"])
@@ -25,3 +25,16 @@ def get_connector(name: str) -> ConnectorHealth:
             detail=str(exc),
         ) from exc
     return connector.health()
+
+
+@router.post("/{name}/sync", response_model=SyncResult)
+def sync_connector(name: str) -> SyncResult:
+    """Run one explicit connector synchronization cycle."""
+    try:
+        connector = connector_registry.get(name)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    return connector.sync()

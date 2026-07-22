@@ -31,9 +31,14 @@ from app.api.work_context import router as work_context_router
 from app.api.system import router as system_router
 from app.api.connectors import router as connectors_router
 from app.api.events import router as events_router
+from app.connectors.github import GitHubConnector
+from app.connectors.registry import connector_registry
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
+
+# Register production connectors. Construction is lazy and does not require secrets.
+connector_registry.register(GitHubConnector(), replace=True)
 
 app = FastAPI(
     title=settings.service_name,
@@ -84,6 +89,7 @@ def root():
             "PGE-004.1 Complexity Engine",
             "PGE-008.1 Connector SDK",
             "PGE-008.1 Connector Event Bus",
+            "PGE-008.2 GitHub Connector",
         ],
     }
 
