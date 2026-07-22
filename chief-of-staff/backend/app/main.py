@@ -1,6 +1,8 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
+from app.core.config import settings
 from app.database.database import Base, engine
 
 # Models
@@ -31,17 +33,14 @@ from app.api.work_context import router as work_context_router
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
-    title="Polaris Chief of Staff API",
-    version="0.4"
+    title=settings.service_name,
+    version=settings.version,
 )
 
-# Allow React frontend to access the API
+# Allow configured frontends to access the API.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=list(settings.cors_origins),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -67,8 +66,10 @@ app.include_router(work_context_router)
 @app.get("/")
 def root():
     return {
-        "service": "Polaris Chief of Staff API",
-        "version": "0.4",
+        "service": settings.service_name,
+        "version": settings.version,
+        "environment": settings.environment,
+        "organization": settings.organization_slug,
         "database": "Connected",
         "capabilities": [
             "EXP-014B Work Context Engine",
@@ -76,4 +77,29 @@ def root():
             "PGE-003 Code Understanding Engine",
             "PGE-004.1 Complexity Engine",
         ],
+    }
+
+
+@app.get("/health", tags=["runtime"])
+def health(response: Response):
+    """Return a machine-readable runtime readiness result."""
+    database_status = "connected"
+
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except Exception:
+        database_status = "unavailable"
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+    return {
+        "status": "ok" if database_status == "connected" else "degraded",
+        "service": settings.service_name,
+        "version": settings.version,
+        "environment": settings.environment,
+        "organization": settings.organization_slug,
+        "checks": {
+            "api": "ready",
+            "database": database_status,
+        },
     }
