@@ -1,0 +1,52 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.polaris-app-shell {
+  min-height: 100vh;
+  background: #07131c;
+}
+
+.polaris-app-nav {
+  position: sticky;
+  z-index: 20;
+  top: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px clamp(20px, 5vw, 72px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(5, 16, 24, 0.94);
+  backdrop-filter: blur(14px);
+}
+
+.polaris-app-nav a {
+  padding: 9px 12px;
+  border-radius: 9px;
+  color: #9eb1bd;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.86rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.polaris-app-nav a:hover,
+.polaris-app-nav a.is-active {
+  background: rgba(127, 201, 232, 0.13);
+  color: #eaf8fd;
+}
+
+@media (max-width: 520px) {
+  .polaris-app-nav {
+    justify-content: stretch;
+  }
+
+  .polaris-app-nav a {
+    flex: 1;
+    text-align: center;
+  }
+}
