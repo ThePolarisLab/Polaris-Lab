@@ -30,6 +30,7 @@ from app.api.refactoring import router as refactoring_router
 from app.api.work_context import router as work_context_router
 from app.api.system import router as system_router
 from app.api.connectors import router as connectors_router
+from app.api.events import router as events_router
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -65,6 +66,7 @@ app.include_router(refactoring_router)
 app.include_router(work_context_router)
 app.include_router(system_router)
 app.include_router(connectors_router)
+app.include_router(events_router)
 
 
 @app.get("/")
@@ -81,6 +83,7 @@ def root():
             "PGE-003 Code Understanding Engine",
             "PGE-004.1 Complexity Engine",
             "PGE-008.1 Connector SDK",
+            "PGE-008.1 Connector Event Bus",
         ],
     }
 
