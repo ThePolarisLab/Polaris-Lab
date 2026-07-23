@@ -89,7 +89,9 @@ describe("EventBus", () => {
   it("allows Runtime lifecycle events to be observed without Runtime coupling", async () => {
     const bus = new EventBus();
     const names: string[] = [];
-    bus.subscribeAll((event) => names.push(event.name));
+    bus.subscribeAll((event) => {
+      names.push(event.name);
+    });
     const runtime = new Runtime(
       { info: jest.fn(), error: jest.fn() },
       undefined,
