@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { IEventBus } from "../events/IEventBus";
 import { LifecycleManager } from "../lifecycle/LifecycleManager";
 import { LifecycleSnapshot } from "../lifecycle/LifecycleSnapshot";
-import { RuntimeLifecycleEventListener } from "../lifecycle/RuntimeEvents";
+import {
+  RuntimeLifecycleEvent,
+  RuntimeLifecycleEventListener,
+} from "../lifecycle/RuntimeEvents";
 import { WorkerState } from "../lifecycle/WorkerState";
 import { ExecutionContext, RuntimeLogger } from "./ExecutionContext";
 import { IRuntime } from "./IRuntime";
@@ -20,6 +24,7 @@ export class Runtime implements IRuntime {
   constructor(
     private readonly logger: RuntimeLogger = consoleLogger,
     private readonly lifecycleListener?: RuntimeLifecycleEventListener,
+    private readonly eventBus?: IEventBus,
   ) {}
 
   get lastLifecycle(): LifecycleSnapshot | undefined {
@@ -44,7 +49,11 @@ export class Runtime implements IRuntime {
     }
 
     const jobId = randomUUID();
-    const lifecycle = new LifecycleManager(jobId, worker.definition.name, this.lifecycleListener);
+    const lifecycle = new LifecycleManager(
+      jobId,
+      worker.definition.name,
+      (event) => this.publishLifecycleEvent(event),
+    );
     lifecycle.transition(WorkerState.Validated);
     lifecycle.transition(WorkerState.Queued);
     lifecycle.transition(WorkerState.Dispatching);
@@ -75,5 +84,10 @@ export class Runtime implements IRuntime {
       this.latestLifecycle = lifecycle.transition(WorkerState.Completed);
       return WorkerResult.failure("WORKER_EXECUTION_FAILED", message) as WorkerResult<T>;
     }
+  }
+
+  private publishLifecycleEvent(event: RuntimeLifecycleEvent): void {
+    this.eventBus?.publish(event);
+    this.lifecycleListener?.(event);
   }
 }

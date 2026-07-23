@@ -1,3 +1,4 @@
+import { IEvent } from "../events/IEvent";
 import { WorkerState } from "./WorkerState";
 
 export type RuntimeLifecycleEventName =
@@ -27,12 +28,11 @@ const eventNames: Readonly<Record<WorkerState, RuntimeLifecycleEventName>> = {
   [WorkerState.Completed]: "WorkerCompleted",
 };
 
-export interface RuntimeLifecycleEvent {
+export interface RuntimeLifecycleEvent extends IEvent {
   readonly name: RuntimeLifecycleEventName;
   readonly executionId: string;
   readonly workerName: string;
   readonly state: WorkerState;
-  readonly timestamp: Date;
   readonly reason?: string;
 }
 
