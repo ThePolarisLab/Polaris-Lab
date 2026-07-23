@@ -10,5 +10,5 @@
     "noEmit": true,
     "types": ["jest", "node"]
   },
-  "include": ["src/athena/**/*.ts", "tests/athena/**/*.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
 }
