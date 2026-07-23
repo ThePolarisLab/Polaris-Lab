@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from app.connectors.base import BaseConnector
 from app.connectors.models import ConnectorHealth, ConnectorStatus, SyncResult
 from app.events.bus import EventBus, event_bus
-from app.events.models import ConnectorEvent
+from app.events.models import ConnectorEvent, EventSource, EventSubject
 from app.github_engine.client import GitHubClient, GitHubEngineError
 
 
@@ -83,14 +83,30 @@ class GitHubConnector(BaseConnector):
             for commit in reversed(commits):
                 commit_data = commit.get("commit", {})
                 author = commit_data.get("author", {})
+                commit_sha = commit.get("sha")
                 event = ConnectorEvent(
                     connector=self.name,
-                    event_type="github.commit.observed",
-                    entity=commit.get("sha"),
+                    source=EventSource(
+                        service="connector-runtime",
+                        connector=self.name,
+                    ),
+                    event_type="github.commit.observed.v1",
+                    event_version=1,
+                    subject=(
+                        EventSubject(subject_type="github.commit", subject_id=commit_sha)
+                        if commit_sha
+                        else None
+                    ),
+                    entity=commit_sha,
+                    idempotency_key=(
+                        f"github.commit:{repository.get('full_name')}:{commit_sha}"
+                        if commit_sha
+                        else None
+                    ),
                     payload={
                         "repository": repository.get("full_name"),
                         "branch": default_branch,
-                        "sha": commit.get("sha"),
+                        "sha": commit_sha,
                         "message": commit_data.get("message", "").splitlines()[0],
                         "author": author.get("name"),
                         "authored_at": author.get("date"),
