@@ -1,6 +1,10 @@
-from fastapi.testclient import TestClient
+from datetime import datetime
 
-from app.events import ConnectorEvent, EventBus
+import pytest
+from fastapi.testclient import TestClient
+from pydantic import ValidationError
+
+from app.events import ConnectorEvent, EventBus, EventSource
 from app.main import app
 
 
@@ -9,19 +13,47 @@ def test_event_bus_delivers_in_order_and_retains_recent_events():
     received: list[str] = []
     bus.subscribe("memory", lambda event: received.append(event.event_type))
 
-    bus.publish(ConnectorEvent(connector="github", event_type="pull_request.opened"))
-    bus.publish(ConnectorEvent(connector="github", event_type="check.completed"))
-    bus.publish(ConnectorEvent(connector="github", event_type="pull_request.merged"))
+    bus.publish(ConnectorEvent(connector="github", event_type="github.pull_request.opened.v1"))
+    bus.publish(ConnectorEvent(connector="github", event_type="github.check.completed.v1"))
+    bus.publish(ConnectorEvent(connector="github", event_type="github.pull_request.merged.v1"))
 
     assert received == [
-        "pull_request.opened",
-        "check.completed",
-        "pull_request.merged",
+        "github.pull_request.opened.v1",
+        "github.check.completed.v1",
+        "github.pull_request.merged.v1",
     ]
     assert [event.event_type for event in bus.recent()] == [
-        "pull_request.merged",
-        "check.completed",
+        "github.pull_request.merged.v1",
+        "github.check.completed.v1",
     ]
+
+
+def test_canonical_event_is_immutable_and_exposes_source_name():
+    event = ConnectorEvent(
+        event_type="github.commit.observed.v1",
+        source=EventSource(service="connector-runtime", connector="github"),
+        organization_id="org-1",
+        tenant_id="tenant-1",
+    )
+
+    assert event.source_name == "github"
+    assert event.event_version == 1
+    assert event.occurred_at.tzinfo is not None
+
+    with pytest.raises(ValidationError):
+        event.event_type = "github.commit.changed.v1"
+
+
+def test_canonical_event_rejects_invalid_names_and_naive_timestamps():
+    with pytest.raises(ValidationError):
+        ConnectorEvent(connector="github", event_type="github.commit.observed")
+
+    with pytest.raises(ValidationError):
+        ConnectorEvent(
+            connector="github",
+            event_type="github.commit.observed.v1",
+            occurred_at=datetime(2026, 7, 22, 0, 0, 0),
+        )
 
 
 def test_event_bus_rejects_duplicate_subscribers_and_unsubscribes():
@@ -47,12 +79,13 @@ def test_subscriber_failure_does_not_stop_other_consumers():
 
     bus.subscribe("broken", broken_handler)
     bus.subscribe("healthy", lambda event: delivered.append(event.event_type))
-
-    failures = bus.publish(ConnectorEvent(connector="github", event_type="push"))
+    failures = bus.publish(
+        ConnectorEvent(connector="github", event_type="github.push.observed.v1")
+    )
     metrics = bus.metrics()
 
     assert failures == ["broken"]
-    assert delivered == ["push"]
+    assert delivered == ["github.push.observed.v1"]
     assert metrics.events_published == 1
     assert metrics.deliveries_attempted == 2
     assert metrics.deliveries_succeeded == 1
