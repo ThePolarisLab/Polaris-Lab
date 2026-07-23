@@ -21,8 +21,8 @@ export class WorkerResult<T = unknown> {
     code: string,
     message: string,
     retryable = false,
-  ): WorkerResult<never> {
-    return new WorkerResult<never>("failure", undefined, {
+  ): WorkerResult<undefined> {
+    return new WorkerResult<undefined>("failure", undefined, {
       code,
       message,
       retryable,
