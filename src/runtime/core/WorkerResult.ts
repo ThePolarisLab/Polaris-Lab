@@ -9,12 +9,12 @@ export interface WorkerFailure {
 export class WorkerResult<T = unknown> {
   private constructor(
     public readonly status: WorkerResultStatus,
-    public readonly value?: T,
-    public readonly error?: WorkerFailure,
+    public readonly value: T | undefined,
+    public readonly error: WorkerFailure | undefined,
   ) {}
 
   static success<T = unknown>(value?: T): WorkerResult<T> {
-    return new WorkerResult<T>("success", value);
+    return new WorkerResult<T>("success", value, undefined);
   }
 
   static failure(
