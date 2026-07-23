@@ -12,6 +12,7 @@ from app.models.memory import MemoryEntry
 from app.models.relationship import KnowledgeRelationship
 from app.missions.models import Mission, MissionTask, Workflow
 from app.organizations.models import Organization
+from app.identity.models import Identity, OrganizationMembership
 
 # API Routers
 from app.api.chat import router as chat_router
@@ -33,6 +34,7 @@ from app.api.system import router as system_router
 from app.api.connectors import router as connectors_router
 from app.api.events import router as events_router
 from app.api.organizations import router as organizations_router
+from app.api.identity import router as identity_router
 from app.connectors.github import GitHubConnector
 from app.connectors.registry import connector_registry
 
@@ -75,6 +77,7 @@ app.include_router(system_router)
 app.include_router(connectors_router)
 app.include_router(events_router)
 app.include_router(organizations_router)
+app.include_router(identity_router)
 
 
 @app.get("/")
@@ -95,6 +98,7 @@ def root():
             "PGE-008.2 GitHub Connector",
             "PGE-008.3 Canonical Event Contract",
             "PGE-008.4A Organization Foundation",
+            "PGE-008.4B Identity and Membership",
         ],
     }
 
