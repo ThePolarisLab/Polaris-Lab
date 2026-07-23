@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { LifecycleRecord } from "./LifecycleRecord";
 import { LifecycleSnapshot } from "./LifecycleSnapshot";
 import {
@@ -62,6 +63,7 @@ export class LifecycleManager {
 
   private emit(record: LifecycleRecord): void {
     this.listener?.({
+      id: randomUUID(),
       name: eventNameForState(record.state),
       executionId: this.executionId,
       workerName: this.workerName,
