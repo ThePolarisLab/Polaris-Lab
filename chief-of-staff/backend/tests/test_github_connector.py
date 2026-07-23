@@ -65,7 +65,9 @@ def test_github_connector_sync_publishes_commit_events():
     assert result.records_read == 2
     assert result.events_published == 2
     assert [event.entity for event in events] == ["def456", "abc123"]
-    assert all(event.event_type == "github.commit.observed" for event in events)
+    assert all(event.event_type == "github.commit.observed.v1" for event in events)
+    assert all(event.source_name == "github" for event in events)
+    assert events[0].idempotency_key.endswith(":def456")
 
 
 def test_github_connector_isolates_client_errors():
