@@ -105,7 +105,7 @@ export class QuickBooksConnector extends AbstractConnector<QuickBooksEvidence> {
           state.changedSince,
           cursor,
           request.limit,
-          request.signal,
+          undefined,
         );
         for (const record of page.records) {
           evidence.push(this.toEvidence("quickbooks-record", resource, record, request));
@@ -121,7 +121,7 @@ export class QuickBooksConnector extends AbstractConnector<QuickBooksEvidence> {
     }
 
     for (const report of this.reports) {
-      const record = await this.client.report(report, state.changedSince, request.signal);
+      const record = await this.client.report(report, state.changedSince, undefined);
       evidence.push(this.toEvidence("quickbooks-report", report, record, request));
       if (record.updatedAt && (!latestObservedAt || record.updatedAt > latestObservedAt)) {
         latestObservedAt = record.updatedAt;
