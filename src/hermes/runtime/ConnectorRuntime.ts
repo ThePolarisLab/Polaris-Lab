@@ -68,8 +68,12 @@ export class ConnectorRuntime {
       } catch (error) {
         lastError = error;
         this.emit("sync-failed", connectorId, correlationId, attempt);
-        if (attempt < this.retry.maxAttempts && this.retry.delayMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, this.retry.delayMs));
+        if (attempt < this.retry.maxAttempts) {
+          await connector.disconnect(context);
+          if (this.retry.delayMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, this.retry.delayMs));
+          }
+          await connector.connect(context);
         }
       }
     }
