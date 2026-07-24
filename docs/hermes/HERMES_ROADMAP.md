@@ -4,9 +4,15 @@
 
 Deliver a governed, provider-neutral integration and executive-intelligence foundation on Polaris Runtime without compromising provenance, tenant isolation, explainability, security, or human authority.
 
+## Current program state
+
+- PGE-009.1 — complete and merged in PR #51.
+- PGE-009.2 — implemented in PR #52; pending human review and CI.
+- PGE-009.3 — next planned milestone after PR #52 merges.
+
 ## Delivery sequence
 
-### PGE-009.1 — Hermes Charter and Architecture
+### PGE-009.1 — Hermes Charter and Architecture — Complete
 
 Deliverables:
 
@@ -22,7 +28,7 @@ Exit criteria:
 - dependency and human-approval boundaries are explicit;
 - the first implementation increment is bounded.
 
-### PGE-009.2 — Connector Contract Foundation
+### PGE-009.2 — Connector Contract Foundation — In Review
 
 Deliverables:
 
@@ -30,16 +36,20 @@ Deliverables:
 - synchronization request, checkpoint, and result contracts;
 - connector health/readiness model;
 - evidence-envelope contract;
-- validation and immutability tests;
+- authentication-provider abstraction;
+- guarded lifecycle base;
+- validation and immutability-oriented tests;
 - public exports and engineering documentation.
 
 Exit criteria:
 
 - no vendor SDK dependency in the domain core;
 - tenant, provenance, idempotency, and schema-version fields are mandatory;
-- tests and CI pass.
+- invalid lifecycle and cross-tenant operations fail closed;
+- tests and CI pass;
+- human review approves merge.
 
-### PGE-009.3 — Connector Orchestration Runtime
+### PGE-009.3 — Connector Orchestration Runtime — Next
 
 Deliverables:
 
@@ -132,9 +142,9 @@ Verification:
 
 The expected sequence begins with:
 
-- PR #51 — Hermes Charter and Architecture;
-- PR #52 — Connector Contract Foundation;
-- PR #53 — Connector Orchestration Runtime.
+- PR #51 — Hermes Charter and Architecture — merged;
+- PR #52 — Connector Contract Foundation — active;
+- PR #53 — Connector Orchestration Runtime — next.
 
 Later PR numbering is indicative and may change if necessary maintenance or security increments intervene.
 
