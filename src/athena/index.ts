@@ -5,3 +5,4 @@ export * from "./DefaultExecutionPlanner";
 export * from "./AthenaOrchestrator";
 export * from "./defaults";
 export * from "./memory";
+export * from "./reasoning";
