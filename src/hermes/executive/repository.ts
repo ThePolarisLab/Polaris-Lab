@@ -58,5 +58,5 @@ function freezeEntity<T extends AnyExecutiveEntity>(entity: T): T {
     externalReferences: Object.freeze([...entity.externalReferences]),
     evidence: Object.freeze([...entity.evidence]),
     metadata: Object.freeze({ ...entity.metadata }),
-  }) as T;
+  }) as unknown as T;
 }
