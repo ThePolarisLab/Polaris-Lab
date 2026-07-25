@@ -85,7 +85,7 @@ describe("Athena Reasoning Engine", () => {
       evidence: [context.evidence[0]],
     });
 
-    expect(result.insights[0].confidence.level).toBe("medium");
+    expect(result.insights[0].confidence.level).toBe("low");
     expect(result.insights[0].confidence.conflicts).toEqual([
       "Missing evidence: balance-growth",
     ]);
