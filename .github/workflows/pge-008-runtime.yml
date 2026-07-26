@@ -34,7 +34,7 @@ jobs:
         run: python -m pytest -q tests/test_runtime.py
 
   frontend:
-    name: Frontend build
+    name: Frontend runtime and build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -47,4 +47,5 @@ jobs:
           cache: npm
           cache-dependency-path: chief-of-staff/frontend/package-lock.json
       - run: npm ci
+      - run: npm test
       - run: npm run build
