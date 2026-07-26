@@ -52,9 +52,19 @@ describe("Hermes certification manifest", () => {
     requiredDomains.forEach((domain) => expect(domains.has(domain)).toBe(true));
   });
 
-  it("does not claim certification before evidence is recorded", () => {
-    expect(
-      hermesCertificationManifest.every((criterion) => criterion.status === "planned"),
-    ).toBe(true);
+  it("requires recorded evidence for every passed criterion", () => {
+    const passed = hermesCertificationManifest.filter(
+      (criterion) => criterion.status === "passed",
+    );
+
+    expect(passed.length).toBeGreaterThan(0);
+    passed.forEach((criterion) => {
+      expect(criterion.evidenceRequired.length).toBeGreaterThanOrEqual(2);
+      expect(
+        criterion.evidenceRequired.every(
+          (item) => item.includes("/") || item.includes("test"),
+        ),
+      ).toBe(true);
+    });
   });
 });
