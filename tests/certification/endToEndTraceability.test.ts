@@ -111,7 +111,7 @@ describe("PGE-009.10.3 end-to-end integration and traceability", () => {
 
     const dashboard = await queryEngine.dashboard({ organizationId: "org-1" });
     const tasks = await queryEngine.tasks({ organizationId: "org-1" }, { limit: 10 });
-    const finance = await queryEngine.financials({ organizationId: "org-1" }, { limit: 10 });
+    const finance = await queryEngine.financial({ organizationId: "org-1" });
 
     expect(dashboard.finance?.cashPosition?.amount).toBe(50000);
     expect(tasks.items[0].evidence[0].connectorId).toBe("outlook-connector");
