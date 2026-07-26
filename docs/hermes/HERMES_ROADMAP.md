@@ -18,14 +18,15 @@ Hermes v0.8 has progressed beyond its original planning baseline. The following 
 - PGE-009.8 — Executive Projection Engine — PR #58.
 - PGE-009.9 — Executive Query Engine — PR #59.
 - PGE-009.10.1 — Hermes Certification Framework — PR #65.
+- PGE-009.10.2 — Reference Connector Certification — PR #67.
 
-Athena's first deterministic reasoning milestone was subsequently merged in PR #60. Athena consumes structured evidence and executive read models; it does not bypass Hermes or call provider connectors directly.
+Athena's first deterministic reasoning milestone was merged in PR #60. Athena consumes structured evidence and executive read models; it does not bypass Hermes or call provider connectors directly.
 
-PGE-009.10 is in progress. PGE-009.10.2 certifies the Outlook, Motive, and QuickBooks reference connectors against the merged certification framework under issue #66.
+PGE-009.10 is in progress. PGE-009.10.3 certifies end-to-end integration, provenance preservation, organization isolation, and deterministic replay under issue #68.
 
 ## Delivered architecture
 
-The merged Hermes foundation now includes:
+The merged Hermes foundation includes:
 
 - provider-neutral connector contracts;
 - authentication-provider boundaries without plaintext secret ownership;
@@ -39,7 +40,8 @@ The merged Hermes foundation now includes:
 - provider-neutral executive query services;
 - deterministic filtering, sorting, and bounded pagination;
 - a cross-domain executive dashboard composition boundary;
-- a governed certification manifest, integrity suite, and dedicated CI workflow.
+- a governed certification manifest, integrity suite, and dedicated CI workflow;
+- reference-connector contract certification.
 
 ## Delivery sequence
 
@@ -57,9 +59,7 @@ Added connector registration, capability discovery, synchronization orchestratio
 
 ### PGE-009.4 — Microsoft Outlook Connector — Complete
 
-Added a Microsoft Graph mail boundary, mailbox discovery, full and incremental message synchronization, pagination, delta checkpoints, normalized evidence envelopes, health, and disconnect behavior.
-
-Autonomous email sending is excluded.
+Added a Microsoft Graph mail boundary, mailbox discovery, full and incremental message synchronization, pagination, delta checkpoints, normalized evidence envelopes, health, and disconnect behavior. Autonomous email sending is excluded.
 
 ### PGE-009.5 — Motive Fleet Connector — Complete
 
@@ -67,9 +67,7 @@ Added fleet evidence synchronization for vehicles, drivers, locations, utilizati
 
 ### PGE-009.6 — QuickBooks Financial Connector — Complete
 
-Added financial evidence synchronization for Profit and Loss, Balance Sheet, Cash Flow, accounts receivable aging, and accounts payable aging, with full and incremental synchronization, checkpoints, provenance, and idempotency.
-
-Autonomous accounting entries and payments are excluded.
+Added financial evidence synchronization for Profit and Loss, Balance Sheet, Cash Flow, accounts receivable aging, and accounts payable aging, with full and incremental synchronization, checkpoints, provenance, and idempotency. Autonomous accounting entries and payments are excluded.
 
 ### PGE-009.7 — Executive Read Model — Complete
 
@@ -90,31 +88,33 @@ This increment verifies Hermes as one cohesive governed subsystem rather than as
 Completed increments:
 
 - PGE-009.10.1 — Hermes Certification Framework — complete in PR #65.
+- PGE-009.10.2 — Reference Connector Certification — complete in PR #67.
 
 Current increment:
 
-- PGE-009.10.2 — Reference Connector Certification — in progress under issue #66.
+- PGE-009.10.3 — End-to-End Integration & Traceability — in progress under issue #68.
 
 Planned delivery sequence:
 
-- PGE-009.10.3 — end-to-end integration and traceability;
 - PGE-009.10.4 — resilience and security verification;
 - PGE-009.10.5 — Athena compatibility certification;
 - PGE-009.10.6 — consolidated release certification.
 
-Deliverables:
+PGE-009.10.3 deliverables:
 
-- end-to-end connector-to-evidence-to-projection-to-query integration tests;
-- evidence traceability from executive query result to source observation;
+- connector-to-evidence-to-projection-to-query integration tests;
+- evidence traceability from executive query results to source observations;
 - replay and duplicate-ingestion verification;
-- organization-isolation tests across every integrated stage;
+- organization-isolation tests across the integrated path;
+- synchronized certification evidence and documentation.
+
+Remaining PGE-009.10 deliverables:
+
 - stale-data, partial-failure, retry, and checkpoint-recovery tests;
-- connector contract-conformance suite;
 - security and secret-boundary review;
 - runtime health, metrics, and Mission Control integration verification;
 - compatibility verification with Athena's reasoning contracts;
-- synchronized architecture documentation and release notes;
-- explicit certification report with passed, failed, deferred, and excluded criteria.
+- consolidated release notes and certification report.
 
 Exit criteria:
 
