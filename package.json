@@ -6,6 +6,7 @@
     "test": "jest --runInBand",
     "test:athena": "jest --runInBand tests/athena/ExecutiveMemory.test.ts",
     "test:atlas": "jest --runInBand tests/atlas",
+    "test:certification": "jest --runInBand tests/certification",
     "verify:release": "npm test"
   },
   "devDependencies": {
