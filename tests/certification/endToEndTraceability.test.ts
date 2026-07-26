@@ -34,19 +34,14 @@ function evidence(
 
 function buildPipeline() {
   const repository = new InMemoryExecutiveRepository();
-  const projectionEngine = new ExecutiveProjectionEngine(
-    repository,
-    () => "2026-07-25T02:00:00.000Z",
-  );
+  const projectionEngine = new ExecutiveProjectionEngine(repository, () => "2026-07-25T02:00:00.000Z");
   projectionEngine.register(new MotiveVehicleProjection());
   projectionEngine.register(new OutlookTaskProjection());
   projectionEngine.register(new QuickBooksFinancialProjection());
-
   const queryEngine = new ExecutiveQueryEngine(
     new ExecutiveReadQueryRepository(repository),
     () => "2026-07-25T03:00:00.000Z",
   );
-
   return { repository, projectionEngine, queryEngine };
 }
 
@@ -61,13 +56,10 @@ describe("PGE-009.10.3 end-to-end integration and traceability", () => {
     });
 
     const execution = await projectionEngine.project(source);
-    const result = await queryEngine.fleet(
-      { organizationId: "org-1" },
-      { limit: 10 },
-    );
+    const result = await queryEngine.fleet({ organizationId: "org-1" }, { limit: 10 });
 
     expect(execution.skipped).toBe(false);
-    expect(execution.projectionIds).toEqual(["motive-vehicle-projection"]);
+    expect(execution.projectionIds).toEqual(["motive-vehicle"]);
     expect(execution.entityIds).toEqual(["vehicle:org-1:vehicle-22"]);
     expect(result.items).toHaveLength(1);
     expect(result.items[0].evidence).toEqual([
@@ -81,33 +73,24 @@ describe("PGE-009.10.3 end-to-end integration and traceability", () => {
       },
     ]);
     expect(result.items[0].externalReferences).toEqual([
-      {
-        system: "motive",
-        resourceType: "vehicle",
-        resourceId: "vehicle-22",
-      },
+      { system: "motive", resourceType: "vehicle", resourceId: "vehicle-22" },
     ]);
   });
 
   it("coexists across connectors while retaining independent lineage", async () => {
     const { projectionEngine, queryEngine } = buildPipeline();
-
-    await projectionEngine.project(
-      evidence("outlook", "message-9", {
-        resourceType: "message",
-        subject: "Confirm customer payment date",
-        requiresFollowUp: true,
-        importance: "high",
-      }),
-    );
-    await projectionEngine.project(
-      evidence("quickbooks", "cash-1", {
-        resourceType: "cash-flow",
-        amount: 50000,
-        currency: "CAD",
-        asOf: "2026-07-24",
-      }),
-    );
+    await projectionEngine.project(evidence("outlook", "message-9", {
+      resourceType: "message",
+      subject: "Confirm customer payment date",
+      requiresFollowUp: true,
+      importance: "high",
+    }));
+    await projectionEngine.project(evidence("quickbooks", "cash-1", {
+      resourceType: "cash-flow",
+      amount: 50000,
+      currency: "CAD",
+      asOf: "2026-07-24",
+    }));
 
     const dashboard = await queryEngine.dashboard({ organizationId: "org-1" });
     const tasks = await queryEngine.tasks({ organizationId: "org-1" }, { limit: 10 });
@@ -147,32 +130,17 @@ describe("PGE-009.10.3 end-to-end integration and traceability", () => {
 
   it("fails closed across organization boundaries at query time", async () => {
     const { projectionEngine, queryEngine } = buildPipeline();
-    await projectionEngine.project(
-      evidence(
-        "motive",
-        "vehicle-private",
-        {
-          resourceType: "vehicle",
-          unitNumber: "PRIVATE-1",
-          status: "available",
-          utilizationPercent: 20,
-        },
-        "org-private",
-      ),
-    );
+    await projectionEngine.project(evidence("motive", "vehicle-private", {
+      resourceType: "vehicle",
+      unitNumber: "PRIVATE-1",
+      status: "available",
+      utilizationPercent: 20,
+    }, "org-private"));
 
-    const visible = await queryEngine.fleet(
-      { organizationId: "org-private" },
-      { limit: 10 },
-    );
-    const hidden = await queryEngine.fleet(
-      { organizationId: "org-1" },
-      { limit: 10 },
-    );
+    const visible = await queryEngine.fleet({ organizationId: "org-private" }, { limit: 10 });
+    const hidden = await queryEngine.fleet({ organizationId: "org-1" }, { limit: 10 });
 
-    expect(visible.items.map((item) => item.id)).toEqual([
-      "vehicle:org-private:vehicle-private",
-    ]);
+    expect(visible.items.map((item) => item.id)).toEqual(["vehicle:org-private:vehicle-private"]);
     expect(hidden.items).toEqual([]);
   });
 });
