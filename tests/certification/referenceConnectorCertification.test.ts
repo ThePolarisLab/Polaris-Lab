@@ -68,7 +68,7 @@ const cases: ConnectorCase[] = [
   },
   {
     name: "QuickBooks",
-    provider: "quickbooks-online",
+    provider: "quickbooks",
     checkpointSchema: "quickbooks-checkpoint-v1",
     create: () => new QuickBooksConnector({
       authenticate: async () => undefined,
@@ -149,6 +149,7 @@ describe.each(cases)("$name reference connector certification", (connectorCase) 
       expect(evidence.source.connectorId).toBe(connector.descriptor.identity.id);
       expect(evidence.source.provider).toBe(connectorCase.provider);
       expect(evidence.source.sourceRecordId).toBeTruthy();
+      expect(evidence.correlationId).toBe("sync-1");
       expect(evidence.schemaVersion).toBeTruthy();
       expect(evidence.idempotencyKey).toBeTruthy();
       expect(JSON.stringify(evidence)).not.toContain(credentialReference);
