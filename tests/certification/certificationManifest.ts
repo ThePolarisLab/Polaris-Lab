@@ -25,8 +25,11 @@ export const hermesCertificationManifest: CertificationCriterion[] = [
     title: "Connector implementations conform to provider-neutral contracts",
     owner: "Hermes",
     severity: "critical",
-    evidenceRequired: ["automated contract tests", "connector capability declaration"],
-    status: "planned",
+    evidenceRequired: [
+      "tests/certification/referenceConnectorCertification.test.ts",
+      "docs/hermes/HERMES_REFERENCE_CONNECTOR_CERTIFICATION.md",
+    ],
+    status: "passed",
   },
   {
     id: "HCF-002",
