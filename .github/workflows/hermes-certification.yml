@@ -1,0 +1,42 @@
+name: Hermes Certification
+
+on:
+  pull_request:
+    paths:
+      - "docs/hermes/**"
+      - "src/**"
+      - "tests/certification/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - ".github/workflows/hermes-certification.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/hermes/**"
+      - "src/**"
+      - "tests/certification/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - ".github/workflows/hermes-certification.yml"
+
+jobs:
+  certification-framework:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm install --no-package-lock
+
+      - name: Validate Hermes certification framework
+        run: npm run test:certification
