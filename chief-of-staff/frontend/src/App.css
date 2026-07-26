@@ -2,51 +2,488 @@
   box-sizing: border-box;
 }
 
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  color: #eaf4f8;
+  background: #061019;
+}
+
 body {
   margin: 0;
+  min-width: 320px;
+  background: #061019;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid #7fc9e8;
+  outline-offset: 3px;
 }
 
 .polaris-app-shell {
   min-height: 100vh;
-  background: #07131c;
+  display: grid;
+  grid-template-columns: 270px minmax(0, 1fr);
+  background:
+    radial-gradient(circle at 75% -15%, rgba(55, 142, 178, 0.14), transparent 35%),
+    #07131c;
 }
 
-.polaris-app-nav {
-  position: sticky;
-  z-index: 20;
-  top: 0;
+.workspace-sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 40;
+  width: 270px;
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 10px clamp(20px, 5vw, 72px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(5, 16, 24, 0.94);
-  backdrop-filter: blur(14px);
+  flex-direction: column;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, #081925 0%, #06131d 100%);
+  box-shadow: 12px 0 40px rgba(0, 0, 0, 0.15);
 }
 
-.polaris-app-nav a {
-  padding: 9px 12px;
-  border-radius: 9px;
-  color: #9eb1bd;
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  font-size: 0.86rem;
-  font-weight: 700;
+.workspace-brand {
+  min-height: 76px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.workspace-brand-mark {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(127, 201, 232, 0.28);
+  border-radius: 13px;
+  color: #8bd2ef;
+  background: rgba(127, 201, 232, 0.09);
+}
+
+.workspace-brand strong,
+.workspace-brand span {
+  display: block;
+}
+
+.workspace-brand strong {
+  letter-spacing: 0.16em;
+  font-size: 0.96rem;
+}
+
+.workspace-brand span {
+  margin-top: 2px;
+  color: #7f96a4;
+  font-size: 0.74rem;
+}
+
+.mobile-close-button {
+  display: none;
+  margin-left: auto;
+  border: 0;
+  color: #dcecf3;
+  background: transparent;
+}
+
+.workspace-identity {
+  margin: 16px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.workspace-identity span,
+.workspace-identity strong,
+.workspace-identity small {
+  display: block;
+}
+
+.workspace-identity span {
+  color: #6f8795;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.workspace-identity strong {
+  margin-top: 7px;
+  color: #edf8fb;
+  font-size: 0.9rem;
+}
+
+.workspace-identity small {
+  margin-top: 4px;
+  color: #8ca1ad;
+  line-height: 1.35;
+}
+
+.workspace-navigation {
+  flex: 1;
+  padding: 4px 12px 18px;
+  overflow-y: auto;
+}
+
+.workspace-navigation p {
+  margin: 14px 10px 8px;
+  color: #667d8b;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.workspace-navigation a,
+.workspace-sidebar-footer a {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: #95aab6;
+  font-size: 0.87rem;
+  font-weight: 680;
   text-decoration: none;
+  transition: background 160ms ease, color 160ms ease, transform 160ms ease;
 }
 
-.polaris-app-nav a:hover,
-.polaris-app-nav a.is-active {
-  background: rgba(127, 201, 232, 0.13);
-  color: #eaf8fd;
+.workspace-navigation a svg:last-child {
+  margin-left: auto;
 }
 
-@media (max-width: 520px) {
-  .polaris-app-nav {
-    justify-content: stretch;
+.workspace-navigation a:hover,
+.workspace-sidebar-footer a:hover {
+  color: #edf8fb;
+  background: rgba(127, 201, 232, 0.075);
+  transform: translateX(2px);
+}
+
+.workspace-navigation a.is-active,
+.workspace-sidebar-footer a.is-active {
+  color: #eefbff;
+  background: linear-gradient(90deg, rgba(51, 142, 181, 0.25), rgba(51, 142, 181, 0.08));
+  box-shadow: inset 3px 0 #5fc0e5;
+}
+
+.workspace-sidebar-footer {
+  padding: 14px 12px 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.workspace-sidebar-footer small {
+  display: block;
+  padding: 8px 12px 0;
+  color: #5f7582;
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.executive-workspace,
+.builder-workspace {
+  grid-column: 2;
+  min-width: 0;
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.workspace-topbar {
+  position: sticky;
+  z-index: 25;
+  top: 0;
+  min-height: 76px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 12px clamp(20px, 4vw, 58px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(6, 17, 26, 0.88);
+  backdrop-filter: blur(16px);
+}
+
+.workspace-topbar-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.workspace-topbar-title span,
+.workspace-topbar-title strong {
+  display: block;
+}
+
+.workspace-topbar-title span {
+  color: #78909e;
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.workspace-topbar-title strong {
+  margin-top: 3px;
+  font-size: 1rem;
+}
+
+.mobile-menu-button {
+  display: none;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  color: #e9f7fb;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.workspace-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.workspace-topbar-actions > button {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  color: #78909e;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.observer-badge,
+.workspace-profile {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.observer-badge {
+  padding: 8px 11px;
+  border: 1px solid rgba(67, 191, 135, 0.22);
+  color: #8adbb3;
+  background: rgba(43, 148, 99, 0.09);
+}
+
+.workspace-profile {
+  padding: 8px 11px;
+  color: #dcecf3;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.workspace-main {
+  min-width: 0;
+}
+
+.workspace-statusbar {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 10px clamp(20px, 4vw, 58px);
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  color: #667f8d;
+  background: #06121b;
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+.workspace-statusbar span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #52c28a;
+  box-shadow: 0 0 0 4px rgba(82, 194, 138, 0.08);
+}
+
+.workspace-placeholder {
+  min-height: calc(100vh - 118px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  max-width: 760px;
+  padding: clamp(44px, 7vw, 92px) clamp(24px, 6vw, 82px);
+}
+
+.workspace-placeholder-icon {
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(127, 201, 232, 0.2);
+  border-radius: 18px;
+  color: #87d0ec;
+  background: rgba(127, 201, 232, 0.08);
+}
+
+.workspace-kicker {
+  margin: 24px 0 0;
+  color: #6fbfdf;
+  font-size: 0.74rem;
+  font-weight: 850;
+  letter-spacing: 0.15em;
+}
+
+.workspace-placeholder h1 {
+  margin: 10px 0 0;
+  font-size: clamp(2rem, 5vw, 4.2rem);
+  letter-spacing: -0.045em;
+}
+
+.workspace-placeholder > p:not(.workspace-kicker) {
+  max-width: 620px;
+  margin: 18px 0 0;
+  color: #91a8b4;
+  font-size: 1.05rem;
+  line-height: 1.7;
+}
+
+.workspace-state-card {
+  width: 100%;
+  display: flex;
+  gap: 13px;
+  margin-top: 32px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  color: #84d3aa;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.workspace-state-card strong,
+.workspace-state-card span {
+  display: block;
+}
+
+.workspace-state-card strong {
+  color: #eaf7f1;
+}
+
+.workspace-state-card span {
+  margin-top: 5px;
+  color: #7e95a2;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.return-to-executive {
+  padding: 9px 13px;
+  border: 1px solid rgba(127, 201, 232, 0.17);
+  border-radius: 10px;
+  color: #a9dcee;
+  font-size: 0.8rem;
+  font-weight: 750;
+  text-decoration: none;
+  background: rgba(127, 201, 232, 0.06);
+}
+
+.builder-main {
+  padding-top: 1px;
+}
+
+.workspace-overlay {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  .polaris-app-shell {
+    display: block;
   }
 
-  .polaris-app-nav a {
-    flex: 1;
-    text-align: center;
+  .workspace-sidebar {
+    transform: translateX(-102%);
+    transition: transform 200ms ease;
+  }
+
+  .workspace-sidebar.is-open {
+    transform: translateX(0);
+  }
+
+  .mobile-close-button,
+  .mobile-menu-button {
+    display: grid;
+  }
+
+  .workspace-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 35;
+    display: block;
+    border: 0;
+    background: rgba(0, 0, 0, 0.62);
+    backdrop-filter: blur(3px);
+  }
+
+  .executive-workspace,
+  .builder-workspace {
+    min-height: 100vh;
+  }
+}
+
+@media (max-width: 680px) {
+  .workspace-topbar {
+    min-height: 68px;
+    padding: 10px 14px;
+  }
+
+  .workspace-topbar-title span {
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .observer-badge,
+  .workspace-profile span,
+  .workspace-topbar-actions > button {
+    display: none;
+  }
+
+  .workspace-profile {
+    padding: 8px;
+  }
+
+  .workspace-statusbar {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 10px 16px;
+  }
+
+  .workspace-statusbar > span:last-child {
+    display: none;
+  }
+
+  .return-to-executive {
+    font-size: 0;
+  }
+
+  .return-to-executive::after {
+    content: "Executive";
+    font-size: 0.78rem;
   }
 }
