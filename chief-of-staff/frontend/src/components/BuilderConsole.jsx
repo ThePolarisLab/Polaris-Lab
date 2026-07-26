@@ -9,9 +9,10 @@ import {
   Server,
   ShieldCheck,
 } from "lucide-react";
+import { apiClient } from "../apiClient";
+import { runtimeConfig } from "../runtimeConfig";
 import "./BuilderConsole.css";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 const REFRESH_INTERVAL_MS = 30_000;
 
 function formatUptime(totalSeconds = 0) {
@@ -29,20 +30,6 @@ function formatTimestamp(value) {
   if (!value) return "Not available";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
-
-async function readJson(path) {
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: { Accept: "application/json" },
-  });
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    const message = payload.detail || payload.message || `Request failed (${response.status})`;
-    throw new Error(message);
-  }
-
-  return payload;
 }
 
 function StatusCard({ icon: Icon, label, value, detail, tone = "neutral" }) {
@@ -74,9 +61,9 @@ export default function BuilderConsole() {
 
     try {
       const [healthData, infoData, versionData] = await Promise.all([
-        readJson("/api/v1/system/health"),
-        readJson("/api/v1/system/info"),
-        readJson("/api/v1/system/version"),
+        apiClient.get("/api/v1/system/health"),
+        apiClient.get("/api/v1/system/info"),
+        apiClient.get("/api/v1/system/version"),
       ]);
       setHealth(healthData);
       setInfo(infoData);
@@ -175,7 +162,7 @@ export default function BuilderConsole() {
             {health?.status === "ok" ? "All monitored systems operational" : "Runtime requires attention"}
           </strong>
           <p>
-            Organization: {info?.organization ?? "unknown"} · API: {health?.checks?.api ?? "unknown"}
+            Organization: {info?.organization ?? runtimeConfig.workspace.organizationName} · API: {health?.checks?.api ?? "unknown"}
           </p>
         </div>
       </section>
@@ -184,6 +171,7 @@ export default function BuilderConsole() {
         <section className="builder-error" role="alert">
           <strong>Unable to refresh runtime status</strong>
           <p>{error}</p>
+          <small>Configured API: {runtimeConfig.apiBaseUrl}</small>
         </section>
       )}
 
