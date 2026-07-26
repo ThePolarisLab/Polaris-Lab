@@ -19,10 +19,11 @@ Hermes v0.8 has progressed beyond its original planning baseline. The following 
 - PGE-009.9 — Executive Query Engine — PR #59.
 - PGE-009.10.1 — Hermes Certification Framework — PR #65.
 - PGE-009.10.2 — Reference Connector Certification — PR #67.
+- PGE-009.10.3 — End-to-End Integration & Traceability — PR #69.
 
 Athena's first deterministic reasoning milestone was merged in PR #60. Athena consumes structured evidence and executive read models; it does not bypass Hermes or call provider connectors directly.
 
-PGE-009.10 is in progress. PGE-009.10.3 certifies end-to-end integration, provenance preservation, organization isolation, and deterministic replay under issue #68.
+PGE-009.10 is in progress. PGE-009.10.4 verifies checkpoint recovery, deterministic replay, failure isolation, secret redaction, and safe operational health under issue #70.
 
 ## Delivered architecture
 
@@ -39,9 +40,10 @@ The merged Hermes foundation includes:
 - an idempotent Executive Projection Engine;
 - provider-neutral executive query services;
 - deterministic filtering, sorting, and bounded pagination;
-- a cross-domain executive dashboard composition boundary;
+- mandatory organization isolation and cross-domain dashboard composition;
 - a governed certification manifest, integrity suite, and dedicated CI workflow;
-- reference-connector contract certification.
+- reference-connector contract certification;
+- end-to-end provenance and replay certification.
 
 ## Delivery sequence
 
@@ -89,30 +91,28 @@ Completed increments:
 
 - PGE-009.10.1 — Hermes Certification Framework — complete in PR #65.
 - PGE-009.10.2 — Reference Connector Certification — complete in PR #67.
+- PGE-009.10.3 — End-to-End Integration & Traceability — complete in PR #69.
 
 Current increment:
 
-- PGE-009.10.3 — End-to-End Integration & Traceability — in progress under issue #68.
+- PGE-009.10.4 — Resilience & Security Verification — in progress under issue #70.
 
 Planned delivery sequence:
 
-- PGE-009.10.4 — resilience and security verification;
 - PGE-009.10.5 — Athena compatibility certification;
 - PGE-009.10.6 — consolidated release certification.
 
-PGE-009.10.3 deliverables:
+PGE-009.10.4 deliverables:
 
-- connector-to-evidence-to-projection-to-query integration tests;
-- evidence traceability from executive query results to source observations;
-- replay and duplicate-ingestion verification;
-- organization-isolation tests across the integrated path;
+- durable checkpoint recovery after partial failure;
+- replay and duplicate-work suppression;
+- connector and organization failure isolation;
+- recursive secret and bearer-token redaction;
+- safe connector health signals for Mission Control;
 - synchronized certification evidence and documentation.
 
 Remaining PGE-009.10 deliverables:
 
-- stale-data, partial-failure, retry, and checkpoint-recovery tests;
-- security and secret-boundary review;
-- runtime health, metrics, and Mission Control integration verification;
 - compatibility verification with Athena's reasoning contracts;
 - consolidated release notes and certification report.
 
