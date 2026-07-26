@@ -6,7 +6,7 @@ Deliver a governed, provider-neutral integration and executive-intelligence foun
 
 ## Current program state
 
-Hermes v0.8 has progressed beyond its original planning baseline. The following increments are complete and merged:
+The following increments are complete and merged:
 
 - PGE-009.1 — Hermes Charter and Architecture — PR #51.
 - PGE-009.2 — Connector Contract Foundation — PR #52.
@@ -20,138 +20,53 @@ Hermes v0.8 has progressed beyond its original planning baseline. The following 
 - PGE-009.10.1 — Hermes Certification Framework — PR #65.
 - PGE-009.10.2 — Reference Connector Certification — PR #67.
 - PGE-009.10.3 — End-to-End Integration & Traceability — PR #69.
+- PGE-009.10.4 — Resilience & Security Verification — PR #71.
 
-Athena's first deterministic reasoning milestone was merged in PR #60. Athena consumes structured evidence and executive read models; it does not bypass Hermes or call provider connectors directly.
-
-PGE-009.10 is in progress. PGE-009.10.4 verifies checkpoint recovery, deterministic replay, failure isolation, secret redaction, and safe operational health under issue #70.
+Athena's deterministic reasoning engine was merged in PR #60. PGE-009.10.5 certifies that Athena consumes Hermes through the governed executive contract boundary and preserves organization scope, evidence references, deterministic results, and explainability.
 
 ## Delivered architecture
 
-The merged Hermes foundation includes:
+Hermes v0.8 now includes:
 
-- provider-neutral connector contracts;
-- authentication-provider boundaries without plaintext secret ownership;
-- governed connector lifecycle and capability discovery;
-- checkpointed full and incremental synchronization;
-- bounded retry and reconnect behavior;
-- Microsoft Outlook, Motive, and QuickBooks reference connectors;
-- provenance-preserving evidence envelopes and idempotency keys;
-- organization-isolated executive domain entities and events;
-- an idempotent Executive Projection Engine;
-- provider-neutral executive query services;
-- deterministic filtering, sorting, and bounded pagination;
-- mandatory organization isolation and cross-domain dashboard composition;
-- a governed certification manifest, integrity suite, and dedicated CI workflow;
-- reference-connector contract certification;
-- end-to-end provenance and replay certification.
+- provider-neutral connector contracts and lifecycle orchestration;
+- checkpointed Outlook, Motive, and QuickBooks reference connectors;
+- provenance-preserving evidence envelopes and deterministic idempotency;
+- organization-isolated executive entities, projections, and queries;
+- checkpoint recovery, replay suppression, secret redaction, and safe health signals;
+- a governed certification manifest and dedicated certification CI;
+- a public Hermes-to-Athena evidence compatibility boundary.
 
-## Delivery sequence
-
-### PGE-009.1 — Hermes Charter and Architecture — Complete
-
-Established the project charter, reference architecture, constitutional boundaries, provider-neutral connector ADR, and milestone plan.
-
-### PGE-009.2 — Connector Contract Foundation — Complete
-
-Established connector identity, organization scope, capabilities, lifecycle, health, checkpoints, synchronization, evidence, authentication, validation, provenance, schema versioning, and idempotency contracts.
-
-### PGE-009.3 — Connector Orchestration Runtime — Complete
-
-Added connector registration, capability discovery, synchronization orchestration, checkpoint persistence, bounded retries, recovery, and runtime lifecycle events.
-
-### PGE-009.4 — Microsoft Outlook Connector — Complete
-
-Added a Microsoft Graph mail boundary, mailbox discovery, full and incremental message synchronization, pagination, delta checkpoints, normalized evidence envelopes, health, and disconnect behavior. Autonomous email sending is excluded.
-
-### PGE-009.5 — Motive Fleet Connector — Complete
-
-Added fleet evidence synchronization for vehicles, drivers, locations, utilization, and IFTA summaries with resource-aware checkpoints, pagination, provenance, health, and lifecycle behavior.
-
-### PGE-009.6 — QuickBooks Financial Connector — Complete
-
-Added financial evidence synchronization for Profit and Loss, Balance Sheet, Cash Flow, accounts receivable aging, and accounts payable aging, with full and incremental synchronization, checkpoints, provenance, and idempotency. Autonomous accounting entries and payments are excluded.
-
-### PGE-009.7 — Executive Read Model — Complete
-
-Added provider-neutral executive contracts and storage boundaries for customers, loads, vehicles, drivers, financial snapshots, tasks, alerts, KPIs, external references, evidence references, versions, and business events.
-
-### PGE-009.8 — Executive Projection Engine — Complete
-
-Added deterministic, registered projections from governed evidence and business events into executive entities, including organization isolation, evidence idempotency, external-reference helpers, event ordering, and optimistic entity versions.
-
-### PGE-009.9 — Executive Query Engine — Complete
-
-Added typed query, filter, sort, pagination, and context contracts; repository adapters; domain query services; nested-field filtering; stable deterministic ordering; bounded pagination; mandatory organization isolation; and cross-domain dashboard composition.
-
-### PGE-009.10 — Hermes v0.8 Integration and Certification — In progress
-
-This increment verifies Hermes as one cohesive governed subsystem rather than as isolated components.
+## PGE-009.10 — Integration and Certification
 
 Completed increments:
 
-- PGE-009.10.1 — Hermes Certification Framework — complete in PR #65.
-- PGE-009.10.2 — Reference Connector Certification — complete in PR #67.
-- PGE-009.10.3 — End-to-End Integration & Traceability — complete in PR #69.
+- PGE-009.10.1 — Hermes Certification Framework — PR #65.
+- PGE-009.10.2 — Reference Connector Certification — PR #67.
+- PGE-009.10.3 — End-to-End Integration & Traceability — PR #69.
+- PGE-009.10.4 — Resilience & Security Verification — PR #71.
+- PGE-009.10.5 — Athena Compatibility Certification — issue #72; implementation pending merge.
 
-Current increment:
+Final increment:
 
-- PGE-009.10.4 — Resilience & Security Verification — in progress under issue #70.
+- PGE-009.10.6 — Consolidated Hermes v0.8 Release Certification.
 
-Planned delivery sequence:
+PGE-009.10.6 must consolidate the certification manifest, run the full regression and certification suites, publish release notes and a release report, verify documentation against the merged implementation, and require human approval before tagging.
 
-- PGE-009.10.5 — Athena compatibility certification;
-- PGE-009.10.6 — consolidated release certification.
+## Exit criteria
 
-PGE-009.10.4 deliverables:
-
-- durable checkpoint recovery after partial failure;
-- replay and duplicate-work suppression;
-- connector and organization failure isolation;
-- recursive secret and bearer-token redaction;
-- safe connector health signals for Mission Control;
-- synchronized certification evidence and documentation.
-
-Remaining PGE-009.10 deliverables:
-
-- compatibility verification with Athena's reasoning contracts;
-- consolidated release notes and certification report.
-
-Exit criteria:
-
-- all required automated tests pass;
-- GitHub Actions is successful;
-- no unresolved critical or high-severity security findings remain;
-- evidence provenance is demonstrable across the full path;
+- all required automated tests and GitHub Actions pass;
+- no unresolved critical or high-severity certification failures remain;
+- source provenance remains demonstrable through executive insights;
 - organization isolation fails closed;
-- replay and idempotency behavior is deterministic;
-- Athena consumes Hermes outputs only through governed contracts;
+- replay and idempotency behavior remains deterministic;
+- Athena consumes Hermes only through governed public contracts;
 - documentation matches the merged implementation;
-- human review approves the release baseline.
+- human review approves the v0.8 release baseline.
 
 ## Post-certification direction
 
-After PGE-009.10, the next program should be selected through an explicit charter and ADR review. Candidate directions include:
-
-- authorized action proposals and human approval workflows;
-- production persistence adapters;
-- connector credential-vault integration;
-- executive briefing composition;
-- Athena–Hermes end-to-end executive insight flows;
-- pilot deployment using Mor Logistics data boundaries.
-
-None of these candidates is considered approved merely by appearing in this roadmap.
+Candidate follow-up programs require a separate charter and ADR review. Candidates include production persistence, credential-vault adapters, executive briefing composition, authorized action proposals with human approval, and a Mor Logistics pilot.
 
 ## Non-negotiable quality gates
 
-Every increment must:
-
-- preserve organization isolation;
-- avoid plaintext secrets;
-- retain source provenance;
-- define idempotency and replay behavior;
-- expose failure and health evidence;
-- preserve deterministic behavior where promised;
-- document explicit exclusions;
-- include automated tests where code is introduced;
-- pass CI;
-- receive human review before merge.
+Every increment must preserve organization isolation, avoid plaintext secrets, retain source provenance, define replay behavior, expose safe health evidence, document exclusions, include automated tests, pass CI, and receive human review before merge.
