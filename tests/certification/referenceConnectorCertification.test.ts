@@ -53,7 +53,7 @@ const cases: ConnectorCase[] = [
     checkpointSchema: "motive-checkpoint-v1",
     create: () => new MotiveConnector({
       authenticate: async () => undefined,
-      list: async (resource: string) => ({
+      list: async (resource) => ({
         records: [{ id: `${resource}-1`, updatedAt: "2026-07-25T12:00:00.000Z" }],
       }),
       health: async () => ({ healthy: true }),
@@ -72,10 +72,10 @@ const cases: ConnectorCase[] = [
     checkpointSchema: "quickbooks-checkpoint-v1",
     create: () => new QuickBooksConnector({
       authenticate: async () => undefined,
-      list: async (resource: string) => ({
+      list: async (resource) => ({
         records: [{ id: `${resource}-1`, updatedAt: "2026-07-25T12:00:00.000Z" }],
       }),
-      report: async (report: string) => ({
+      report: async (report) => ({
         id: `${report}-current`,
         updatedAt: "2026-07-25T12:00:00.000Z",
         report,
