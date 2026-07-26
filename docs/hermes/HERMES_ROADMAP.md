@@ -20,6 +20,8 @@ Hermes v0.8 has progressed beyond its original planning baseline. The following 
 
 Athena's first deterministic reasoning milestone was subsequently merged in PR #60. Athena consumes structured evidence and executive read models; it does not bypass Hermes or call provider connectors directly.
 
+PGE-009.10 is now in progress. Its first increment, PGE-009.10.1, establishes the certification manifest, governance rules, automated validation, and dedicated CI workflow tracked by issue #64.
+
 ## Delivered architecture
 
 The merged Hermes foundation now includes:
@@ -79,9 +81,21 @@ Added deterministic, registered projections from governed evidence and business 
 
 Added typed query, filter, sort, pagination, and context contracts; repository adapters; domain query services; nested-field filtering; stable deterministic ordering; bounded pagination; mandatory organization isolation; and cross-domain dashboard composition.
 
-### PGE-009.10 — Hermes v0.8 Integration and Certification — Next
+### PGE-009.10 — Hermes v0.8 Integration and Certification — In progress
 
-The next increment shall verify Hermes as one cohesive governed subsystem rather than as isolated components.
+This increment verifies Hermes as one cohesive governed subsystem rather than as isolated components.
+
+Current increment:
+
+- PGE-009.10.1 — Hermes Certification Framework — in progress under issue #64.
+
+Planned delivery sequence:
+
+- PGE-009.10.2 — connector contract conformance;
+- PGE-009.10.3 — end-to-end integration and traceability;
+- PGE-009.10.4 — resilience and security verification;
+- PGE-009.10.5 — Athena compatibility certification;
+- PGE-009.10.6 — consolidated release certification.
 
 Deliverables:
 
