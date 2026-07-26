@@ -21,8 +21,9 @@ The following increments are complete and merged:
 - PGE-009.10.2 — Reference Connector Certification — PR #67.
 - PGE-009.10.3 — End-to-End Integration & Traceability — PR #69.
 - PGE-009.10.4 — Resilience & Security Verification — PR #71.
+- PGE-009.10.5 — Athena Compatibility Certification — PR #73.
 
-Athena's deterministic reasoning engine was merged in PR #60. PGE-009.10.5 certifies that Athena consumes Hermes through the governed executive contract boundary and preserves organization scope, evidence references, deterministic results, and explainability.
+PGE-009.10.6 — Consolidated Hermes v0.8 Release Certification — is in progress. Release-candidate notes, the consolidated certification report, and the explicit human approval checklist are maintained on the certification branch. A v0.8 tag remains blocked until final CI evidence and human approval are recorded against the exact release commit.
 
 ## Delivered architecture
 
@@ -44,13 +45,13 @@ Completed increments:
 - PGE-009.10.2 — Reference Connector Certification — PR #67.
 - PGE-009.10.3 — End-to-End Integration & Traceability — PR #69.
 - PGE-009.10.4 — Resilience & Security Verification — PR #71.
-- PGE-009.10.5 — Athena Compatibility Certification — issue #72; implementation pending merge.
+- PGE-009.10.5 — Athena Compatibility Certification — PR #73.
 
-Final increment:
+Active final increment:
 
-- PGE-009.10.6 — Consolidated Hermes v0.8 Release Certification.
+- PGE-009.10.6 — Consolidated Hermes v0.8 Release Certification — issue #74.
 
-PGE-009.10.6 must consolidate the certification manifest, run the full regression and certification suites, publish release notes and a release report, verify documentation against the merged implementation, and require human approval before tagging.
+PGE-009.10.6 consolidates the certification manifest, requires the full regression and certification suites, publishes release notes and a release report, verifies documentation against the merged implementation, and requires human approval before tagging.
 
 ## Exit criteria
 
@@ -62,6 +63,12 @@ PGE-009.10.6 must consolidate the certification manifest, run the full regressio
 - Athena consumes Hermes only through governed public contracts;
 - documentation matches the merged implementation;
 - human review approves the v0.8 release baseline.
+
+## Release-candidate records
+
+- `docs/hermes/HERMES_V0.8_RELEASE_NOTES.md`
+- `docs/hermes/HERMES_V0.8_RELEASE_CERTIFICATION_REPORT.md`
+- `docs/hermes/HERMES_V0.8_HUMAN_APPROVAL_CHECKLIST.md`
 
 ## Post-certification direction
 
