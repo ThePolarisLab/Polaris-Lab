@@ -17,10 +17,11 @@ Hermes v0.8 has progressed beyond its original planning baseline. The following 
 - PGE-009.7 — Executive Read Model — PR #57.
 - PGE-009.8 — Executive Projection Engine — PR #58.
 - PGE-009.9 — Executive Query Engine — PR #59.
+- PGE-009.10.1 — Hermes Certification Framework — PR #65.
 
 Athena's first deterministic reasoning milestone was subsequently merged in PR #60. Athena consumes structured evidence and executive read models; it does not bypass Hermes or call provider connectors directly.
 
-PGE-009.10 is now in progress. Its first increment, PGE-009.10.1, establishes the certification manifest, governance rules, automated validation, and dedicated CI workflow tracked by issue #64.
+PGE-009.10 is in progress. PGE-009.10.2 certifies the Outlook, Motive, and QuickBooks reference connectors against the merged certification framework under issue #66.
 
 ## Delivered architecture
 
@@ -37,7 +38,8 @@ The merged Hermes foundation now includes:
 - an idempotent Executive Projection Engine;
 - provider-neutral executive query services;
 - deterministic filtering, sorting, and bounded pagination;
-- a cross-domain executive dashboard composition boundary.
+- a cross-domain executive dashboard composition boundary;
+- a governed certification manifest, integrity suite, and dedicated CI workflow.
 
 ## Delivery sequence
 
@@ -85,13 +87,16 @@ Added typed query, filter, sort, pagination, and context contracts; repository a
 
 This increment verifies Hermes as one cohesive governed subsystem rather than as isolated components.
 
+Completed increments:
+
+- PGE-009.10.1 — Hermes Certification Framework — complete in PR #65.
+
 Current increment:
 
-- PGE-009.10.1 — Hermes Certification Framework — in progress under issue #64.
+- PGE-009.10.2 — Reference Connector Certification — in progress under issue #66.
 
 Planned delivery sequence:
 
-- PGE-009.10.2 — connector contract conformance;
 - PGE-009.10.3 — end-to-end integration and traceability;
 - PGE-009.10.4 — resilience and security verification;
 - PGE-009.10.5 — Athena compatibility certification;
