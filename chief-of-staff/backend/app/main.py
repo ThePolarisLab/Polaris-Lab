@@ -37,6 +37,7 @@ from app.api.organizations import router as organizations_router
 from app.api.identity import router as identity_router
 from app.api.auth import router as auth_router
 from app.connectors.github import GitHubConnector
+from app.connectors.quickbooks import QuickBooksConnector
 from app.connectors.registry import connector_registry
 
 # Create database tables
@@ -44,6 +45,7 @@ Base.metadata.create_all(bind=engine)
 
 # Register production connectors. Construction is lazy and does not require secrets.
 connector_registry.register(GitHubConnector(), replace=True)
+connector_registry.register(QuickBooksConnector(), replace=True)
 
 app = FastAPI(
     title=settings.service_name,
@@ -102,6 +104,7 @@ def root():
             "PGE-008.4A Organization Foundation",
             "PGE-008.4B Identity and Membership",
             "PGE-008.4C Authentication and Authorization",
+            "PGE-009.6B QuickBooks Connector Registration",
         ],
     }
 
