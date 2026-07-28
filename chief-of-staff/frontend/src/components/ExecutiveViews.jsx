@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -30,6 +31,8 @@ const decisions = [
   { title: "Production data mutations", status: "Restricted", rationale: "Observer/advisory mode remains the operating boundary." },
   { title: "Connector rollout", status: "Pending", rationale: "Begin after Mission 003 certification." },
 ];
+
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 
 function ViewHeader({ kicker, title, description, action }) {
   return (
@@ -119,13 +122,60 @@ export function DecisionCenterView() {
   );
 }
 
+function connectorPresentation(connector) {
+  if (connector.status === "healthy") {
+    return ["Connected", connector.message || "Connector health verified."];
+  }
+  if (connector.status === "degraded" || connector.status === "sync_error") {
+    return ["Degraded", connector.message || "Connector requires attention."];
+  }
+  return ["Not connected", connector.message || "Connector authorization is required."];
+}
+
 export function ConnectorsView() {
+  const [quickBooks, setQuickBooks] = useState({
+    status: "loading",
+    message: "Checking the hosted QuickBooks connection…",
+  });
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadQuickBooksHealth() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/v1/connectors/quickbooks`, {
+          signal: controller.signal,
+          headers: { Accept: "application/json" },
+        });
+        if (!response.ok) {
+          throw new Error(`Connector health request failed with HTTP ${response.status}`);
+        }
+        setQuickBooks(await response.json());
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          setQuickBooks({
+            status: "disconnected",
+            message: "Unable to read QuickBooks status from the configured Polaris API.",
+          });
+        }
+      }
+    }
+
+    loadQuickBooksHealth();
+    return () => controller.abort();
+  }, []);
+
+  const [quickBooksStatus, quickBooksDetail] = quickBooks.status === "loading"
+    ? ["Checking", quickBooks.message]
+    : connectorPresentation(quickBooks);
+
   const connectors = [
     ["Polaris Runtime", "Connected", "Core runtime contract is available."],
-    ["QuickBooks Online", "Not connected", "Production adapter planned in Issue #61."],
+    ["QuickBooks Online", quickBooksStatus, quickBooksDetail],
     ["Motive", "Not connected", "Production adapter planned in Issue #62."],
     ["Outlook", "Future", "Connector policy and evidence contract not yet certified."],
   ];
+
   return (
     <section className="executive-view" aria-labelledby="connectors-title">
       <ViewHeader kicker="MISSION 003 · CONNECTORS" title="Connector center" description="One governed inventory of enterprise data connections." />
