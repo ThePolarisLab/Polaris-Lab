@@ -62,7 +62,8 @@ def quickbooks_callback(
     )
 
 
-@router.delete("/connection", status_code=status.HTTP_204_NO_CONTENT)
-def disconnect_quickbooks() -> None:
+@router.delete("/connection")
+def disconnect_quickbooks() -> dict[str, bool]:
     """Remove the stored QuickBooks authorization for the active organization."""
     QuickBooksCredentialStore().delete()
+    return {"disconnected": True}
