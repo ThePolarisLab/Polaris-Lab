@@ -33,6 +33,7 @@ const decisions = [
 ];
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+const QUICKBOOKS_AUTHORIZE_URL = `${API_BASE_URL}/api/v1/connectors/quickbooks/oauth/authorize`;
 
 function ViewHeader({ kicker, title, description, action }) {
   return (
@@ -170,21 +171,34 @@ export function ConnectorsView() {
     : connectorPresentation(quickBooks);
 
   const connectors = [
-    ["Polaris Runtime", "Connected", "Core runtime contract is available."],
-    ["QuickBooks Online", quickBooksStatus, quickBooksDetail],
-    ["Motive", "Not connected", "Production adapter planned in Issue #62."],
-    ["Outlook", "Future", "Connector policy and evidence contract not yet certified."],
+    { name: "Polaris Runtime", status: "Connected", detail: "Core runtime contract is available." },
+    {
+      name: "QuickBooks Online",
+      status: quickBooksStatus,
+      detail: quickBooksDetail,
+      action: quickBooks.status !== "healthy" && quickBooks.status !== "loading"
+        ? { label: "Connect QuickBooks", href: QUICKBOOKS_AUTHORIZE_URL }
+        : null,
+    },
+    { name: "Motive", status: "Not connected", detail: "Production adapter planned in Issue #62." },
+    { name: "Outlook", status: "Future", detail: "Connector policy and evidence contract not yet certified." },
   ];
 
   return (
     <section className="executive-view" aria-labelledby="connectors-title">
       <ViewHeader kicker="MISSION 003 · CONNECTORS" title="Connector center" description="One governed inventory of enterprise data connections." />
       <div className="executive-card-grid two-column">
-        {connectors.map(([name, status, detail]) => (
+        {connectors.map(({ name, status, detail, action }) => (
           <article className="connector-card" key={name}>
             <div className="connector-heading"><Link2 size={19} /><h3>{name}</h3></div>
             <span className={`connector-status ${status.toLowerCase().replace(" ", "-")}`}>{status}</span>
             <p>{detail}</p>
+            {action && (
+              <a className="connector-action" href={action.href}>
+                {action.label}
+                <ArrowRight size={15} aria-hidden="true" />
+              </a>
+            )}
           </article>
         ))}
       </div>
