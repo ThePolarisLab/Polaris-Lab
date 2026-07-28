@@ -34,6 +34,7 @@ from app.api.work_context import router as work_context_router
 from app.api.system import router as system_router
 from app.api.connectors import router as connectors_router
 from app.api.quickbooks_oauth import router as quickbooks_oauth_router
+from app.api.quickbooks_financials import router as quickbooks_financials_router
 from app.api.events import router as events_router
 from app.api.organizations import router as organizations_router
 from app.api.identity import router as identity_router
@@ -81,6 +82,7 @@ app.include_router(work_context_router)
 app.include_router(system_router)
 app.include_router(connectors_router)
 app.include_router(quickbooks_oauth_router)
+app.include_router(quickbooks_financials_router)
 app.include_router(events_router)
 app.include_router(organizations_router)
 app.include_router(identity_router)
@@ -109,6 +111,7 @@ def root():
             "PGE-008.4C Authentication and Authorization",
             "PGE-009.6B QuickBooks Connector Registration",
             "PGE-009.6C Polaris QuickBooks OAuth and Token Storage",
+            "PGE-009.6G QuickBooks Financial API Foundation",
         ],
     }
 
