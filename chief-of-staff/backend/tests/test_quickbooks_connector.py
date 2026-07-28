@@ -19,23 +19,36 @@ class FakeResponse:
         return self._body.read()
 
 
+class FakeCredentialStore:
+    def __init__(self):
+        self.realm_id = "realm-id"
+        self.refresh_token = "refresh-token"
+        self.saved = []
+
+    def load(self):
+        return self.realm_id, self.refresh_token
+
+    def save(self, **kwargs):
+        self.saved.append(kwargs)
+        self.realm_id = kwargs["realm_id"]
+        self.refresh_token = kwargs["refresh_token"]
+
+
 def configure(monkeypatch):
     monkeypatch.setenv("POLARIS_QBO_CLIENT_ID", "client-id")
     monkeypatch.setenv("POLARIS_QBO_CLIENT_SECRET", "client-secret")
-    monkeypatch.setenv("POLARIS_QBO_REFRESH_TOKEN", "refresh-token")
-    monkeypatch.setenv("POLARIS_QBO_REALM_ID", "realm-id")
+    monkeypatch.setenv("POLARIS_QBO_TOKEN_ENCRYPTION_KEY", "configured-for-test")
 
 
 def test_health_is_configuration_error_without_secrets(monkeypatch):
     for name in (
         "POLARIS_QBO_CLIENT_ID",
         "POLARIS_QBO_CLIENT_SECRET",
-        "POLARIS_QBO_REFRESH_TOKEN",
-        "POLARIS_QBO_REALM_ID",
+        "POLARIS_QBO_TOKEN_ENCRYPTION_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
 
-    health = QuickBooksConnector().health()
+    health = QuickBooksConnector(credential_store=FakeCredentialStore()).health()
 
     assert health.name == "quickbooks"
     assert health.status == ConnectorStatus.CONFIGURATION_ERROR
@@ -44,15 +57,24 @@ def test_health_is_configuration_error_without_secrets(monkeypatch):
 
 def test_health_verifies_expected_company_without_exposing_secrets(monkeypatch):
     configure(monkeypatch)
+    store = FakeCredentialStore()
     responses = iter(
         [
-            FakeResponse({"access_token": "access-token", "expires_in": 3600}),
+            FakeResponse(
+                {
+                    "access_token": "access-token",
+                    "refresh_token": "rotated-refresh-token",
+                    "expires_in": 3600,
+                }
+            ),
             FakeResponse(
                 {"CompanyInfo": {"CompanyName": "MOR LOGISTICS MANITOBA LIMITED"}}
             ),
         ]
     )
-    connector = QuickBooksConnector(opener=lambda *_args, **_kwargs: next(responses))
+    connector = QuickBooksConnector(
+        opener=lambda *_args, **_kwargs: next(responses), credential_store=store
+    )
 
     health = connector.health()
 
@@ -62,6 +84,7 @@ def test_health_verifies_expected_company_without_exposing_secrets(monkeypatch):
     assert health.details["secrets_exposed"] is False
     assert "access-token" not in health.model_dump_json()
     assert "refresh-token" not in health.model_dump_json()
+    assert store.refresh_token == "rotated-refresh-token"
 
 
 def test_sync_reads_company_and_records_last_sync(monkeypatch):
@@ -74,7 +97,10 @@ def test_sync_reads_company_and_records_last_sync(monkeypatch):
             ),
         ]
     )
-    connector = QuickBooksConnector(opener=lambda *_args, **_kwargs: next(responses))
+    connector = QuickBooksConnector(
+        opener=lambda *_args, **_kwargs: next(responses),
+        credential_store=FakeCredentialStore(),
+    )
 
     result = connector.sync()
 
@@ -92,7 +118,10 @@ def test_company_mismatch_is_rejected(monkeypatch):
             FakeResponse({"CompanyInfo": {"CompanyName": "WRONG COMPANY"}}),
         ]
     )
-    connector = QuickBooksConnector(opener=lambda *_args, **_kwargs: next(responses))
+    connector = QuickBooksConnector(
+        opener=lambda *_args, **_kwargs: next(responses),
+        credential_store=FakeCredentialStore(),
+    )
 
     health = connector.health()
 
