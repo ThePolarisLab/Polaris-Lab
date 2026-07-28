@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: polaris-executive-api
+    runtime: python
+    plan: free
+    rootDir: chief-of-staff/backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: POLARIS_ENV
+        value: staging
+      - key: POLARIS_FRONTEND_URL
+        value: http://localhost:5173
+      - key: DATABASE_URL
+        fromDatabase:
+          name: polaris-staging-db
+          property: connectionString
+      - key: POLARIS_QBO_CLIENT_ID
+        sync: false
+      - key: POLARIS_QBO_CLIENT_SECRET
+        sync: false
+      - key: POLARIS_QBO_REDIRECT_URI
+        sync: false
+      - key: POLARIS_QBO_OAUTH_STATE_SECRET
+        generateValue: true
+      - key: POLARIS_QBO_TOKEN_ENCRYPTION_KEY
+        sync: false
+
+databases:
+  - name: polaris-staging-db
+    plan: free
+    databaseName: polaris
+    user: polaris
