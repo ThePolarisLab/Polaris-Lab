@@ -7,10 +7,10 @@ import json
 import os
 import time
 from collections.abc import Callable, Sequence
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from app.connectors.base import BaseConnector
@@ -23,6 +23,7 @@ from app.connectors.quickbooks_credentials import (
 EXPECTED_COMPANY_NAME = "MOR LOGISTICS MANITOBA LIMITED"
 TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 API_BASE_URL = "https://quickbooks.api.intuit.com"
+MINOR_VERSION = "75"
 
 
 class QuickBooksConnectorError(RuntimeError):
@@ -114,7 +115,7 @@ class QuickBooksConnector(BaseConnector):
     def health(self) -> ConnectorHealth:
         started = datetime.now(timezone.utc)
         try:
-            company = self._company_info()
+            company = self.company_info()
             company_name = str(company.get("CompanyName") or "")
             if company_name != EXPECTED_COMPANY_NAME:
                 return ConnectorHealth(
@@ -173,7 +174,7 @@ class QuickBooksConnector(BaseConnector):
         records_read = 0
         errors: list[str] = []
         try:
-            company = self._company_info()
+            company = self.company_info()
             company_name = str(company.get("CompanyName") or "")
             if company_name != EXPECTED_COMPANY_NAME:
                 raise QuickBooksConnectorError(
@@ -201,31 +202,103 @@ class QuickBooksConnector(BaseConnector):
         self._access_token_expires_at = 0.0
         self._realm_id = None
 
-    def _company_info(self) -> dict[str, Any]:
+    def company_info(self) -> dict[str, Any]:
+        """Return the connected company's QuickBooks metadata."""
+        payload = self._get(
+            f"companyinfo/{self._require_realm_id()}",
+            operation="company information",
+        )
+        company = payload.get("CompanyInfo")
+        if not isinstance(company, dict):
+            raise QuickBooksConnectorError("QuickBooks company information was not returned")
+        return company
+
+    def accounts(self) -> list[dict[str, Any]]:
+        """Return the active Chart of Accounts in stable display-name order."""
+        query = "select * from Account where Active = true order by FullyQualifiedName"
+        payload = self._get(
+            "query",
+            operation="accounts query",
+            params={"query": query},
+        )
+        query_response = payload.get("QueryResponse")
+        if not isinstance(query_response, dict):
+            raise QuickBooksConnectorError("QuickBooks accounts response was malformed")
+        accounts = query_response.get("Account", [])
+        if not isinstance(accounts, list):
+            raise QuickBooksConnectorError("QuickBooks accounts were not returned as a list")
+        return [account for account in accounts if isinstance(account, dict)]
+
+    def report(
+        self,
+        report_name: str,
+        *,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        accounting_method: str = "Accrual",
+    ) -> dict[str, Any]:
+        """Return one supported read-only financial report from QuickBooks."""
+        supported = {"ProfitAndLoss", "BalanceSheet", "CashFlow"}
+        if report_name not in supported:
+            raise QuickBooksConnectorError(f"Unsupported QuickBooks report: {report_name}")
+        if start_date and end_date and start_date > end_date:
+            raise QuickBooksConnectorError("QuickBooks report start date must not exceed end date")
+        method = accounting_method.title()
+        if method not in {"Accrual", "Cash"}:
+            raise QuickBooksConnectorError("QuickBooks accounting method must be Accrual or Cash")
+
+        params: dict[str, str] = {"accounting_method": method}
+        if start_date:
+            params["start_date"] = start_date.isoformat()
+        if end_date:
+            params["end_date"] = end_date.isoformat()
+        return self._get(
+            f"reports/{quote(report_name, safe='')}",
+            operation=f"{report_name} report",
+            params=params,
+        )
+
+    def _require_realm_id(self) -> str:
         self.authenticate()
         if not self._realm_id:
             raise QuickBooksConnectorError("QuickBooks realm ID is unavailable")
+        return self._realm_id
+
+    def _get(
+        self,
+        resource: str,
+        *,
+        operation: str,
+        params: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        realm_id = self._require_realm_id()
+        query_params = {"minorversion": MINOR_VERSION}
+        if params:
+            query_params.update(params)
         request = Request(
-            f"{API_BASE_URL}/v3/company/{self._realm_id}/companyinfo/{self._realm_id}?minorversion=75",
+            f"{API_BASE_URL}/v3/company/{realm_id}/{resource}?{urlencode(query_params)}",
             headers={
                 "Accept": "application/json",
                 "Authorization": f"Bearer {self._access_token}",
             },
             method="GET",
         )
-        payload = self._request_json(request, "company verification")
-        company = payload.get("CompanyInfo")
-        if not isinstance(company, dict):
-            raise QuickBooksConnectorError("QuickBooks company information was not returned")
-        return company
+        return self._request_json(request, operation)
 
     def _request_json(self, request: Request, operation: str) -> dict[str, Any]:
         try:
             with self._opener(request, timeout=20) as response:
-                return json.loads(response.read().decode("utf-8"))
+                payload = json.loads(response.read().decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise QuickBooksConnectorError(
+                        f"QuickBooks {operation} returned an unexpected response"
+                    )
+                return payload
         except HTTPError as exc:
             raise QuickBooksConnectorError(
                 f"QuickBooks {operation} failed with HTTP {exc.code}"
             ) from exc
+        except QuickBooksConnectorError:
+            raise
         except (URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise QuickBooksConnectorError(f"QuickBooks {operation} failed") from exc
