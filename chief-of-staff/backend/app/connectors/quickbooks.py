@@ -15,7 +15,10 @@ from urllib.request import Request, urlopen
 
 from app.connectors.base import BaseConnector
 from app.connectors.models import ConnectorHealth, ConnectorStatus, SyncResult
-
+from app.connectors.quickbooks_credentials import (
+    QuickBooksCredentialError,
+    QuickBooksCredentialStore,
+)
 
 EXPECTED_COMPANY_NAME = "MOR LOGISTICS MANITOBA LIMITED"
 TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
@@ -27,23 +30,22 @@ class QuickBooksConnectorError(RuntimeError):
 
 
 class QuickBooksConnector(BaseConnector):
-    """Verify and synchronize a read-only QuickBooks Online company connection.
-
-    Credentials are read lazily from process environment variables so importing
-    the application never requires or exposes secrets.
-    """
+    """Verify and synchronize a read-only QuickBooks Online company connection."""
 
     def __init__(
         self,
         *,
         opener: Callable[..., Any] = urlopen,
         now: Callable[[], float] = time.time,
+        credential_store: QuickBooksCredentialStore | None = None,
     ) -> None:
         super().__init__(name="quickbooks")
         self._opener = opener
         self._now = now
+        self._credential_store = credential_store or QuickBooksCredentialStore()
         self._access_token: str | None = None
         self._access_token_expires_at = 0.0
+        self._realm_id: str | None = None
         self._last_sync_at: datetime | None = None
         self._company_name: str | None = None
 
@@ -53,8 +55,7 @@ class QuickBooksConnector(BaseConnector):
             for name in (
                 "POLARIS_QBO_CLIENT_ID",
                 "POLARIS_QBO_CLIENT_SECRET",
-                "POLARIS_QBO_REFRESH_TOKEN",
-                "POLARIS_QBO_REALM_ID",
+                "POLARIS_QBO_TOKEN_ENCRYPTION_KEY",
             )
             if not os.getenv(name)
         ]
@@ -63,15 +64,23 @@ class QuickBooksConnector(BaseConnector):
                 "QuickBooks is not configured. Missing environment variables: "
                 + ", ".join(missing)
             )
+        try:
+            self._realm_id, _ = self._credential_store.load()
+        except QuickBooksCredentialError as exc:
+            raise QuickBooksConnectorError(str(exc)) from exc
 
     def authenticate(self) -> None:
         self.validate_configuration()
         if self._access_token and self._now() < self._access_token_expires_at - 60:
             return
 
+        try:
+            realm_id, refresh_token = self._credential_store.load()
+        except QuickBooksCredentialError as exc:
+            raise QuickBooksConnectorError(str(exc)) from exc
+        self._realm_id = realm_id
         client_id = os.environ["POLARIS_QBO_CLIENT_ID"]
         client_secret = os.environ["POLARIS_QBO_CLIENT_SECRET"]
-        refresh_token = os.environ["POLARIS_QBO_REFRESH_TOKEN"]
         basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
         request = Request(
             TOKEN_URL,
@@ -87,8 +96,18 @@ class QuickBooksConnector(BaseConnector):
         )
         payload = self._request_json(request, "OAuth token refresh")
         access_token = payload.get("access_token")
+        rotated_refresh_token = payload.get("refresh_token")
         if not isinstance(access_token, str) or not access_token:
             raise QuickBooksConnectorError("QuickBooks token refresh returned no access token")
+        if isinstance(rotated_refresh_token, str) and rotated_refresh_token:
+            try:
+                self._credential_store.save(
+                    realm_id=realm_id,
+                    refresh_token=rotated_refresh_token,
+                    scopes=str(payload.get("scope") or "com.intuit.quickbooks.accounting"),
+                )
+            except QuickBooksCredentialError as exc:
+                raise QuickBooksConnectorError(str(exc)) from exc
         self._access_token = access_token
         self._access_token_expires_at = self._now() + int(payload.get("expires_in", 3600))
 
@@ -106,12 +125,14 @@ class QuickBooksConnector(BaseConnector):
                 )
             self._company_name = company_name
         except QuickBooksConnectorError as exc:
-            status = (
+            message = str(exc)
+            status_value = (
                 ConnectorStatus.CONFIGURATION_ERROR
-                if "not configured" in str(exc).lower()
+                if "not configured" in message.lower()
+                or "not been authorized" in message.lower()
                 else ConnectorStatus.AUTHENTICATION_ERROR
             )
-            return ConnectorHealth(name=self.name, status=status, message=str(exc))
+            return ConnectorHealth(name=self.name, status=status_value, message=message)
 
         latency_ms = (datetime.now(timezone.utc) - started).total_seconds() * 1000
         return ConnectorHealth(
@@ -178,12 +199,14 @@ class QuickBooksConnector(BaseConnector):
     def disconnect(self) -> None:
         self._access_token = None
         self._access_token_expires_at = 0.0
+        self._realm_id = None
 
     def _company_info(self) -> dict[str, Any]:
         self.authenticate()
-        realm_id = os.environ["POLARIS_QBO_REALM_ID"]
+        if not self._realm_id:
+            raise QuickBooksConnectorError("QuickBooks realm ID is unavailable")
         request = Request(
-            f"{API_BASE_URL}/v3/company/{realm_id}/companyinfo/{realm_id}?minorversion=75",
+            f"{API_BASE_URL}/v3/company/{self._realm_id}/companyinfo/{self._realm_id}?minorversion=75",
             headers={
                 "Accept": "application/json",
                 "Authorization": f"Bearer {self._access_token}",

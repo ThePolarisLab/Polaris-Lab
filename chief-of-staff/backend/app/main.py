@@ -13,6 +13,7 @@ from app.models.relationship import KnowledgeRelationship
 from app.missions.models import Mission, MissionTask, Workflow
 from app.organizations.models import Organization
 from app.identity.models import Identity, OrganizationMembership
+from app.connectors.quickbooks_credentials import QuickBooksOAuthCredential
 
 # API Routers
 from app.api.chat import router as chat_router
@@ -32,6 +33,7 @@ from app.api.refactoring import router as refactoring_router
 from app.api.work_context import router as work_context_router
 from app.api.system import router as system_router
 from app.api.connectors import router as connectors_router
+from app.api.quickbooks_oauth import router as quickbooks_oauth_router
 from app.api.events import router as events_router
 from app.api.organizations import router as organizations_router
 from app.api.identity import router as identity_router
@@ -78,6 +80,7 @@ app.include_router(refactoring_router)
 app.include_router(work_context_router)
 app.include_router(system_router)
 app.include_router(connectors_router)
+app.include_router(quickbooks_oauth_router)
 app.include_router(events_router)
 app.include_router(organizations_router)
 app.include_router(identity_router)
@@ -105,6 +108,7 @@ def root():
             "PGE-008.4B Identity and Membership",
             "PGE-008.4C Authentication and Authorization",
             "PGE-009.6B QuickBooks Connector Registration",
+            "PGE-009.6C Polaris QuickBooks OAuth and Token Storage",
         ],
     }
 
