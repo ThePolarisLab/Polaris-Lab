@@ -7,8 +7,8 @@ Q2_MISSION_ID = "mission.q2_compliance"
 Q2_MISSION_NAME = "Complete Q2 Compliance"
 
 
-def analyze_q2_compliance_risk(db: Session) -> ReasoningAnalysis:
-    evidence = collect_mission_evidence(db, mission_entity_id=Q2_MISSION_ID)
+def analyze_q2_compliance_risk(db: Session, organization_id: str) -> ReasoningAnalysis:
+    evidence = collect_mission_evidence(db, organization_id=organization_id, mission_entity_id=Q2_MISSION_ID)
     risk = calculate_risk(evidence)
     confidence = calculate_confidence(evidence)
     recommendation = _build_recommendation(risk=risk, evidence=evidence)
