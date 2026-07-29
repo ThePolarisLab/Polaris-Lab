@@ -49,3 +49,12 @@ def require_permission(permission: Permission) -> Callable[..., AuthenticatedPri
         return principal
 
     return dependency
+
+
+def require_organization_path_match(
+    organization_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_principal),
+) -> AuthenticatedPrincipal:
+    if organization_id != principal.organization_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="organization access denied")
+    return principal
