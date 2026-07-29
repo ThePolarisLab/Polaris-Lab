@@ -80,7 +80,7 @@ class GitHubConnector(BaseConnector):
             commits = client.commits(default_branch, per_page=30)
             records_read = len(commits)
 
-            for commit in reversed(commits):
+            for commit in commits:
                 commit_data = commit.get("commit", {})
                 author = commit_data.get("author", {})
                 commit_sha = commit.get("sha")
