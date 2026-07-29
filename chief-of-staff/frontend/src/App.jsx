@@ -104,7 +104,7 @@ function ExecutiveWorkspace({ page, session, forbiddenMessage, onOpenMenu, onLog
         <div className="workspace-topbar-actions">
           <span className="observer-badge"><Activity size={15} aria-hidden="true" /> Observer mode</span>
           <button type="button" aria-label="Notifications" disabled><Bell size={19} /></button>
-          <div className="workspace-profile" aria-label="Active workspace user"><CircleUserRound size={21} aria-hidden="true" /><span>{session.organizationId}</span></div>
+          <div className="workspace-profile" aria-label="Active workspace user"><CircleUserRound size={21} aria-hidden="true" /><span>{runtimeConfig.workspace.userName}</span></div>
           <button type="button" aria-label="Sign out" onClick={onLogout}><LogOut size={19} /></button>
         </div>
       </header>
