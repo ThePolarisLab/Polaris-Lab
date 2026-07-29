@@ -10,6 +10,7 @@ from app.models.company import Company
 from app.models.truck import Truck
 from app.models.memory import MemoryEntry
 from app.models.relationship import KnowledgeRelationship
+from app.models.financial_snapshot import FinancialAccount, FinancialSnapshot, FinancialSyncHistory
 from app.missions.models import Mission, MissionTask, Workflow
 from app.organizations.models import Organization
 from app.identity.models import Identity, OrganizationMembership
@@ -43,19 +44,11 @@ from app.connectors.github import GitHubConnector
 from app.connectors.quickbooks import QuickBooksConnector
 from app.connectors.registry import connector_registry
 
-# Create database tables
 Base.metadata.create_all(bind=engine)
-
-# Register production connectors. Construction is lazy and does not require secrets.
 connector_registry.register(GitHubConnector(), replace=True)
 connector_registry.register(QuickBooksConnector(), replace=True)
 
-app = FastAPI(
-    title=settings.service_name,
-    version=settings.version,
-)
-
-# Allow configured frontends to access the API.
+app = FastAPI(title=settings.service_name, version=settings.version)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(settings.cors_origins),
@@ -64,7 +57,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register API routes
 app.include_router(company_router)
 app.include_router(truck_router)
 app.include_router(memory_router)
@@ -112,13 +104,14 @@ def root():
             "PGE-009.6B QuickBooks Connector Registration",
             "PGE-009.6C Polaris QuickBooks OAuth and Token Storage",
             "PGE-009.6G QuickBooks Financial API Foundation",
+            "PGE-009.6H Financial Snapshot Engine",
+            "PGE-009.6I Executive Financial Dashboard",
         ],
     }
 
 
 @app.get("/health", tags=["runtime"])
 def health(response: Response):
-    """Return a machine-readable runtime readiness result."""
     database_status = "connected"
 
     try:

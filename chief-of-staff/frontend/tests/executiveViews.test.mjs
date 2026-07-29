@@ -28,7 +28,11 @@ test("observer and evidence governance remain visible", () => {
   assert.match(views, /explicit authority/);
 });
 
-test("production connectors remain identified as planned work", () => {
-  assert.match(views, /Issue #61/);
+test("Motive connector remains identified as planned work", () => {
   assert.match(views, /Issue #62/);
+});
+
+test("QuickBooks connector reflects live status rather than a placeholder", () => {
+  assert.doesNotMatch(views, /Issue #61/);
+  assert.match(views, /oauth\/authorize/);
 });
