@@ -19,6 +19,9 @@ Scope: Polaris Chief of Staff FastAPI routers mounted from `chief-of-staff/backe
 |---|---|---|---|---|
 | GET | `/` | public | none | Non-secret service landing metadata. |
 | GET | `/health` | health check | none | External readiness/liveness check; response must remain non-secret. |
+| GET | `/api/v1/system/health` | health check | none | Builder/runtime readiness check with API/database status only. |
+| GET | `/api/v1/system/info` | public | none | Non-secret runtime metadata used by the Builder runtime contract. |
+| GET | `/api/v1/system/version` | public | none | Non-secret build identity used by the Builder runtime contract. |
 | POST | `/api/v1/auth/local/token` | public in development/test only | local-token secret validation; disabled in production | Local bootstrap for existing development auth model. Must return 404 outside development/test. |
 | GET | `/api/v1/connectors/quickbooks/oauth/callback` | OAuth callback | signed, unexpired, single-use, org-bound OAuth state | Intuit redirects cannot include Polaris bearer headers; authorization must come from validated state. |
 
@@ -48,9 +51,6 @@ Scope: Polaris Chief of Staff FastAPI routers mounted from `chief-of-staff/backe
 | POST | `/team-notes/{note_id}/resolve` | permission-protected | `executive.read` |
 | GET | `/dashboard/executive` | permission-protected | `executive.read` |
 | GET | `/work-context/{work_item_id}` | permission-protected | `executive.read` |
-| GET | `/api/v1/system/health` | internal | `organization.read` |
-| GET | `/api/v1/system/info` | internal | `organization.read` |
-| GET | `/api/v1/system/version` | internal | `organization.read` |
 | GET | `/api/v1/events/health` | internal | `organization.read` |
 | GET | `/api/v1/events/metrics` | internal | `organization.read` |
 | GET | `/api/v1/events/recent` | internal | `organization.read` |
