@@ -15,6 +15,9 @@ from typing import Any
 from app.security.models import AuthenticationResult
 from app.security.service import AuthenticationError
 
+DEFAULT_LOCAL_AUTH_SECRET = "polaris-dev-only"
+PRODUCTION_ENVIRONMENTS = {"production", "prod", "staging"}
+
 
 def _encode(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode().rstrip("=")
@@ -24,11 +27,25 @@ def _decode(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
+def _local_auth_secret(explicit_secret: str | None = None) -> bytes:
+    environment = os.getenv("POLARIS_ENV", "development").strip().lower()
+    configured = explicit_secret if explicit_secret is not None else os.getenv("POLARIS_LOCAL_AUTH_SECRET")
+
+    if environment in PRODUCTION_ENVIRONMENTS:
+        if not configured or configured == DEFAULT_LOCAL_AUTH_SECRET:
+            raise AuthenticationError("local authentication secret is not configured")
+        if len(configured) < 32:
+            raise AuthenticationError("local authentication secret is too short")
+        return configured.encode()
+
+    return (configured or DEFAULT_LOCAL_AUTH_SECRET).encode()
+
+
 class LocalTokenProvider:
     name = "local"
 
     def __init__(self, secret: str | None = None) -> None:
-        self._secret = (secret or os.getenv("POLARIS_LOCAL_AUTH_SECRET", "polaris-dev-only")).encode()
+        self._secret = _local_auth_secret(secret)
 
     def issue(self, identity_id: str, *, ttl_seconds: int = 3600) -> str:
         payload: dict[str, Any] = {
