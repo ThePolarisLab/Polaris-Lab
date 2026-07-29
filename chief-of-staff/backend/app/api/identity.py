@@ -18,9 +18,14 @@ from app.identity.service import (
     IdentityNotFoundError,
     IdentityService,
 )
+from app.security.dependencies import require_organization_path_match, require_permission
+from app.security.models import AuthenticatedPrincipal, Permission
 
 
 router = APIRouter(prefix="/api/v1", tags=["identity"])
+
+identity_read = Depends(require_permission(Permission.IDENTITY_READ))
+identity_manage = Depends(require_permission(Permission.IDENTITY_MANAGE))
 
 
 def get_session() -> Generator[Session, None, None]:
@@ -31,7 +36,7 @@ def get_session() -> Generator[Session, None, None]:
         session.close()
 
 
-@router.post("/identities", response_model=IdentityRead, status_code=status.HTTP_201_CREATED)
+@router.post("/identities", response_model=IdentityRead, status_code=status.HTTP_201_CREATED, dependencies=[identity_manage])
 def create_identity(
     request: IdentityCreate,
     session: Session = Depends(get_session),
@@ -59,7 +64,7 @@ def create_identity(
     return IdentityRead.model_validate(identity)
 
 
-@router.get("/identities/{identity_id}", response_model=IdentityRead)
+@router.get("/identities/{identity_id}", response_model=IdentityRead, dependencies=[identity_read])
 def get_identity(
     identity_id: str,
     session: Session = Depends(get_session),
@@ -74,10 +79,12 @@ def get_identity(
     "/organizations/{organization_id}/memberships",
     response_model=MembershipRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[identity_manage],
 )
 def add_membership(
     organization_id: str,
     request: MembershipCreate,
+    principal: AuthenticatedPrincipal = Depends(require_organization_path_match),
     session: Session = Depends(get_session),
 ) -> MembershipRead:
     service = IdentityService(session)
@@ -110,9 +117,11 @@ def add_membership(
 @router.get(
     "/organizations/{organization_id}/memberships",
     response_model=list[MembershipRead],
+    dependencies=[identity_read],
 )
 def list_memberships(
     organization_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_organization_path_match),
     session: Session = Depends(get_session),
 ) -> list[MembershipRead]:
     return [
