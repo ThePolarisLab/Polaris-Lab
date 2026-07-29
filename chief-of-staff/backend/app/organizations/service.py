@@ -17,15 +17,9 @@ class OrganizationService:
         self._session = session
 
     def create(self, request: OrganizationCreate) -> Organization:
-        existing = (
-            self._session.query(Organization)
-            .filter(Organization.slug == request.slug)
-            .first()
-        )
+        existing = self._session.query(Organization).filter(Organization.slug == request.slug).first()
         if existing is not None:
-            raise OrganizationConflictError(
-                f"organization slug '{request.slug}' already exists"
-            )
+            raise OrganizationConflictError(f"organization slug '{request.slug}' already exists")
 
         organization = Organization(
             slug=request.slug,
@@ -40,9 +34,9 @@ class OrganizationService:
     def list(self) -> list[Organization]:
         return self._session.query(Organization).order_by(Organization.slug).all()
 
+    def list_for_principal(self, organization_id: str) -> list[Organization]:
+        organization = self.get(organization_id)
+        return [organization] if organization is not None else []
+
     def get(self, organization_id: str) -> Organization | None:
-        return (
-            self._session.query(Organization)
-            .filter(Organization.id == organization_id)
-            .first()
-        )
+        return self._session.query(Organization).filter(Organization.id == organization_id).first()
