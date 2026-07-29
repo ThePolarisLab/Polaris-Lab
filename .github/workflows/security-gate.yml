@@ -26,6 +26,7 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run pytest
         env:
+          PYTHONPATH: .
           POLARIS_ENV: test
           POLARIS_LOCAL_AUTH_SECRET: test-local-auth-secret-with-enough-length
           POLARIS_QBO_CLIENT_ID: client-id
