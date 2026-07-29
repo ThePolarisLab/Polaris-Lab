@@ -4,8 +4,13 @@ from sqlalchemy.orm import Session
 
 from app.database.database import SessionLocal
 from app.models.truck import Truck
+from app.security.dependencies import require_permission
+from app.security.models import Permission
 
 router = APIRouter()
+
+organization_read = Depends(require_permission(Permission.ORGANIZATION_READ))
+organization_manage = Depends(require_permission(Permission.ORGANIZATION_MANAGE))
 
 
 class TruckCreate(BaseModel):
@@ -26,7 +31,7 @@ def get_db():
         db.close()
 
 
-@router.get("/trucks")
+@router.get("/trucks", dependencies=[organization_read])
 def get_trucks(db: Session = Depends(get_db)):
     trucks = db.query(Truck).all()
 
@@ -45,7 +50,7 @@ def get_trucks(db: Session = Depends(get_db)):
     ]
 
 
-@router.post("/trucks")
+@router.post("/trucks", dependencies=[organization_manage])
 def create_truck(
     truck_data: TruckCreate,
     db: Session = Depends(get_db),
