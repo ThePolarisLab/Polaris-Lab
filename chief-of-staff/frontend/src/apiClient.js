@@ -1,4 +1,4 @@
-import { runtimeConfig } from "./runtimeConfig";
+import { runtimeConfig } from "./runtimeConfig.js";
 
 const ACCESS_TOKEN_KEY = "polaris.access_token";
 const ORGANIZATION_KEY = "polaris.organization_id";
