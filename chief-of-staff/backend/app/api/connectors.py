@@ -2,44 +2,52 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from app.connectors.base import BaseConnector
 from app.connectors.models import ConnectorHealth, SyncResult
+from app.connectors.quickbooks import QuickBooksConnector
+from app.connectors.quickbooks_credentials import QuickBooksCredentialStore
 from app.connectors.registry import connector_registry
 from app.security.dependencies import require_permission
-from app.security.models import Permission
+from app.security.models import AuthenticatedPrincipal, Permission
 
 router = APIRouter(prefix="/api/v1/connectors", tags=["connectors"])
 
-connector_read = Depends(require_permission(Permission.CONNECTOR_READ))
-connector_manage = Depends(require_permission(Permission.CONNECTOR_MANAGE))
+
+def _tenant_connector(connector: BaseConnector, principal: AuthenticatedPrincipal) -> BaseConnector:
+    if connector.name.lower() == "quickbooks":
+        return QuickBooksConnector(credential_store=QuickBooksCredentialStore(principal.organization_id))
+    return connector
 
 
-@router.get("", response_model=list[ConnectorHealth], dependencies=[connector_read])
-def list_connectors() -> list[ConnectorHealth]:
-    """Return normalized health for every registered connector."""
-    return list(connector_registry.health())
+@router.get("", response_model=list[ConnectorHealth])
+def list_connectors(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
+) -> list[ConnectorHealth]:
+    """Return normalized health for every registered connector in the active tenant context."""
+    return [_tenant_connector(connector, principal).health() for connector in connector_registry.list()]
 
 
-@router.get("/{name}", response_model=ConnectorHealth, dependencies=[connector_read])
-def get_connector(name: str) -> ConnectorHealth:
+@router.get("/{name}", response_model=ConnectorHealth)
+def get_connector(
+    name: str,
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
+) -> ConnectorHealth:
     """Return normalized health for one registered connector."""
     try:
         connector = connector_registry.get(name)
     except KeyError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        ) from exc
-    return connector.health()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return _tenant_connector(connector, principal).health()
 
 
-@router.post("/{name}/sync", response_model=SyncResult, dependencies=[connector_manage])
-def sync_connector(name: str) -> SyncResult:
+@router.post("/{name}/sync", response_model=SyncResult)
+def sync_connector(
+    name: str,
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_WRITE)),
+) -> SyncResult:
     """Run one explicit connector synchronization cycle."""
     try:
         connector = connector_registry.get(name)
     except KeyError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        ) from exc
-    return connector.sync()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return _tenant_connector(connector, principal).sync()
