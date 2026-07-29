@@ -4,38 +4,29 @@ from sqlalchemy.orm import Session
 from app.database.database import SessionLocal
 from app.knowledge.search import search_memories
 from app.schemas.memory_search import MemorySearchResultResponse
+from app.security.dependencies import require_permission
+from app.security.models import AuthenticatedPrincipal, Permission
 
 
-router = APIRouter(
-    prefix="/memory-search",
-    tags=["Knowledge Search"],
-)
+router = APIRouter(prefix="/memory-search", tags=["Knowledge Search"])
 
 
 def get_db():
     db = SessionLocal()
-
     try:
         yield db
     finally:
         db.close()
 
 
-@router.get(
-    "",
-    response_model=list[MemorySearchResultResponse],
-)
+@router.get("", response_model=list[MemorySearchResultResponse])
 def read_memory_search(
     q: str = Query(min_length=1),
     limit: int = Query(default=20, ge=1, le=100),
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.EXECUTIVE_READ)),
     db: Session = Depends(get_db),
 ):
-    results = search_memories(
-        db,
-        q,
-        limit=limit,
-    )
-
+    results = search_memories(db, principal.organization_id, q, limit=limit)
     return [
         MemorySearchResultResponse(
             id=result.memory.id,
