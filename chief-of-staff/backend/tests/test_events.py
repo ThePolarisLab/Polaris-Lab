@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from app.events import ConnectorEvent, EventBus, EventSource
 from app.main import app
+from tests.auth_helpers import seed_principal
 
 
 def test_event_bus_delivers_in_order_and_retains_recent_events():
@@ -96,10 +97,11 @@ def test_subscriber_failure_does_not_stop_other_consumers():
 
 def test_event_api_exposes_health_metrics_and_recent_events():
     client = TestClient(app)
+    _, _, headers = seed_principal("member")
 
-    health = client.get("/api/v1/events/health")
-    metrics = client.get("/api/v1/events/metrics")
-    recent = client.get("/api/v1/events/recent?limit=5")
+    health = client.get("/api/v1/events/health", headers=headers)
+    metrics = client.get("/api/v1/events/metrics", headers=headers)
+    recent = client.get("/api/v1/events/recent?limit=5", headers=headers)
 
     assert health.status_code == 200
     assert health.json()["status"] in {"healthy", "degraded"}
