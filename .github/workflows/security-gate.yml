@@ -1,0 +1,71 @@
+name: Security Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - phase1/security-gate
+
+jobs:
+  backend:
+    name: Backend security tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chief-of-staff/backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run pytest
+        env:
+          POLARIS_ENV: test
+          POLARIS_LOCAL_AUTH_SECRET: test-local-auth-secret-with-enough-length
+          POLARIS_QBO_CLIENT_ID: client-id
+          POLARIS_QBO_CLIENT_SECRET: client-secret
+          POLARIS_QBO_REDIRECT_URI: http://localhost:8000/api/v1/connectors/quickbooks/oauth/callback
+          POLARIS_QBO_OAUTH_STATE_SECRET: quickbooks-state-secret-with-enough-length
+          POLARIS_QBO_TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+        run: pytest
+
+  typescript:
+    name: TypeScript tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: npm install
+      - name: Run root tests
+        run: npm test
+
+  frontend:
+    name: Frontend tests and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chief-of-staff/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: npm install
+      - name: Run frontend tests
+        run: npm test
+      - name: Build frontend
+        run: npm run build
