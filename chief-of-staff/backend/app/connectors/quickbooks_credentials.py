@@ -36,6 +36,22 @@ class QuickBooksOAuthCredential(Base):
     )
 
 
+class QuickBooksOAuthState(Base):
+    """Single-use QuickBooks OAuth initiation state bound to a Polaris principal."""
+
+    __tablename__ = "quickbooks_oauth_states"
+
+    state: Mapped[str] = mapped_column(String(255), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String(120), index=True)
+    identity_id: Mapped[str] = mapped_column(String(120), index=True)
+    organization_slug: Mapped[str] = mapped_column(String(120), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class QuickBooksCredentialStore:
     """Read and rotate encrypted QuickBooks refresh tokens in Polaris storage."""
 
