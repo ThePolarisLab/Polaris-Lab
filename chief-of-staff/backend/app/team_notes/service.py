@@ -4,8 +4,9 @@ from app.models.team_note import TeamNote
 from app.schemas.team_note import TeamNoteCreate, TeamNoteStatus, TeamNoteUpdate
 
 
-def create_team_note(db: Session, payload: TeamNoteCreate) -> TeamNote:
+def create_team_note(db: Session, organization_id: str, payload: TeamNoteCreate) -> TeamNote:
     note = TeamNote(
+        organization_id=organization_id,
         author=payload.author.strip(),
         note_type=payload.note_type.value,
         status=TeamNoteStatus.OPEN.value,
@@ -23,6 +24,7 @@ def create_team_note(db: Session, payload: TeamNoteCreate) -> TeamNote:
 
 def list_team_notes(
     db: Session,
+    organization_id: str,
     *,
     status: str | None = None,
     note_type: str | None = None,
@@ -30,7 +32,7 @@ def list_team_notes(
     assigned_to: str | None = None,
     limit: int = 100,
 ) -> list[TeamNote]:
-    query = db.query(TeamNote)
+    query = db.query(TeamNote).filter(TeamNote.organization_id == organization_id)
 
     if status:
         query = query.filter(TeamNote.status == status)
@@ -52,8 +54,12 @@ def list_team_notes(
     )
 
 
-def get_team_note(db: Session, note_id: int) -> TeamNote | None:
-    return db.query(TeamNote).filter(TeamNote.id == note_id).first()
+def get_team_note(db: Session, organization_id: str, note_id: int) -> TeamNote | None:
+    return (
+        db.query(TeamNote)
+        .filter(TeamNote.organization_id == organization_id, TeamNote.id == note_id)
+        .first()
+    )
 
 
 def update_team_note(db: Session, note: TeamNote, payload: TeamNoteUpdate) -> TeamNote:
@@ -63,11 +69,7 @@ def update_team_note(db: Session, note: TeamNote, payload: TeamNoteUpdate) -> Te
         note.note_type = changes["note_type"].value
     if "status" in changes:
         note.status = changes["status"].value
-        note.resolved_at = (
-            datetime.now(timezone.utc)
-            if note.status == TeamNoteStatus.RESOLVED.value
-            else None
-        )
+        note.resolved_at = datetime.now(timezone.utc) if note.status == TeamNoteStatus.RESOLVED.value else None
     if "title" in changes:
         note.title = changes["title"].strip()
     if "details" in changes:
