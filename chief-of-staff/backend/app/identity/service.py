@@ -36,14 +36,19 @@ class IdentityService:
     def get_identity(self, identity_id: str) -> Identity | None:
         return self._session.query(Identity).filter(Identity.id == identity_id).first()
 
-    def add_membership(
-        self, organization_id: str, request: MembershipCreate
-    ) -> OrganizationMembership:
-        organization = (
-            self._session.query(Organization)
-            .filter(Organization.id == organization_id)
+    def get_visible_identity(self, organization_id: str, identity_id: str) -> Identity | None:
+        return (
+            self._session.query(Identity)
+            .join(OrganizationMembership, OrganizationMembership.identity_id == Identity.id)
+            .filter(
+                Identity.id == identity_id,
+                OrganizationMembership.organization_id == organization_id,
+            )
             .first()
         )
+
+    def add_membership(self, organization_id: str, request: MembershipCreate) -> OrganizationMembership:
+        organization = self._session.query(Organization).filter(Organization.id == organization_id).first()
         if organization is None:
             raise IdentityNotFoundError("organization not found")
 
@@ -51,11 +56,7 @@ class IdentityService:
         if identity is None:
             raise IdentityNotFoundError("identity not found")
 
-        membership = OrganizationMembership(
-            organization_id=organization_id,
-            identity_id=identity.id,
-            role=request.role,
-        )
+        membership = OrganizationMembership(organization_id=organization_id, identity_id=identity.id, role=request.role)
         self._session.add(membership)
         try:
             self._session.commit()
