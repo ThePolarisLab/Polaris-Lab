@@ -10,12 +10,17 @@ import os
 import secrets
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from app.connectors.quickbooks_credentials import QuickBooksCredentialStore
+from app.connectors.quickbooks_credentials import (
+    QuickBooksCredentialStore,
+    QuickBooksOAuthState,
+)
+from app.database.database import SessionLocal
 
 AUTHORIZATION_URL = "https://appcenter.intuit.com/connect/oauth2"
 TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
@@ -36,15 +41,32 @@ class QuickBooksOAuthTokens:
     scope: str
 
 
+@dataclass(frozen=True)
+class QuickBooksOAuthContext:
+    organization_id: str
+    identity_id: str
+    organization_slug: str
+
+
 class QuickBooksOAuthService:
     """Create authorization requests, validate callbacks, and persist tokens."""
 
     def __init__(self, store: QuickBooksCredentialStore | None = None) -> None:
         self.store = store or QuickBooksCredentialStore()
 
-    def authorization_url(self) -> str:
+    def authorization_url(
+        self,
+        *,
+        organization_id: str,
+        identity_id: str,
+        organization_slug: str | None = None,
+    ) -> str:
         self._validate_configuration()
-        state = self._create_state()
+        state = self._create_state(
+            organization_id=organization_id,
+            identity_id=identity_id,
+            organization_slug=organization_slug or os.getenv("POLARIS_ORGANIZATION_SLUG", "mor-logistics"),
+        )
         return AUTHORIZATION_URL + "?" + urlencode(
             {
                 "client_id": os.environ["POLARIS_QBO_CLIENT_ID"],
@@ -55,17 +77,18 @@ class QuickBooksOAuthService:
             }
         )
 
-    def complete_authorization(self, *, code: str, realm_id: str, state: str) -> None:
+    def complete_authorization(self, *, code: str, realm_id: str, state: str) -> QuickBooksOAuthContext:
         self._validate_configuration()
-        self._validate_state(state)
+        context = self._consume_state(state)
         if not code or not realm_id:
             raise QuickBooksOAuthError("QuickBooks callback is missing required parameters")
         tokens = self._exchange_code(code)
-        self.store.save(
+        QuickBooksCredentialStore(context.organization_slug).save(
             realm_id=realm_id,
             refresh_token=tokens.refresh_token,
             scopes=tokens.scope or ACCOUNTING_SCOPE,
         )
+        return context
 
     def _exchange_code(self, code: str) -> QuickBooksOAuthTokens:
         payload = self._token_request(
@@ -115,16 +138,50 @@ class QuickBooksOAuthService:
         except (URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise QuickBooksOAuthError("QuickBooks token exchange failed") from exc
 
-    def _create_state(self) -> str:
+    def _create_state(self, *, organization_id: str, identity_id: str, organization_slug: str) -> str:
         timestamp = str(int(time.time()))
         nonce = secrets.token_urlsafe(24)
         body = f"{timestamp}.{nonce}"
         signature = hmac.new(
             self._state_secret().encode(), body.encode(), hashlib.sha256
         ).hexdigest()
-        return f"{body}.{signature}"
+        state = f"{body}.{signature}"
+        now = datetime.now(timezone.utc)
+        with SessionLocal.begin() as session:
+            session.add(
+                QuickBooksOAuthState(
+                    state=state,
+                    organization_id=organization_id,
+                    identity_id=identity_id,
+                    organization_slug=organization_slug,
+                    created_at=now,
+                    expires_at=now + timedelta(seconds=STATE_TTL_SECONDS),
+                )
+            )
+        return state
 
-    def _validate_state(self, state: str) -> None:
+    def _consume_state(self, state: str) -> QuickBooksOAuthContext:
+        self._validate_state_signature(state)
+        now = datetime.now(timezone.utc)
+        with SessionLocal.begin() as session:
+            record = session.get(QuickBooksOAuthState, state)
+            if record is None:
+                raise QuickBooksOAuthError("QuickBooks OAuth state is unknown")
+            if record.consumed_at is not None:
+                raise QuickBooksOAuthError("QuickBooks OAuth state has already been used")
+            expires_at = record.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at <= now:
+                raise QuickBooksOAuthError("QuickBooks OAuth state has expired")
+            record.consumed_at = now
+            return QuickBooksOAuthContext(
+                organization_id=record.organization_id,
+                identity_id=record.identity_id,
+                organization_slug=record.organization_slug,
+            )
+
+    def _validate_state_signature(self, state: str) -> None:
         try:
             timestamp_text, nonce, signature = state.split(".", 2)
             timestamp = int(timestamp_text)
