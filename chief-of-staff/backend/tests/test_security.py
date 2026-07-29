@@ -1,31 +1,17 @@
-from uuid import uuid4
-
 from fastapi.testclient import TestClient
 
 from app.events import event_bus
 from app.main import app
 from app.security.models import Permission, ROLE_PERMISSIONS
 from app.security.providers import LocalTokenProvider
+from tests.auth_helpers import seed_principal
 
 
 client = TestClient(app)
 
 
 def bootstrap(role: str = "member") -> tuple[dict, dict]:
-    suffix = uuid4().hex[:10]
-    organization = client.post(
-        "/api/v1/organizations",
-        json={"slug": f"security-{suffix}", "display_name": "Security Test"},
-    ).json()
-    identity = client.post(
-        "/api/v1/identities",
-        json={"email": f"security-{suffix}@example.test", "display_name": "Security Builder"},
-    ).json()
-    response = client.post(
-        f"/api/v1/organizations/{organization['id']}/memberships",
-        json={"identity_id": identity["id"], "role": role},
-    )
-    assert response.status_code == 201
+    organization, identity, _ = seed_principal(role)
     return organization, identity
 
 
