@@ -4,22 +4,37 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 
 from app.connectors.quickbooks import QuickBooksConnector
 from app.connectors.quickbooks_credentials import QuickBooksCredentialStore
 from app.connectors.quickbooks_oauth import QuickBooksOAuthError, QuickBooksOAuthService
+from app.core.config import settings
+from app.security.dependencies import require_permission
+from app.security.models import AuthenticatedPrincipal, Permission
 
 router = APIRouter(prefix="/api/v1/connectors/quickbooks/oauth", tags=["quickbooks-oauth"])
 
 
+def _connector_manager(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_MANAGE)),
+) -> AuthenticatedPrincipal:
+    return principal
+
+
 @router.get("/authorize")
-def authorize_quickbooks() -> RedirectResponse:
+def authorize_quickbooks(
+    principal: AuthenticatedPrincipal = Depends(_connector_manager),
+) -> RedirectResponse:
     """Start the dedicated Polaris QuickBooks authorization flow."""
     try:
         return RedirectResponse(
-            QuickBooksOAuthService().authorization_url(),
+            QuickBooksOAuthService().authorization_url(
+                organization_id=principal.organization_id,
+                identity_id=principal.identity_id,
+                organization_slug=settings.organization_slug,
+            ),
             status_code=status.HTTP_307_TEMPORARY_REDIRECT,
         )
     except QuickBooksOAuthError as exc:
@@ -45,12 +60,13 @@ def quickbooks_callback(
             status_code=400, detail="QuickBooks callback is missing required parameters"
         )
     try:
-        QuickBooksOAuthService().complete_authorization(
+        context = QuickBooksOAuthService().complete_authorization(
             code=code, realm_id=realmId, state=state
         )
-        health = QuickBooksConnector().health()
+        store = QuickBooksCredentialStore(context.organization_slug)
+        health = QuickBooksConnector(credential_store=store).health()
         if health.status.value != "healthy":
-            QuickBooksCredentialStore().delete()
+            store.delete()
             raise QuickBooksOAuthError(
                 health.message or "QuickBooks company verification failed"
             )
@@ -63,7 +79,9 @@ def quickbooks_callback(
 
 
 @router.delete("/connection")
-def disconnect_quickbooks() -> dict[str, bool]:
+def disconnect_quickbooks(
+    principal: AuthenticatedPrincipal = Depends(_connector_manager),
+) -> dict[str, bool]:
     """Remove the stored QuickBooks authorization for the active organization."""
-    QuickBooksCredentialStore().delete()
-    return {"disconnected": True}
+    QuickBooksCredentialStore(settings.organization_slug).delete()
+    return {"disconnected": True, "organization_id": principal.organization_id}
