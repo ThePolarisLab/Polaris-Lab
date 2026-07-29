@@ -101,7 +101,7 @@ def executive_summary() -> dict[str, Any]:
         "currency": str(header.get("Currency") or "CAD"),
         "period": {
             "start": header.get("StartPeriod") or profit_loss.period_start,
-            "end": header.get("EndPeriod") or balance_sheet.period_end,
+            "end": header.get("EndPeriod") or profit_loss.period_end,
             "basis": header.get("ReportBasis") or profit_loss.accounting_method,
         },
         "metrics": {
