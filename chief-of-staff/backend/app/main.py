@@ -112,10 +112,23 @@ def root():
 
 @app.get("/health", tags=["runtime"])
 def health(response: Response):
+    database_status = "connected"
+
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
-        return {"status": "ok", "database": "connected"}
     except Exception:
+        database_status = "unavailable"
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {"status": "degraded", "database": "unavailable"}
+
+    return {
+        "status": "ok" if database_status == "connected" else "degraded",
+        "service": settings.service_name,
+        "version": settings.version,
+        "environment": settings.environment,
+        "organization": settings.organization_slug,
+        "checks": {
+            "api": "ready",
+            "database": database_status,
+        },
+    }
