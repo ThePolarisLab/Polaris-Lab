@@ -43,7 +43,7 @@ class QuickBooksConnector(BaseConnector):
         super().__init__(name="quickbooks")
         self._opener = opener
         self._now = now
-        self._credential_store = credential_store or QuickBooksCredentialStore()
+        self._credential_store = credential_store
         self._access_token: str | None = None
         self._access_token_expires_at = 0.0
         self._realm_id: str | None = None
@@ -66,7 +66,7 @@ class QuickBooksConnector(BaseConnector):
                 + ", ".join(missing)
             )
         try:
-            self._realm_id, _ = self._credential_store.load()
+            self._realm_id, _ = self._store().load()
         except QuickBooksCredentialError as exc:
             raise QuickBooksConnectorError(str(exc)) from exc
 
@@ -76,7 +76,7 @@ class QuickBooksConnector(BaseConnector):
             return
 
         try:
-            realm_id, refresh_token = self._credential_store.load()
+            realm_id, refresh_token = self._store().load()
         except QuickBooksCredentialError as exc:
             raise QuickBooksConnectorError(str(exc)) from exc
         self._realm_id = realm_id
@@ -85,9 +85,7 @@ class QuickBooksConnector(BaseConnector):
         basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
         request = Request(
             TOKEN_URL,
-            data=urlencode(
-                {"grant_type": "refresh_token", "refresh_token": refresh_token}
-            ).encode(),
+            data=urlencode({"grant_type": "refresh_token", "refresh_token": refresh_token}).encode(),
             headers={
                 "Accept": "application/json",
                 "Authorization": f"Basic {basic}",
@@ -102,7 +100,7 @@ class QuickBooksConnector(BaseConnector):
             raise QuickBooksConnectorError("QuickBooks token refresh returned no access token")
         if isinstance(rotated_refresh_token, str) and rotated_refresh_token:
             try:
-                self._credential_store.save(
+                self._store().save(
                     realm_id=realm_id,
                     refresh_token=rotated_refresh_token,
                     scopes=str(payload.get("scope") or "com.intuit.quickbooks.accounting"),
@@ -131,6 +129,7 @@ class QuickBooksConnector(BaseConnector):
                 ConnectorStatus.CONFIGURATION_ERROR
                 if "not configured" in message.lower()
                 or "not been authorized" in message.lower()
+                or "organization context" in message.lower()
                 else ConnectorStatus.AUTHENTICATION_ERROR
             )
             return ConnectorHealth(name=self.name, status=status_value, message=message)
@@ -216,11 +215,7 @@ class QuickBooksConnector(BaseConnector):
     def accounts(self) -> list[dict[str, Any]]:
         """Return the active Chart of Accounts in stable display-name order."""
         query = "select * from Account where Active = true order by FullyQualifiedName"
-        payload = self._get(
-            "query",
-            operation="accounts query",
-            params={"query": query},
-        )
+        payload = self._get("query", operation="accounts query", params={"query": query})
         query_response = payload.get("QueryResponse")
         if not isinstance(query_response, dict):
             raise QuickBooksConnectorError("QuickBooks accounts response was malformed")
@@ -258,29 +253,25 @@ class QuickBooksConnector(BaseConnector):
             params=params,
         )
 
+    def _store(self) -> QuickBooksCredentialStore:
+        if self._credential_store is None:
+            raise QuickBooksConnectorError("QuickBooks organization context is required")
+        return self._credential_store
+
     def _require_realm_id(self) -> str:
         self.authenticate()
         if not self._realm_id:
             raise QuickBooksConnectorError("QuickBooks realm ID is unavailable")
         return self._realm_id
 
-    def _get(
-        self,
-        resource: str,
-        *,
-        operation: str,
-        params: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+    def _get(self, resource: str, *, operation: str, params: dict[str, str] | None = None) -> dict[str, Any]:
         realm_id = self._require_realm_id()
         query_params = {"minorversion": MINOR_VERSION}
         if params:
             query_params.update(params)
         request = Request(
             f"{API_BASE_URL}/v3/company/{realm_id}/{resource}?{urlencode(query_params)}",
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Bearer {self._access_token}",
-            },
+            headers={"Accept": "application/json", "Authorization": f"Bearer {self._access_token}"},
             method="GET",
         )
         return self._request_json(request, operation)
