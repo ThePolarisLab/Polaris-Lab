@@ -9,7 +9,7 @@ from app.database.database import SessionLocal
 from app.events import ConnectorEvent, EventActor, EventSource, EventSubject, event_bus
 from app.organizations.schemas import OrganizationCreate, OrganizationRead
 from app.organizations.service import OrganizationConflictError, OrganizationService
-from app.security.dependencies import require_organization_path_match, require_permission
+from app.security.dependencies import require_permission
 from app.security.models import AuthenticatedPrincipal, Permission
 
 
@@ -22,6 +22,11 @@ def get_session() -> Generator[Session, None, None]:
         yield session
     finally:
         session.close()
+
+
+def _require_same_org_or_platform(principal: AuthenticatedPrincipal, organization_id: str) -> None:
+    if principal.organization_id != organization_id and not principal.has_permission(Permission.PLATFORM_ADMIN):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="organization access denied")
 
 
 @router.post("", response_model=OrganizationRead, status_code=status.HTTP_201_CREATED)
@@ -64,10 +69,10 @@ def list_organizations(
 @router.get("/{organization_id}", response_model=OrganizationRead)
 def get_organization(
     organization_id: str,
-    principal: AuthenticatedPrincipal = Depends(require_organization_path_match),
-    _: AuthenticatedPrincipal = Depends(require_permission(Permission.ORGANIZATION_READ)),
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.ORGANIZATION_READ)),
     session: Session = Depends(get_session),
 ) -> OrganizationRead:
+    _require_same_org_or_platform(principal, organization_id)
     organization = OrganizationService(session).get(organization_id)
     if organization is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="organization not found")
