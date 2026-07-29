@@ -1,9 +1,11 @@
-from fastapi import FastAPI, Response, status
+from fastapi import Depends, FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.core.config import settings
 from app.database.database import Base, engine
+from app.security.dependencies import require_permission
+from app.security.models import Permission
 
 # Models
 from app.models.company import Company
@@ -57,27 +59,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(company_router)
-app.include_router(truck_router)
-app.include_router(memory_router)
-app.include_router(chat_router)
-app.include_router(missions_router)
-app.include_router(relationships_router)
-app.include_router(memory_search_router)
-app.include_router(reasoning_router)
-app.include_router(team_notes_router)
-app.include_router(dashboard_router)
-app.include_router(github_engine_router)
-app.include_router(code_understanding_router)
-app.include_router(refactoring_router)
-app.include_router(work_context_router)
-app.include_router(system_router)
-app.include_router(connectors_router)
-app.include_router(quickbooks_oauth_router)
-app.include_router(quickbooks_financials_router)
-app.include_router(events_router)
-app.include_router(organizations_router)
-app.include_router(identity_router)
+organization_read = [Depends(require_permission(Permission.ORGANIZATION_READ))]
+organization_manage = [Depends(require_permission(Permission.ORGANIZATION_MANAGE))]
+identity_read = [Depends(require_permission(Permission.IDENTITY_READ))]
+identity_manage = [Depends(require_permission(Permission.IDENTITY_MANAGE))]
+connector_read = [Depends(require_permission(Permission.CONNECTOR_READ))]
+connector_manage = [Depends(require_permission(Permission.CONNECTOR_MANAGE))]
+executive_read = [Depends(require_permission(Permission.EXECUTIVE_READ))]
+
+app.include_router(company_router, dependencies=organization_read)
+app.include_router(truck_router, dependencies=organization_read)
+app.include_router(memory_router, dependencies=executive_read)
+app.include_router(chat_router, dependencies=executive_read)
+app.include_router(missions_router, dependencies=executive_read)
+app.include_router(relationships_router, dependencies=executive_read)
+app.include_router(memory_search_router, dependencies=executive_read)
+app.include_router(reasoning_router, dependencies=executive_read)
+app.include_router(team_notes_router, dependencies=executive_read)
+app.include_router(dashboard_router, dependencies=executive_read)
+app.include_router(github_engine_router, dependencies=connector_read)
+app.include_router(code_understanding_router, dependencies=connector_read)
+app.include_router(refactoring_router, dependencies=connector_manage)
+app.include_router(work_context_router, dependencies=executive_read)
+app.include_router(system_router, dependencies=organization_read)
+app.include_router(connectors_router, dependencies=connector_manage)
+app.include_router(quickbooks_oauth_router, dependencies=connector_manage)
+app.include_router(quickbooks_financials_router, dependencies=connector_manage)
+app.include_router(events_router, dependencies=organization_read)
+app.include_router(organizations_router, dependencies=organization_manage)
+app.include_router(identity_router, dependencies=identity_manage)
 app.include_router(auth_router)
 
 
