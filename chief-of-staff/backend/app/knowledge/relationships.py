@@ -5,23 +5,11 @@ from sqlalchemy.orm import Session
 from app.models.relationship import KnowledgeRelationship
 
 
-def add_relationship(
-    db: Session,
-    *,
-    source: str,
-    target: str,
-    relation: str,
-) -> tuple[KnowledgeRelationship, bool]:
-    """
-    Create a persistent relationship.
-
-    Returns:
-        (relationship, created)
-    """
-
+def add_relationship(db: Session, *, organization_id: str, source: str, target: str, relation: str) -> tuple[KnowledgeRelationship, bool]:
     existing = (
         db.query(KnowledgeRelationship)
         .filter(
+            KnowledgeRelationship.organization_id == organization_id,
             KnowledgeRelationship.source == source,
             KnowledgeRelationship.target == target,
             KnowledgeRelationship.relation == relation,
@@ -33,6 +21,7 @@ def add_relationship(
         return existing, False
 
     relationship = KnowledgeRelationship(
+        organization_id=organization_id,
         source=source,
         target=target,
         relation=relation,
@@ -44,10 +33,10 @@ def add_relationship(
         db.commit()
     except IntegrityError:
         db.rollback()
-
         existing = (
             db.query(KnowledgeRelationship)
             .filter(
+                KnowledgeRelationship.organization_id == organization_id,
                 KnowledgeRelationship.source == source,
                 KnowledgeRelationship.target == target,
                 KnowledgeRelationship.relation == relation,
@@ -60,32 +49,22 @@ def add_relationship(
     return relationship, True
 
 
-def list_relationships(
-    db: Session,
-    *,
-    limit: int = 200,
-) -> list[KnowledgeRelationship]:
+def list_relationships(db: Session, *, organization_id: str, limit: int = 200) -> list[KnowledgeRelationship]:
     return (
         db.query(KnowledgeRelationship)
+        .filter(KnowledgeRelationship.organization_id == organization_id)
         .order_by(KnowledgeRelationship.created_at.desc())
         .limit(limit)
         .all()
     )
 
 
-def relationships_for_entity(
-    db: Session,
-    entity_key: str,
-    *,
-    limit: int = 200,
-) -> list[KnowledgeRelationship]:
+def relationships_for_entity(db: Session, entity_key: str, *, organization_id: str, limit: int = 200) -> list[KnowledgeRelationship]:
     return (
         db.query(KnowledgeRelationship)
         .filter(
-            or_(
-                KnowledgeRelationship.source == entity_key,
-                KnowledgeRelationship.target == entity_key,
-            )
+            KnowledgeRelationship.organization_id == organization_id,
+            or_(KnowledgeRelationship.source == entity_key, KnowledgeRelationship.target == entity_key),
         )
         .order_by(KnowledgeRelationship.created_at.desc())
         .limit(limit)
@@ -93,5 +72,5 @@ def relationships_for_entity(
     )
 
 
-def relationship_count(db: Session) -> int:
-    return db.query(KnowledgeRelationship).count()
+def relationship_count(db: Session, organization_id: str) -> int:
+    return db.query(KnowledgeRelationship).filter(KnowledgeRelationship.organization_id == organization_id).count()
