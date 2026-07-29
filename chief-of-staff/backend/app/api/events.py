@@ -33,6 +33,6 @@ def recent_events(
     return [
         event
         for event in event_bus.recent(limit=100)
-        if event.organization_id in {None, principal.organization_id}
-        or event.tenant_id in {None, principal.organization_id}
+        if event.organization_id == principal.organization_id
+        or event.tenant_id == principal.organization_id
     ][:limit]
