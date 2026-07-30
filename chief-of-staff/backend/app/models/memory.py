@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Integer, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import relationship
 
 from app.database.database import Base
 
@@ -9,6 +10,7 @@ class MemoryEntry(Base):
     __tablename__ = "memory_entries"
 
     id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=False, index=True)
     category = Column(String, nullable=False)
     title = Column(String, nullable=False)
     details = Column(Text, nullable=False)
@@ -19,3 +21,5 @@ class MemoryEntry(Base):
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
+
+    organization = relationship("Organization")

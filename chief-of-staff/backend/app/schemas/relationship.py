@@ -7,6 +7,7 @@ class RelationshipResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    organization_id: str
     source: str
     target: str
     relation: str

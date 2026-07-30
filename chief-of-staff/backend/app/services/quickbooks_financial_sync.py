@@ -2,30 +2,28 @@
 
 from __future__ import annotations
 
-import os
 from datetime import date, datetime, timezone
 from time import perf_counter
 from typing import Any
 
 from app.connectors.quickbooks import EXPECTED_COMPANY_NAME, QuickBooksConnector
+from app.connectors.quickbooks_credentials import QuickBooksCredentialStore
 from app.database.database import SessionLocal
 from app.models.financial_snapshot import FinancialAccount, FinancialSnapshot, FinancialSyncHistory
 
 
 class QuickBooksFinancialSyncService:
-    def __init__(self, connector: QuickBooksConnector | None = None) -> None:
-        self.connector = connector or QuickBooksConnector()
-        self.organization_slug = os.getenv("POLARIS_ORGANIZATION_SLUG", "mor-logistics")
+    def __init__(self, organization_id: str, connector: QuickBooksConnector | None = None) -> None:
+        self.organization_id = organization_id
+        self.connector = connector or QuickBooksConnector(
+            credential_store=QuickBooksCredentialStore(organization_id)
+        )
 
     def sync(self, *, start_date: date | None = None, end_date: date | None = None) -> dict[str, Any]:
         started_at = datetime.now(timezone.utc)
         timer = perf_counter()
         with SessionLocal() as session:
-            history = FinancialSyncHistory(
-                organization_slug=self.organization_slug,
-                status="running",
-                started_at=started_at,
-            )
+            history = FinancialSyncHistory(organization_id=self.organization_id, status="running", started_at=started_at)
             session.add(history)
             session.commit()
             session.refresh(history)
@@ -49,10 +47,7 @@ class QuickBooksFinancialSyncService:
                     qbo_id = str(account.get("Id") or "")
                     if not qbo_id:
                         continue
-                    row = session.query(FinancialAccount).filter_by(
-                        organization_slug=self.organization_slug,
-                        qbo_id=qbo_id,
-                    ).one_or_none()
+                    row = session.query(FinancialAccount).filter_by(organization_id=self.organization_id, qbo_id=qbo_id).one_or_none()
                     values = {
                         "name": str(account.get("Name") or account.get("FullyQualifiedName") or qbo_id),
                         "fully_qualified_name": account.get("FullyQualifiedName"),
@@ -64,13 +59,13 @@ class QuickBooksFinancialSyncService:
                         "synced_at": now,
                     }
                     if row is None:
-                        session.add(FinancialAccount(organization_slug=self.organization_slug, qbo_id=qbo_id, **values))
+                        session.add(FinancialAccount(organization_id=self.organization_id, qbo_id=qbo_id, **values))
                     else:
                         for key, value in values.items():
                             setattr(row, key, value)
 
                 session.add(FinancialSnapshot(
-                    organization_slug=self.organization_slug,
+                    organization_id=self.organization_id,
                     snapshot_type="company",
                     period_start=start_date.isoformat() if start_date else None,
                     period_end=end_date.isoformat() if end_date else None,
@@ -80,7 +75,7 @@ class QuickBooksFinancialSyncService:
                 for snapshot_type, payload in reports.items():
                     header = payload.get("Header") if isinstance(payload, dict) else {}
                     session.add(FinancialSnapshot(
-                        organization_slug=self.organization_slug,
+                        organization_id=self.organization_id,
                         snapshot_type=snapshot_type,
                         period_start=str((header or {}).get("StartPeriod") or start_date or "") or None,
                         period_end=str((header or {}).get("EndPeriod") or end_date or "") or None,
@@ -109,17 +104,22 @@ class QuickBooksFinancialSyncService:
 
     def status(self) -> dict[str, Any]:
         with SessionLocal() as session:
-            history = session.query(FinancialSyncHistory).filter_by(
-                organization_slug=self.organization_slug
-            ).order_by(FinancialSyncHistory.started_at.desc()).first()
+            history = (
+                session.query(FinancialSyncHistory)
+                .filter_by(organization_id=self.organization_id)
+                .order_by(FinancialSyncHistory.started_at.desc())
+                .first()
+            )
             if history is None:
                 return {"status": "never_synced", "last_sync": None, "accounts": 0, "snapshots": {}}
             snapshots = {}
             for kind in ("profit_loss", "balance_sheet", "cash_flow"):
-                latest = session.query(FinancialSnapshot).filter_by(
-                    organization_slug=self.organization_slug,
-                    snapshot_type=kind,
-                ).order_by(FinancialSnapshot.captured_at.desc()).first()
+                latest = (
+                    session.query(FinancialSnapshot)
+                    .filter_by(organization_id=self.organization_id, snapshot_type=kind)
+                    .order_by(FinancialSnapshot.captured_at.desc())
+                    .first()
+                )
                 snapshots[kind] = latest.captured_at.isoformat() if latest else None
             return {
                 "status": history.status,

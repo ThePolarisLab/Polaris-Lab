@@ -3,6 +3,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class MissionTaskResponse(BaseModel):
     id: int
+    organization_id: str
     title: str
     status: str
     position: int
@@ -14,6 +15,7 @@ class MissionTaskResponse(BaseModel):
 
 class WorkflowResponse(BaseModel):
     id: int
+    organization_id: str
     title: str
     status: str
     progress: int
@@ -23,6 +25,7 @@ class WorkflowResponse(BaseModel):
 
 class MissionResponse(BaseModel):
     id: int
+    organization_id: str
     code: str
     title: str
     description: str

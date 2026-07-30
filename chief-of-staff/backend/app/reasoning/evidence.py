@@ -5,8 +5,8 @@ from app.models.memory import MemoryEntry
 from app.reasoning.models import EvidenceItem
 
 
-def collect_mission_evidence(db: Session, *, mission_entity_id: str, limit: int = 100) -> tuple[EvidenceItem, ...]:
-    relationships = relationships_for_entity(db, mission_entity_id, limit=1000)
+def collect_mission_evidence(db: Session, *, organization_id: str, mission_entity_id: str, limit: int = 100) -> tuple[EvidenceItem, ...]:
+    relationships = relationships_for_entity(db, mission_entity_id, organization_id=organization_id, limit=1000)
     memory_ids: set[int] = set()
     for relationship in relationships:
         for key in (relationship.source, relationship.target):
@@ -15,7 +15,13 @@ def collect_mission_evidence(db: Session, *, mission_entity_id: str, limit: int 
                 memory_ids.add(memory_id)
     if not memory_ids:
         return ()
-    memories = (db.query(MemoryEntry).filter(MemoryEntry.id.in_(memory_ids)).order_by(MemoryEntry.created_at.desc()).limit(limit).all())
+    memories = (
+        db.query(MemoryEntry)
+        .filter(MemoryEntry.organization_id == organization_id, MemoryEntry.id.in_(memory_ids))
+        .order_by(MemoryEntry.created_at.desc())
+        .limit(limit)
+        .all()
+    )
     return tuple(EvidenceItem(
         memory_id=m.id,
         title=m.title,

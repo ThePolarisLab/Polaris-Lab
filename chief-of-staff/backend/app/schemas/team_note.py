@@ -40,6 +40,7 @@ class TeamNoteResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    organization_id: str
     author: str
     note_type: TeamNoteType
     status: TeamNoteStatus

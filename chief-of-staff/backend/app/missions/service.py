@@ -5,27 +5,32 @@ from app.missions.models import Mission, MissionTask
 from app.missions.planner import build_mission_from_template
 from app.missions.registry import get_template
 
-def create_mission(db: Session, *, template_key: str, owner: str, company: str, due_at=None) -> Mission:
+def create_mission(db: Session, *, organization_id: str, template_key: str, owner: str, company: str, due_at=None) -> Mission:
     template = get_template(template_key)
     if template is None:
         raise HTTPException(status_code=404, detail=f"Mission template '{template_key}' was not found.")
     mission = build_mission_from_template(template, owner=owner, company=company, due_at=due_at)
+    mission.organization_id = organization_id
+    for workflow in mission.workflows:
+        workflow.organization_id = organization_id
+        for task in workflow.tasks:
+            task.organization_id = organization_id
     db.add(mission)
     db.commit()
     db.refresh(mission)
     return mission
 
-def list_missions(db: Session) -> list[Mission]:
-    return db.query(Mission).order_by(Mission.created_at.desc()).all()
+def list_missions(db: Session, organization_id: str) -> list[Mission]:
+    return db.query(Mission).filter(Mission.organization_id == organization_id).order_by(Mission.created_at.desc()).all()
 
-def get_mission(db: Session, mission_id: int) -> Mission:
-    mission = db.query(Mission).filter(Mission.id == mission_id).first()
+def get_mission(db: Session, organization_id: str, mission_id: int) -> Mission:
+    mission = db.query(Mission).filter(Mission.organization_id == organization_id, Mission.id == mission_id).first()
     if mission is None:
         raise HTTPException(status_code=404, detail="Mission not found.")
     return mission
 
-def update_task_status(db: Session, *, task_id: int, status: str, notes: str | None = None) -> MissionTask:
-    task = db.query(MissionTask).filter(MissionTask.id == task_id).first()
+def update_task_status(db: Session, *, organization_id: str, task_id: int, status: str, notes: str | None = None) -> MissionTask:
+    task = db.query(MissionTask).filter(MissionTask.organization_id == organization_id, MissionTask.id == task_id).first()
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found.")
     task.status = status

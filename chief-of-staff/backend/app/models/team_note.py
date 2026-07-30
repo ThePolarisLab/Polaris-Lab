@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
-from sqlalchemy import DateTime, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database.database import Base
 
 
@@ -8,6 +8,7 @@ class TeamNote(Base):
     __tablename__ = "team_notes"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization_id: Mapped[str] = mapped_column(String, ForeignKey("organizations.id"), nullable=False, index=True)
     author: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     note_type: Mapped[str] = mapped_column(String(30), nullable=False, default="INFORMATION", index=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="OPEN", index=True)
@@ -29,3 +30,5 @@ class TeamNote(Base):
         nullable=False,
     )
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    organization = relationship("Organization")

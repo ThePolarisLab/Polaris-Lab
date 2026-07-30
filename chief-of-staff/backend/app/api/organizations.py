@@ -9,13 +9,11 @@ from app.database.database import SessionLocal
 from app.events import ConnectorEvent, EventActor, EventSource, EventSubject, event_bus
 from app.organizations.schemas import OrganizationCreate, OrganizationRead
 from app.organizations.service import OrganizationConflictError, OrganizationService
-from app.security.dependencies import require_organization_path_match, require_permission
+from app.security.dependencies import require_permission
 from app.security.models import AuthenticatedPrincipal, Permission
 
 
 router = APIRouter(prefix="/api/v1/organizations", tags=["organizations"])
-
-organization_manage = Depends(require_permission(Permission.ORGANIZATION_MANAGE))
 
 
 def get_session() -> Generator[Session, None, None]:
@@ -26,9 +24,15 @@ def get_session() -> Generator[Session, None, None]:
         session.close()
 
 
-@router.post("", response_model=OrganizationRead, status_code=status.HTTP_201_CREATED, dependencies=[organization_manage])
+def _require_same_org_or_platform(principal: AuthenticatedPrincipal, organization_id: str) -> None:
+    if principal.organization_id != organization_id and not principal.has_permission(Permission.PLATFORM_ADMIN):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="organization access denied")
+
+
+@router.post("", response_model=OrganizationRead, status_code=status.HTTP_201_CREATED)
 def create_organization(
     request: OrganizationCreate,
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.PLATFORM_ADMIN)),
     session: Session = Depends(get_session),
 ) -> OrganizationRead:
     service = OrganizationService(session)
@@ -43,40 +47,33 @@ def create_organization(
             organization_id=organization.id,
             tenant_id=organization.id,
             source=EventSource(service="organization-service"),
-            actor=EventActor(actor_type="system", actor_id="bootstrap-api"),
-            subject=EventSubject(
-                subject_type="organization",
-                subject_id=organization.id,
-            ),
+            actor=EventActor(actor_type="identity", actor_id=principal.identity_id),
+            subject=EventSubject(subject_type="organization", subject_id=organization.id),
             idempotency_key=f"organization:{organization.id}:created:v1",
-            payload={
-                "slug": organization.slug,
-                "display_name": organization.display_name,
-                "status": organization.status,
-            },
+            payload={"slug": organization.slug, "display_name": organization.display_name, "status": organization.status},
         )
     )
     return OrganizationRead.model_validate(organization)
 
 
-@router.get("", response_model=list[OrganizationRead], dependencies=[organization_manage])
-def list_organizations(session: Session = Depends(get_session)) -> list[OrganizationRead]:
-    return [
-        OrganizationRead.model_validate(item)
-        for item in OrganizationService(session).list()
-    ]
+@router.get("", response_model=list[OrganizationRead])
+def list_organizations(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.ORGANIZATION_READ)),
+    session: Session = Depends(get_session),
+) -> list[OrganizationRead]:
+    service = OrganizationService(session)
+    organizations = service.list() if principal.has_permission(Permission.PLATFORM_ADMIN) else service.list_for_principal(principal.organization_id)
+    return [OrganizationRead.model_validate(item) for item in organizations]
 
 
-@router.get("/{organization_id}", response_model=OrganizationRead, dependencies=[organization_manage])
+@router.get("/{organization_id}", response_model=OrganizationRead)
 def get_organization(
     organization_id: str,
-    principal: AuthenticatedPrincipal = Depends(require_organization_path_match),
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.ORGANIZATION_READ)),
     session: Session = Depends(get_session),
 ) -> OrganizationRead:
+    _require_same_org_or_platform(principal, organization_id)
     organization = OrganizationService(session).get(organization_id)
     if organization is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="organization not found",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="organization not found")
     return OrganizationRead.model_validate(organization)

@@ -7,12 +7,22 @@ from app.missions.models import Mission
 from app.reasoning.service import analyze_q2_compliance_risk
 
 
-def build_executive_dashboard(db: Session, *, user_name: str = "Surinder") -> ExecutiveDashboard:
+def build_executive_dashboard(db: Session, *, organization_id: str, user_name: str = "Surinder") -> ExecutiveDashboard:
     now = datetime.now(timezone.utc)
-    open_notes = (db.query(TeamNote).filter(TeamNote.status != "RESOLVED").order_by(TeamNote.due_at.asc(), TeamNote.created_at.asc()).all())
-    active_missions = (db.query(Mission).filter(Mission.status != "Complete").order_by(Mission.created_at.asc()).all())
-    total_trucks = db.query(Truck).count()
-    q2 = analyze_q2_compliance_risk(db)
+    open_notes = (
+        db.query(TeamNote)
+        .filter(TeamNote.organization_id == organization_id, TeamNote.status != "RESOLVED")
+        .order_by(TeamNote.due_at.asc(), TeamNote.created_at.asc())
+        .all()
+    )
+    active_missions = (
+        db.query(Mission)
+        .filter(Mission.organization_id == organization_id, Mission.status != "Complete")
+        .order_by(Mission.created_at.asc())
+        .all()
+    )
+    total_trucks = db.query(Truck).filter(Truck.organization_id == organization_id).count()
+    q2 = analyze_q2_compliance_risk(db, organization_id)
     needs = _attention(open_notes, q2)
     carry = _carry(open_notes, active_missions, now)
     plan = _plan(needs, carry)

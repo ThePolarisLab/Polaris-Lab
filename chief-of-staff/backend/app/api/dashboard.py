@@ -3,22 +3,16 @@ from sqlalchemy.orm import Session
 
 from app.dashboard.service import build_executive_dashboard
 from app.database.database import SessionLocal
-from app.schemas.dashboard import (
-    DashboardItemResponse,
-    DashboardPriorityResponse,
-    ExecutiveDashboardResponse,
-)
+from app.schemas.dashboard import DashboardItemResponse, DashboardPriorityResponse, ExecutiveDashboardResponse
+from app.security.dependencies import require_permission
+from app.security.models import AuthenticatedPrincipal, Permission
 
 
-router = APIRouter(
-    prefix="/dashboard",
-    tags=["Executive Dashboard"],
-)
+router = APIRouter(prefix="/dashboard", tags=["Executive Dashboard"])
 
 
 def get_db():
     db = SessionLocal()
-
     try:
         yield db
     finally:
@@ -26,65 +20,29 @@ def get_db():
 
 
 def serialize_item(item) -> DashboardItemResponse:
-    return DashboardItemResponse(
-        title=item.title,
-        detail=item.detail,
-        severity=item.severity,
-        source=item.source,
-        entity_id=item.entity_id,
-    )
+    return DashboardItemResponse(title=item.title, detail=item.detail, severity=item.severity, source=item.source, entity_id=item.entity_id)
 
 
 def serialize_priority(item) -> DashboardPriorityResponse:
-    return DashboardPriorityResponse(
-        rank=item.rank,
-        title=item.title,
-        reason=item.reason,
-        source=item.source,
-    )
+    return DashboardPriorityResponse(rank=item.rank, title=item.title, reason=item.reason, source=item.source)
 
 
-@router.get(
-    "/executive",
-    response_model=ExecutiveDashboardResponse,
-)
+@router.get("/executive", response_model=ExecutiveDashboardResponse)
 def read_executive_dashboard(
-    user_name: str = Query(
-        default="Surinder",
-        min_length=1,
-        max_length=80,
-    ),
+    user_name: str = Query(default="Surinder", min_length=1, max_length=80),
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.EXECUTIVE_READ)),
     db: Session = Depends(get_db),
 ):
-    dashboard = build_executive_dashboard(
-        db,
-        user_name=user_name,
-    )
-
+    dashboard = build_executive_dashboard(db, organization_id=principal.organization_id, user_name=user_name)
     return ExecutiveDashboardResponse(
         greeting=dashboard.greeting,
         business_status=dashboard.business_status,
         review_minutes=dashboard.review_minutes,
-        needs_attention=[
-            serialize_item(item)
-            for item in dashboard.needs_attention
-        ],
-        carry_forward=[
-            serialize_item(item)
-            for item in dashboard.carry_forward
-        ],
-        todays_plan=[
-            serialize_priority(item)
-            for item in dashboard.todays_plan
-        ],
-        coming_up=[
-            serialize_item(item)
-            for item in dashboard.coming_up
-        ],
-        watch_items=[
-            serialize_item(item)
-            for item in dashboard.watch_items
-        ],
+        needs_attention=[serialize_item(item) for item in dashboard.needs_attention],
+        carry_forward=[serialize_item(item) for item in dashboard.carry_forward],
+        todays_plan=[serialize_priority(item) for item in dashboard.todays_plan],
+        coming_up=[serialize_item(item) for item in dashboard.coming_up],
+        watch_items=[serialize_item(item) for item in dashboard.watch_items],
         open_team_notes=dashboard.open_team_notes,
         active_missions=dashboard.active_missions,
         total_trucks=dashboard.total_trucks,

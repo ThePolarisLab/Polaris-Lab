@@ -1,6 +1,7 @@
 """Security foundation API."""
 
 from collections.abc import Generator
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -47,19 +48,14 @@ def get_session() -> Generator[Session, None, None]:
 
 
 @router.post("/local/token", response_model=TokenResponse)
-def issue_local_token(
-    request: LocalLoginRequest,
-    session: Session = Depends(get_session),
-) -> TokenResponse:
+def issue_local_token(request: LocalLoginRequest, session: Session = Depends(get_session)) -> TokenResponse:
     if settings.environment.lower() not in {"development", "test"}:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
 
     provider = LocalTokenProvider()
     token = provider.issue(request.identity_id)
     try:
-        principal = SecurityService(session).authenticate(
-            provider, token, request.organization_id
-        )
+        principal = SecurityService(session).authenticate(provider, token, request.organization_id)
     except AuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     except AuthorizationError as exc:
@@ -73,7 +69,7 @@ def issue_local_token(
             source=EventSource(service="security-kernel"),
             actor=EventActor(actor_type="identity", actor_id=principal.identity_id),
             subject=EventSubject(subject_type="membership", subject_id=principal.membership_id),
-            idempotency_key=f"auth:{principal.identity_id}:{principal.organization_id}:{token[-12:]}",
+            idempotency_key=f"auth:{principal.identity_id}:{principal.organization_id}:{uuid4()}",
             payload={"provider": principal.provider, "role": principal.role},
         )
     )

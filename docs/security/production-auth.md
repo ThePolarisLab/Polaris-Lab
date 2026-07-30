@@ -2,7 +2,7 @@
 
 Polaris backend APIs are protected by the provider-neutral security model in `chief-of-staff/backend/app/security`.
 
-The route inventory for this gate is maintained in `docs/security/route-security-matrix.md`.
+The route inventory for this gate is maintained in `docs/security/route-security-matrix.md`. Tenant ownership rules are maintained in `docs/security/tenant-isolation.md`.
 
 ## Public endpoints
 
@@ -10,6 +10,9 @@ The following endpoints are intentionally public:
 
 - `GET /`
 - `GET /health`
+- `GET /api/v1/system/health`
+- `GET /api/v1/system/info`
+- `GET /api/v1/system/version`
 - `POST /api/v1/auth/local/token` in `development` and `test` only
 - `GET /api/v1/connectors/quickbooks/oauth/callback`
 
@@ -24,7 +27,7 @@ Authorization: Bearer <access-token>
 X-Polaris-Organization: <organization-id>
 ```
 
-The bearer credential is validated by the configured authentication provider and resolved to an active `Identity`. The organization header is checked against an active `OrganizationMembership`. Cross-organization access fails closed through membership lookup and, where the route contains an `organization_id` path parameter, `require_organization_path_match`.
+The bearer credential is validated by the configured authentication provider and resolved to an active `Identity`. The organization header is checked against an active `OrganizationMembership`. Cross-organization access fails closed through membership lookup, path-boundary checks, and tenant-owned query filters.
 
 ## Authentication flow
 
@@ -50,30 +53,39 @@ Runtime fallback values are for local controlled environments. Static bearer tok
 
 ## Permission model
 
-Initial route groups use these permissions:
+Phase 1.1 uses split read/write permissions:
 
-- organization reads and fleet reads: `organization.read`
-- organization creation/listing and admin organization inspection: `organization.manage`
-- identity reads: `identity.read`
-- identity and membership mutations: `identity.manage`
-- connector/GitHub/QuickBooks read operations: `connector.read`
-- connector sync, connector disconnect, GitHub writes, and QuickBooks OAuth initiation: `connector.manage`
-- dashboard, memory, missions, reasoning, work context, team notes, and financial executive summary: `executive.read`
-- events and system inspection: `organization.read`
+- `platform.admin`: platform tenant administration; can create/list/inspect all organizations.
+- `organization.read`: organization profile, fleet reads, event health/metrics.
+- `organization.write`: organization-owned fleet mutations.
+- `identity.read`: visible identities and memberships for the active organization.
+- `identity.write`: identity creation and membership mutation.
+- `connector.read`: connector health/status and non-financial connector inspection.
+- `connector.write`: connector sync/lifecycle and OAuth initiation/disconnect.
+- `financial.read`: QuickBooks financial reads, cache status, and financial summaries.
+- `financial.write`: QuickBooks financial sync/cache writes.
+- `executive.read`: dashboard, memory, missions, reasoning, work context, and team note reads.
+- `executive.write`: memory, mission, and team-note mutations.
 
-Write-sensitive routes should continue to move toward method-level permissions as API-001 adoption proceeds.
+The legacy `*.manage` enum names remain compatibility aliases for `*.write`, but route documentation should use the canonical split names.
+
+## Tenant isolation
+
+For protected API routes, `AuthenticatedPrincipal.organization_id` is the source of truth. Tenant-owned rows use `organization_id` foreign keys and every query over tenant-owned data must filter by the principal organization.
+
+Do not use `settings.organization_slug` or `POLARIS_ORGANIZATION_SLUG` as an authorization or persistence boundary. The slug may remain public runtime metadata, but it is not an access-control primitive.
 
 ## QuickBooks OAuth state
 
-QuickBooks authorization initiation requires `connector.manage`. The generated OAuth state is:
+QuickBooks authorization initiation requires `connector.write`. The generated OAuth state is:
 
 - signed with `POLARIS_QBO_OAUTH_STATE_SECRET`;
 - stored with the initiating principal identity;
-- stored with the initiating organization ID and configured organization slug;
+- stored with the initiating organization ID;
 - valid for 10 minutes;
-- consumed exactly once by the callback.
+- consumed exactly once through an atomic conditional update.
 
-The callback stores tokens only for the organization slug recorded in the consumed state. If company verification fails, the stored credential for that slug is deleted.
+The callback stores tokens only for the organization ID recorded in the consumed state. If company verification fails, the stored credential for that organization is deleted.
 
 ## Required Environment Variables
 
@@ -101,8 +113,9 @@ POLARIS_QBO_REDIRECT_URI
 POLARIS_QBO_OAUTH_STATE_SECRET=<minimum 32 characters>
 POLARIS_QBO_TOKEN_ENCRYPTION_KEY=<Fernet key>
 POLARIS_FRONTEND_URL
-POLARIS_ORGANIZATION_SLUG
 ```
+
+`POLARIS_ORGANIZATION_SLUG` is no longer used for QuickBooks credential ownership.
 
 ## Release gate
 
@@ -113,8 +126,9 @@ A production release must verify:
 - inactive identities are rejected;
 - inactive or missing organization memberships are rejected;
 - cross-organization requests are denied;
-- connector sync and disconnect require `connector.manage`;
-- QuickBooks OAuth state cannot be reused;
+- tenant-owned database queries filter by organization ID;
+- connector sync and disconnect require `connector.write`;
+- QuickBooks OAuth state cannot be reused or raced;
 - frontend requests include auth headers;
 - frontend clears expired sessions on `401`;
 - frontend displays forbidden state on `403`;

@@ -16,10 +16,9 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from app.connectors.quickbooks_credentials import (
-    QuickBooksCredentialStore,
-    QuickBooksOAuthState,
-)
+from sqlalchemy import update
+
+from app.connectors.quickbooks_credentials import QuickBooksCredentialStore, QuickBooksOAuthState
 from app.database.database import SessionLocal
 
 AUTHORIZATION_URL = "https://appcenter.intuit.com/connect/oauth2"
@@ -45,28 +44,14 @@ class QuickBooksOAuthTokens:
 class QuickBooksOAuthContext:
     organization_id: str
     identity_id: str
-    organization_slug: str
 
 
 class QuickBooksOAuthService:
     """Create authorization requests, validate callbacks, and persist tokens."""
 
-    def __init__(self, store: QuickBooksCredentialStore | None = None) -> None:
-        self.store = store or QuickBooksCredentialStore()
-
-    def authorization_url(
-        self,
-        *,
-        organization_id: str,
-        identity_id: str,
-        organization_slug: str | None = None,
-    ) -> str:
+    def authorization_url(self, *, organization_id: str, identity_id: str) -> str:
         self._validate_configuration()
-        state = self._create_state(
-            organization_id=organization_id,
-            identity_id=identity_id,
-            organization_slug=organization_slug or os.getenv("POLARIS_ORGANIZATION_SLUG", "mor-logistics"),
-        )
+        state = self._create_state(organization_id=organization_id, identity_id=identity_id)
         return AUTHORIZATION_URL + "?" + urlencode(
             {
                 "client_id": os.environ["POLARIS_QBO_CLIENT_ID"],
@@ -77,13 +62,25 @@ class QuickBooksOAuthService:
             }
         )
 
-    def complete_authorization(self, *, code: str, realm_id: str, state: str) -> QuickBooksOAuthContext:
+    def complete_authorization(
+        self,
+        *,
+        code: str,
+        realm_id: str,
+        state: str,
+        expected_organization_id: str | None = None,
+        expected_identity_id: str | None = None,
+    ) -> QuickBooksOAuthContext:
         self._validate_configuration()
-        context = self._consume_state(state)
+        context = self._consume_state(
+            state,
+            expected_organization_id=expected_organization_id,
+            expected_identity_id=expected_identity_id,
+        )
         if not code or not realm_id:
             raise QuickBooksOAuthError("QuickBooks callback is missing required parameters")
         tokens = self._exchange_code(code)
-        QuickBooksCredentialStore(context.organization_slug).save(
+        QuickBooksCredentialStore(context.organization_id).save(
             realm_id=realm_id,
             refresh_token=tokens.refresh_token,
             scopes=tokens.scope or ACCOUNTING_SCOPE,
@@ -106,11 +103,7 @@ class QuickBooksOAuthService:
             access_token=access_token,
             refresh_token=refresh_token,
             expires_in=int(payload.get("expires_in", 3600)),
-            refresh_token_expires_in=(
-                int(payload["x_refresh_token_expires_in"])
-                if payload.get("x_refresh_token_expires_in") is not None
-                else None
-            ),
+            refresh_token_expires_in=(int(payload["x_refresh_token_expires_in"]) if payload.get("x_refresh_token_expires_in") is not None else None),
             scope=str(payload.get("scope") or ACCOUNTING_SCOPE),
         )
 
@@ -121,30 +114,22 @@ class QuickBooksOAuthService:
         request = Request(
             TOKEN_URL,
             data=urlencode(form).encode(),
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Basic {basic}",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
+            headers={"Accept": "application/json", "Authorization": f"Basic {basic}", "Content-Type": "application/x-www-form-urlencoded"},
             method="POST",
         )
         try:
             with urlopen(request, timeout=20) as response:
                 return json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
-            raise QuickBooksOAuthError(
-                f"QuickBooks token exchange failed with HTTP {exc.code}"
-            ) from exc
+            raise QuickBooksOAuthError(f"QuickBooks token exchange failed with HTTP {exc.code}") from exc
         except (URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise QuickBooksOAuthError("QuickBooks token exchange failed") from exc
 
-    def _create_state(self, *, organization_id: str, identity_id: str, organization_slug: str) -> str:
+    def _create_state(self, *, organization_id: str, identity_id: str) -> str:
         timestamp = str(int(time.time()))
         nonce = secrets.token_urlsafe(24)
         body = f"{timestamp}.{nonce}"
-        signature = hmac.new(
-            self._state_secret().encode(), body.encode(), hashlib.sha256
-        ).hexdigest()
+        signature = hmac.new(self._state_secret().encode(), body.encode(), hashlib.sha256).hexdigest()
         state = f"{body}.{signature}"
         now = datetime.now(timezone.utc)
         with SessionLocal.begin() as session:
@@ -153,33 +138,52 @@ class QuickBooksOAuthService:
                     state=state,
                     organization_id=organization_id,
                     identity_id=identity_id,
-                    organization_slug=organization_slug,
                     created_at=now,
                     expires_at=now + timedelta(seconds=STATE_TTL_SECONDS),
                 )
             )
         return state
 
-    def _consume_state(self, state: str) -> QuickBooksOAuthContext:
+    def _consume_state(
+        self,
+        state: str,
+        *,
+        expected_organization_id: str | None = None,
+        expected_identity_id: str | None = None,
+    ) -> QuickBooksOAuthContext:
         self._validate_state_signature(state)
         now = datetime.now(timezone.utc)
         with SessionLocal.begin() as session:
-            record = session.get(QuickBooksOAuthState, state)
-            if record is None:
-                raise QuickBooksOAuthError("QuickBooks OAuth state is unknown")
-            if record.consumed_at is not None:
-                raise QuickBooksOAuthError("QuickBooks OAuth state has already been used")
-            expires_at = record.expires_at
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
-            if expires_at <= now:
-                raise QuickBooksOAuthError("QuickBooks OAuth state has expired")
-            record.consumed_at = now
-            return QuickBooksOAuthContext(
-                organization_id=record.organization_id,
-                identity_id=record.identity_id,
-                organization_slug=record.organization_slug,
+            result = session.execute(
+                update(QuickBooksOAuthState)
+                .where(
+                    QuickBooksOAuthState.state == state,
+                    QuickBooksOAuthState.consumed_at.is_(None),
+                    QuickBooksOAuthState.expires_at > now,
+                    *([QuickBooksOAuthState.organization_id == expected_organization_id] if expected_organization_id else []),
+                    *([QuickBooksOAuthState.identity_id == expected_identity_id] if expected_identity_id else []),
+                )
+                .values(consumed_at=now)
             )
+            if result.rowcount != 1:
+                record = session.get(QuickBooksOAuthState, state)
+                if record is None:
+                    raise QuickBooksOAuthError("QuickBooks OAuth state is unknown")
+                if expected_organization_id and record.organization_id != expected_organization_id:
+                    raise QuickBooksOAuthError("QuickBooks OAuth state organization does not match")
+                if expected_identity_id and record.identity_id != expected_identity_id:
+                    raise QuickBooksOAuthError("QuickBooks OAuth state principal does not match")
+                if record.consumed_at is not None:
+                    raise QuickBooksOAuthError("QuickBooks OAuth state has already been used")
+                expires_at = record.expires_at
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                if expires_at <= now:
+                    raise QuickBooksOAuthError("QuickBooks OAuth state has expired")
+                raise QuickBooksOAuthError("QuickBooks OAuth state could not be consumed")
+
+            record = session.get(QuickBooksOAuthState, state)
+            return QuickBooksOAuthContext(organization_id=record.organization_id, identity_id=record.identity_id)
 
     def _validate_state_signature(self, state: str) -> None:
         try:
@@ -188,9 +192,7 @@ class QuickBooksOAuthService:
         except (ValueError, AttributeError) as exc:
             raise QuickBooksOAuthError("QuickBooks OAuth state is invalid") from exc
         body = f"{timestamp_text}.{nonce}"
-        expected = hmac.new(
-            self._state_secret().encode(), body.encode(), hashlib.sha256
-        ).hexdigest()
+        expected = hmac.new(self._state_secret().encode(), body.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(signature, expected):
             raise QuickBooksOAuthError("QuickBooks OAuth state validation failed")
         if abs(int(time.time()) - timestamp) > STATE_TTL_SECONDS:
@@ -200,9 +202,7 @@ class QuickBooksOAuthService:
     def _state_secret() -> str:
         secret = os.getenv("POLARIS_QBO_OAUTH_STATE_SECRET")
         if not secret or len(secret) < 32:
-            raise QuickBooksOAuthError(
-                "QuickBooks OAuth state signing is not configured"
-            )
+            raise QuickBooksOAuthError("QuickBooks OAuth state signing is not configured")
         return secret
 
     @staticmethod
@@ -220,6 +220,5 @@ class QuickBooksOAuthService:
         ]
         if missing:
             raise QuickBooksOAuthError(
-                "QuickBooks OAuth is not configured. Missing environment variables: "
-                + ", ".join(missing)
+                "QuickBooks OAuth is not configured. Missing environment variables: " + ", ".join(missing)
             )
