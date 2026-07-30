@@ -75,6 +75,17 @@ For protected API routes, `AuthenticatedPrincipal.organization_id` is the source
 
 Do not use `settings.organization_slug` or `POLARIS_ORGANIZATION_SLUG` as an authorization or persistence boundary. The slug may remain public runtime metadata, but it is not an access-control primitive.
 
+## Database lifecycle
+
+Staging and production must run migrations before application startup:
+
+```bash
+alembic upgrade head
+alembic current
+```
+
+The backend refuses to start in `production` or `staging` if the database is unversioned or not at Alembic head. Development and test may explicitly create isolated schemas through `POLARIS_AUTO_CREATE_SCHEMA`; that behavior is not available in managed environments.
+
 ## QuickBooks OAuth state
 
 QuickBooks authorization initiation requires `connector.write`. The generated OAuth state is:
@@ -94,14 +105,24 @@ Development/test:
 ```text
 POLARIS_ENV=development|test
 POLARIS_LOCAL_AUTH_SECRET=<optional in development, required in test suites when deterministic tokens are needed>
+DATABASE_URL=<optional SQLite URL; defaults to sqlite:///./polaris.db>
+POLARIS_AUTO_CREATE_SCHEMA=<optional explicit dev/test schema bootstrap toggle>
 ```
 
 Production/staging:
 
 ```text
 POLARIS_ENV=production|staging
+DATABASE_URL=<required production database URL>
+POLARIS_AUTO_CREATE_SCHEMA=false
 POLARIS_LOCAL_AUTH_SECRET=<minimum 32 characters; must not be polaris-dev-only>
 POLARIS_CORS_ORIGINS=<allowed frontend origins>
+```
+
+Existing database adoption:
+
+```text
+POLARIS_TENANT_BACKFILL_ORGANIZATION_ID=<optional existing organization ID for verified legacy single-target backfills>
 ```
 
 QuickBooks OAuth:
@@ -133,4 +154,7 @@ A production release must verify:
 - frontend clears expired sessions on `401`;
 - frontend displays forbidden state on `403`;
 - local-token issuance is unavailable outside `development` and `test`;
-- the default `polaris-dev-only` secret cannot be used silently in production.
+- the default `polaris-dev-only` secret cannot be used silently in production;
+- `alembic upgrade head` is run before managed application startup;
+- managed application startup rejects stale or unversioned schemas;
+- a verified backup exists before production migrations.
