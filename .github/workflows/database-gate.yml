@@ -1,0 +1,165 @@
+name: Database Gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "chief-of-staff/backend/**"
+      - "chief-of-staff/frontend/**"
+      - "docs/database/**"
+      - "docs/security/tenant-isolation.md"
+      - "docs/releases/**"
+      - "docs/roadmap/**"
+      - ".github/workflows/database-gate.yml"
+      - "package.json"
+  push:
+    branches: [main]
+    paths:
+      - "chief-of-staff/backend/**"
+      - "chief-of-staff/frontend/**"
+      - "docs/database/**"
+      - "docs/security/tenant-isolation.md"
+      - "docs/releases/**"
+      - "docs/roadmap/**"
+      - ".github/workflows/database-gate.yml"
+      - "package.json"
+  workflow_dispatch:
+
+jobs:
+  migration-sqlite:
+    name: SQLite migration lifecycle
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chief-of-staff/backend
+    env:
+      POLARIS_ENV: test
+      POLARIS_AUTO_CREATE_SCHEMA: "false"
+      POLARIS_AUTH_SECRET: database-gate-ci-secret-value
+      POLARIS_QBO_TOKEN_ENCRYPTION_KEY: uPlZqC60CQaQGFL-kQo-xUOyEE5uNUAyxKmwbzfdiVo=
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Migration import and history check
+        run: |
+          python -m compileall app migrations
+          alembic history
+      - name: Fresh SQLite upgrade
+        env:
+          DATABASE_URL: sqlite:////tmp/polaris-clean.db
+        run: |
+          alembic upgrade head
+          alembic current
+      - name: Idempotent SQLite upgrade
+        env:
+          DATABASE_URL: sqlite:////tmp/polaris-clean.db
+        run: alembic upgrade head
+      - name: Downgrade safety check
+        env:
+          DATABASE_URL: sqlite:////tmp/polaris-clean.db
+        run: |
+          if alembic downgrade -1; then
+            echo "Unsafe downgrade unexpectedly succeeded"
+            exit 1
+          fi
+
+  migration-postgres:
+    name: PostgreSQL migration compatibility
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: polaris
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: chief-of-staff/backend
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/polaris
+      POLARIS_ENV: test
+      POLARIS_AUTO_CREATE_SCHEMA: "false"
+      POLARIS_AUTH_SECRET: database-gate-ci-secret-value
+      POLARIS_QBO_TOKEN_ENCRYPTION_KEY: uPlZqC60CQaQGFL-kQo-xUOyEE5uNUAyxKmwbzfdiVo=
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Upgrade PostgreSQL schema
+        run: |
+          alembic upgrade head
+          alembic current
+
+  backend-tests:
+    name: Backend pytest
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chief-of-staff/backend
+    env:
+      POLARIS_ENV: test
+      POLARIS_AUTH_SECRET: database-gate-ci-secret-value
+      POLARIS_QBO_TOKEN_ENCRYPTION_KEY: uPlZqC60CQaQGFL-kQo-xUOyEE5uNUAyxKmwbzfdiVo=
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run pytest
+        run: python -m pytest -v
+
+  frontend-tests-build:
+    name: Frontend tests and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chief-of-staff/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: chief-of-staff/frontend/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Run frontend tests
+        run: npm test
+      - name: Production build
+        run: npm run build
+
+  root-typescript-tests:
+    name: Root TypeScript tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install root dependencies
+        run: npm install
+      - name: Run root tests
+        run: npm test
