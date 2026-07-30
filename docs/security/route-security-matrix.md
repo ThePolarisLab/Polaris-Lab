@@ -1,6 +1,6 @@
 # FastAPI Route Security Matrix
 
-Baseline branch: `phase2.1/persistent-deployment-hardening`  
+Baseline branch: `phase3a/quickbooks-production-adapter` rebased on Phase 2.1 deployment-hardened `main`  
 Scope: Polaris Chief of Staff FastAPI routers mounted from `chief-of-staff/backend/app/main.py`.
 
 ## Classification Legend
@@ -17,15 +17,15 @@ Scope: Polaris Chief of Staff FastAPI routers mounted from `chief-of-staff/backe
 
 | Method | Path | Classification | Required Control | Justification |
 |---|---|---|---|---|
-| GET | `/` | public | none | Generic liveness response only: `{"status":"ok"}`. No environment, organization, version, capability, database, or connector metadata. |
+| GET | `/` | public | none | Generic liveness response only: `{"status":"ok"}`. No environment, organization, version, capability, database, connector, company, or financial metadata. |
 | GET | `/health` | health check | none | External readiness/liveness check. Response is limited to `{"status":"ok"}` or `{"status":"degraded"}` with HTTP status; no runtime metadata. |
 | POST | `/api/v1/auth/local/token` | public in development/test only | local-token secret validation; disabled in production | Local bootstrap for existing development auth model. Must return 404 outside development/test. |
-| GET | `/api/v1/connectors/quickbooks/oauth/callback` | OAuth callback | signed, unexpired, atomic single-use, org-bound OAuth state | Intuit redirects cannot include Polaris bearer headers; authorization comes from validated state. |
+| GET | `/api/v1/connectors/quickbooks/oauth/callback` | OAuth callback | signed, unexpired, atomic single-use, org-bound and principal-bound OAuth state; post-token company verification | Intuit redirects cannot include Polaris bearer headers; authorization comes from validated state. |
 
 ## Protected Routes
 
 | Method | Path | Classification | Permission | Tenant Control |
-|---|---|---|---|---|
+|---|---|---|---|
 | GET | `/api/v1/auth/me` | authenticated | active organization membership | Principal resolved from `X-Polaris-Organization`. |
 | GET | `/company` | permission-protected | `organization.read` | `Company.organization_id == principal.organization_id`. |
 | GET | `/trucks` | permission-protected | `organization.read` | `Truck.organization_id == principal.organization_id`. |
@@ -74,16 +74,22 @@ Scope: Polaris Chief of Staff FastAPI routers mounted from `chief-of-staff/backe
 | GET | `/api/v1/connectors` | permission-protected | `connector.read` | Tenant-sensitive connector health uses principal org. |
 | GET | `/api/v1/connectors/{name}` | permission-protected | `connector.read` | Tenant-sensitive connector health uses principal org. |
 | POST | `/api/v1/connectors/{name}/sync` | permission-protected | `connector.write` | Tenant-sensitive sync uses principal org. |
+| GET | `/api/v1/connectors/quickbooks/oauth/authorize-url` | permission-protected | `connector.write` | OAuth state bound to principal org and identity; returns Intuit URL without exposing tokens. |
 | GET | `/api/v1/connectors/quickbooks/oauth/authorize` | permission-protected | `connector.write` | OAuth state bound to principal org and identity. |
-| DELETE | `/api/v1/connectors/quickbooks/oauth/connection` | permission-protected | `connector.write` | Deletes credential for principal org only. |
+| DELETE | `/api/v1/connectors/quickbooks/oauth/connection` | permission-protected | `connector.write` | Revokes/deletes credential for principal org only. |
 | GET | `/api/v1/qbo/company` | permission-protected | `financial.read` | Credential store keyed by principal org. |
 | GET | `/api/v1/qbo/accounts` | permission-protected | `financial.read` | Credential store keyed by principal org. |
+| GET | `/api/v1/qbo/resources/{resource}` | permission-protected | `financial.read` | Paginated read-only QuickBooks resource reads use principal org credential only. |
 | GET | `/api/v1/qbo/reports/profit-loss` | permission-protected | `financial.read` | Credential store keyed by principal org. |
 | GET | `/api/v1/qbo/reports/balance-sheet` | permission-protected | `financial.read` | Credential store keyed by principal org. |
 | GET | `/api/v1/qbo/reports/cash-flow` | permission-protected | `financial.read` | Credential store keyed by principal org. |
+| GET | `/api/v1/qbo/reports/aged-receivables` | permission-protected | `financial.read` | Credential store keyed by principal org. |
+| GET | `/api/v1/qbo/reports/aged-payables` | permission-protected | `financial.read` | Credential store keyed by principal org. |
 | GET | `/api/v1/qbo/sync/status` | permission-protected | `financial.read` | Financial cache keyed by principal org. |
 | GET | `/api/v1/qbo/executive-summary` | permission-protected | `financial.read` | Financial cache keyed by principal org. |
-| POST | `/api/v1/qbo/sync` | permission-protected | `financial.write` | Financial cache writes use principal org. |
+| GET | `/api/v1/qbo/verification` | permission-protected | `connector.read` | Secret-free connector verification status for principal org. |
+| POST | `/api/v1/qbo/verification` | permission-protected | `connector.write` | Active read-only provider verification for principal org. |
+| POST | `/api/v1/qbo/sync` | permission-protected | `financial.write` | Financial cache writes use principal org; performs no QuickBooks writes. |
 | POST | `/api/v1/organizations` | admin-only | `platform.admin` | Platform-only tenant creation. |
 | GET | `/api/v1/organizations` | admin-only | `organization.read` | Platform admins see all; org users see only their org. |
 | GET | `/api/v1/organizations/{organization_id}` | admin-only | `organization.read` | Same org or platform admin only. |
@@ -98,9 +104,12 @@ Every query over tenant-owned records must filter by `AuthenticatedPrincipal.org
 
 ## Database Gate Note
 
-Phase 2 does not add HTTP routes. It makes tenant-owned schema enforcement Alembic-managed and blocks staging/production startup when the database is unversioned or stale. Phase 2.1 further reduces public health metadata and requires detailed system status to be authenticated.
+Phase 2 and Phase 2.1 make tenant-owned schema enforcement Alembic-managed, block staging/production startup when the database is unversioned or stale, require persistent PostgreSQL for hosted staging/production, and keep detailed runtime status authenticated.
+
+## QuickBooks Production Note
+
+Phase 3A keeps QuickBooks accounting write actions out of scope. All QuickBooks routes either read provider data, run read-only verification, synchronize into Polaris-owned financial cache tables, initiate OAuth, handle OAuth callback state, or disconnect/revoke credentials for the active organization.
 
 ## Remaining Later-Phase Work
 
-- Continue QuickBooks production verification only after persistent PostgreSQL cutover is complete.
-- Continue Motive, Outlook, API versioning, and broader deployment automation outside this phase.
+- Continue Motive, Outlook, API versioning, and non-QuickBooks deployment automation outside this phase.
