@@ -1,5 +1,7 @@
 """Application service for organization lifecycle operations."""
 
+from __future__ import annotations
+
 from sqlalchemy.orm import Session
 
 from app.organizations.models import Organization
