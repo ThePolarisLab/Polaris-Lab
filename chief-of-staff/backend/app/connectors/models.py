@@ -16,6 +16,13 @@ class ConnectorStatus(str, Enum):
     AUTHENTICATION_ERROR = "authentication_error"
     CONFIGURATION_ERROR = "configuration_error"
     SYNC_ERROR = "sync_error"
+    NOT_CONFIGURED = "not_configured"
+    AUTHORIZATION_REQUIRED = "authorization_required"
+    CONNECTED_UNVERIFIED = "connected_unverified"
+    COMPANY_MISMATCH = "company_mismatch"
+    RATE_LIMITED = "rate_limited"
+    SYNCHRONIZATION_FAILED = "synchronization_failed"
+    REAUTHORIZATION_REQUIRED = "reauthorization_required"
 
 
 class ConnectorHealth(BaseModel):
