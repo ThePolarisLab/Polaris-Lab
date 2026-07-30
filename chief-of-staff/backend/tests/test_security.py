@@ -17,23 +17,17 @@ def bootstrap(role: str = "member") -> tuple[dict, dict]:
 
 def test_local_login_builds_tenant_bound_principal_and_event():
     organization, identity = bootstrap("owner")
-    login = client.post(
-        "/api/v1/auth/local/token",
-        json={"identity_id": identity["id"], "organization_id": organization["id"]},
-    )
+    login = client.post("/api/v1/auth/local/token", json={"identity_id": identity["id"], "organization_id": organization["id"]})
     assert login.status_code == 200
 
     me = client.get(
         "/api/v1/auth/me",
-        headers={
-            "Authorization": f"Bearer {login.json()['access_token']}",
-            "X-Polaris-Organization": organization["id"],
-        },
+        headers={"Authorization": f"Bearer {login.json()['access_token']}", "X-Polaris-Organization": organization["id"]},
     )
     assert me.status_code == 200
     assert me.json()["identity_id"] == identity["id"]
     assert me.json()["organization_id"] == organization["id"]
-    assert "organization.manage" in me.json()["permissions"]
+    assert "organization.write" in me.json()["permissions"]
 
     event = event_bus.recent(limit=1)[0]
     assert event.event_type == "identity.authentication.succeeded.v1"
@@ -42,24 +36,12 @@ def test_local_login_builds_tenant_bound_principal_and_event():
 
 def test_missing_invalid_and_expired_credentials_are_rejected():
     organization, identity = bootstrap()
-    missing = client.get(
-        "/api/v1/auth/me",
-        headers={"X-Polaris-Organization": organization["id"]},
-    )
-    invalid = client.get(
-        "/api/v1/auth/me",
-        headers={
-            "Authorization": "Bearer invalid.token",
-            "X-Polaris-Organization": organization["id"],
-        },
-    )
+    missing = client.get("/api/v1/auth/me", headers={"X-Polaris-Organization": organization["id"]})
+    invalid = client.get("/api/v1/auth/me", headers={"Authorization": "Bearer invalid.token", "X-Polaris-Organization": organization["id"]})
     expired = LocalTokenProvider().issue(identity["id"], ttl_seconds=-1)
     expired_response = client.get(
         "/api/v1/auth/me",
-        headers={
-            "Authorization": f"Bearer {expired}",
-            "X-Polaris-Organization": organization["id"],
-        },
+        headers={"Authorization": f"Bearer {expired}", "X-Polaris-Organization": organization["id"]},
     )
 
     assert missing.status_code == 401
@@ -74,10 +56,7 @@ def test_cross_tenant_access_is_denied():
 
     response = client.get(
         "/api/v1/auth/me",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "X-Polaris-Organization": second_org["id"],
-        },
+        headers={"Authorization": f"Bearer {token}", "X-Polaris-Organization": second_org["id"]},
     )
 
     assert response.status_code == 403
@@ -87,4 +66,5 @@ def test_cross_tenant_access_is_denied():
 def test_role_permissions_are_explicit_and_deny_unknown_roles():
     assert Permission.ORGANIZATION_MANAGE in ROLE_PERMISSIONS["owner"]
     assert Permission.ORGANIZATION_MANAGE not in ROLE_PERMISSIONS["viewer"]
+    assert Permission.EXECUTIVE_WRITE not in ROLE_PERMISSIONS["viewer"]
     assert ROLE_PERMISSIONS.get("unknown", frozenset()) == frozenset()
