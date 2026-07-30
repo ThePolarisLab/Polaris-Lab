@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: Polaris Lab
-Last updated: 2026-07-18
+Last updated: 2026-07-29
 
 ## Purpose
 
@@ -21,6 +21,13 @@ Polaris is being developed as an AI-enabled operating system and Chief of Staff 
 - PGE-003.1 — Configurable analysis limits
 - PGE-003.2 — Large-file chunked analysis
 - GitHub Actions backend test workflow
+- Phase 1 Security Gate
+- Phase 1.1 Tenant Isolation Hardening
+- Phase 1.2 Integration Verification
+
+### In progress
+
+- Phase 2 Database Gate — Alembic lifecycle, adoption validation, tenant backfill, startup migration enforcement, and backup/rollback documentation.
 
 ### Current engineering capabilities
 
@@ -36,7 +43,7 @@ Polaris can currently:
 - produce deterministic plain-English module explanations;
 - analyze large Python files in syntax-aware chunks;
 - enforce configurable analysis limits with a hard safety ceiling;
-- automatically run backend tests on pull requests.
+- run backend, frontend, TypeScript, security, runtime, and database lifecycle checks in GitHub Actions.
 
 ## Product Direction
 
@@ -51,6 +58,26 @@ Polaris will evolve through five engineering stages:
 The platform must remain explainable, reviewable, testable, and safe at every stage.
 
 ## Near-Term Priorities
+
+### Phase 2 — Database Gate
+
+Goal: establish a versioned production database lifecycle before new integration or deployment work.
+
+Planned outcomes:
+
+- Alembic-managed schema lifecycle;
+- clean SQLite and PostgreSQL-compatible installs;
+- existing database adoption validation;
+- tenant ownership backfill with fail-closed ambiguous cases;
+- staging/production startup enforcement;
+- migration CI and rollback documentation.
+
+Scope boundaries:
+
+- no Motive implementation;
+- no Outlook implementation;
+- no API versioning migration;
+- no deployment infrastructure changes beyond migration commands and runbooks.
 
 ### PGE-003.3 — Cross-file Dependency Resolution
 
@@ -180,7 +207,7 @@ Exit criteria:
 
 - stable engineering, operational, and executive workflows;
 - documented security model;
-- tested recovery procedures;
+- versioned database lifecycle with tested recovery procedures;
 - release checklist completed;
 - production-readiness review approved.
 
@@ -255,9 +282,9 @@ Polaris engineering follows these rules:
 
 Near-term quality work includes:
 
+- complete Phase 2 Database Gate review and merge after CI passes;
 - expand backend coverage beyond the GitHub and code-understanding engines;
 - add API endpoint tests;
-- add database and migration strategy tests;
 - add frontend tests;
 - add linting, formatting, and type-checking gates;
 - review stale branches;

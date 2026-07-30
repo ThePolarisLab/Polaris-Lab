@@ -1,4 +1,4 @@
-# Phase 1.1 Tenant Security Architecture
+# Polaris Security and Database Architecture
 
 Status date: 2026-07-29
 
@@ -23,6 +23,21 @@ flowchart LR
 3. Tenant-owned SQLAlchemy models carry `organization_id` foreign keys.
 4. Mutations require write permissions; reads require read permissions.
 5. Platform-wide organization administration requires `platform.admin`.
+
+## Database Lifecycle Boundary
+
+Phase 2 moves schema ownership from runtime metadata creation to Alembic migrations.
+
+```mermaid
+flowchart LR
+    Backup[Verified backup] --> Validate[validate_schema]
+    Validate --> Upgrade[alembic upgrade head]
+    Upgrade --> Current[alembic current]
+    Current --> Startup[FastAPI startup]
+    Startup --> Guard[assert database at Alembic head in staging/production]
+```
+
+Staging and production never call `Base.metadata.create_all`. The application must start only after migrations have been applied. Development and test may bootstrap isolated schemas explicitly through `POLARIS_AUTO_CREATE_SCHEMA`.
 
 ## QuickBooks Architecture
 
@@ -49,4 +64,4 @@ The callback remains public at the HTTP layer, but the state record is the autho
 
 ## Data Ownership
 
-The authoritative ownership inventory is `docs/security/tenant-isolation.md`.
+The authoritative ownership inventory is `docs/security/tenant-isolation.md`. Database adoption and tenant backfill rules live in `docs/database/database-lifecycle.md` and `docs/database/tenant-backfill-plan.md`.

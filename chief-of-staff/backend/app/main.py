@@ -1,52 +1,39 @@
 from fastapi import Depends, FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
 
 from app.core.config import settings
-from app.database.database import Base, engine
+from app.database.schema_guard import health_database_status, prepare_database_for_runtime
 from app.security.dependencies import require_permission
 from app.security.models import Permission
 
-# Models
-from app.models.company import Company
-from app.models.truck import Truck
-from app.models.memory import MemoryEntry
-from app.models.relationship import KnowledgeRelationship
-from app.models.financial_snapshot import FinancialAccount, FinancialSnapshot, FinancialSyncHistory
-from app.missions.models import Mission, MissionTask, Workflow
-from app.organizations.models import Organization
-from app.identity.models import Identity, OrganizationMembership
-from app.connectors.quickbooks_credentials import QuickBooksOAuthCredential, QuickBooksOAuthState
-
 # API Routers
-from app.api.chat import router as chat_router
-from app.api.company import router as company_router
-from app.api.truck import router as truck_router
-from app.api.memory import router as memory_router
-from app.api.missions import router as missions_router
-from app.api.relationships import router as relationships_router
-from app.api.memory_search import router as memory_search_router
-from app.api.reasoning import router as reasoning_router
-from app.models.team_note import TeamNote
-from app.api.team_notes import router as team_notes_router
-from app.api.dashboard import router as dashboard_router
-from app.api.github_engine import router as github_engine_router
-from app.api.code_understanding import router as code_understanding_router
-from app.api.refactoring import router as refactoring_router
-from app.api.work_context import router as work_context_router
-from app.api.system import router as system_router
-from app.api.connectors import router as connectors_router
-from app.api.quickbooks_oauth import router as quickbooks_oauth_router
-from app.api.quickbooks_financials import router as quickbooks_financials_router
-from app.api.events import router as events_router
-from app.api.organizations import router as organizations_router
-from app.api.identity import router as identity_router
 from app.api.auth import router as auth_router
+from app.api.chat import router as chat_router
+from app.api.code_understanding import router as code_understanding_router
+from app.api.company import router as company_router
+from app.api.connectors import router as connectors_router
+from app.api.dashboard import router as dashboard_router
+from app.api.events import router as events_router
+from app.api.github_engine import router as github_engine_router
+from app.api.identity import router as identity_router
+from app.api.memory import router as memory_router
+from app.api.memory_search import router as memory_search_router
+from app.api.missions import router as missions_router
+from app.api.organizations import router as organizations_router
+from app.api.quickbooks_financials import router as quickbooks_financials_router
+from app.api.quickbooks_oauth import router as quickbooks_oauth_router
+from app.api.reasoning import router as reasoning_router
+from app.api.refactoring import router as refactoring_router
+from app.api.relationships import router as relationships_router
+from app.api.system import router as system_router
+from app.api.team_notes import router as team_notes_router
+from app.api.truck import router as truck_router
+from app.api.work_context import router as work_context_router
 from app.connectors.github import GitHubConnector
 from app.connectors.quickbooks import QuickBooksConnector
 from app.connectors.registry import connector_registry
 
-Base.metadata.create_all(bind=engine)
+prepare_database_for_runtime()
 connector_registry.register(GitHubConnector(), replace=True)
 connector_registry.register(QuickBooksConnector(), replace=True)
 
@@ -117,13 +104,8 @@ def root():
 
 @app.get("/health", tags=["runtime"])
 def health(response: Response):
-    database_status = "connected"
-
-    try:
-        with engine.connect() as connection:
-            connection.execute(text("SELECT 1"))
-    except Exception:
-        database_status = "unavailable"
+    database_status = health_database_status()
+    if database_status != "connected":
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
 
     return {

@@ -22,7 +22,7 @@ class QuickBooksOAuthCredential(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     organization_id: Mapped[str] = mapped_column(
-        String, ForeignKey("organizations.id"), unique=True, index=True
+        String, ForeignKey("organizations.id"), nullable=False, unique=True, index=True
     )
     realm_id: Mapped[str] = mapped_column(String(80))
     encrypted_refresh_token: Mapped[str] = mapped_column(Text)
@@ -45,8 +45,8 @@ class QuickBooksOAuthState(Base):
     __tablename__ = "quickbooks_oauth_states"
 
     state: Mapped[str] = mapped_column(String(255), primary_key=True)
-    organization_id: Mapped[str] = mapped_column(String, ForeignKey("organizations.id"), index=True)
-    identity_id: Mapped[str] = mapped_column(String, ForeignKey("identities.id"), index=True)
+    organization_id: Mapped[str] = mapped_column(String, ForeignKey("organizations.id"), nullable=False, index=True)
+    identity_id: Mapped[str] = mapped_column(String, ForeignKey("identities.id"), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
     )
