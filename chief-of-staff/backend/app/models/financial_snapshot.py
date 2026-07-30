@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.database import Base
@@ -22,7 +22,7 @@ class FinancialAccount(Base):
     account_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
     account_subtype: Mapped[str | None] = mapped_column(String(120), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
-    current_balance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    current_balance: Mapped[str | None] = mapped_column(String(80), nullable=True)
     payload: Mapped[dict] = mapped_column(JSON)
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
 
@@ -56,5 +56,11 @@ class FinancialSyncHistory(Base):
     accounts_imported: Mapped[int] = mapped_column(Integer, default=0)
     company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sync_mode: Mapped[str] = mapped_column(String(40), default="full")
+    resource_counts: Mapped[dict] = mapped_column(JSON, default=dict)
+    report_availability: Mapped[dict] = mapped_column(JSON, default=dict)
+    checkpoint_before: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checkpoint_after: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verification_status: Mapped[str | None] = mapped_column(String(60), nullable=True)
 
     organization = relationship("Organization")

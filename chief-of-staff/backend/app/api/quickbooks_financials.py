@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from datetime import date
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.connectors.quickbooks import QuickBooksConnector, QuickBooksConnectorError
+from app.connectors.quickbooks import REPORT_NAMES, RESOURCE_ENTITY, QuickBooksConnector, QuickBooksConnectorError
 from app.connectors.quickbooks_credentials import QuickBooksCredentialStore
 from app.database.database import SessionLocal
 from app.models.financial_snapshot import FinancialSnapshot
@@ -27,7 +28,7 @@ def _safe_call(operation):
         return operation()
     except QuickBooksConnectorError as exc:
         message = str(exc)
-        status_code = 503 if "not configured" in message.lower() or "not been authorized" in message.lower() else 502
+        status_code = 503 if exc.status.value in {"not_configured", "authorization_required", "reauthorization_required"} else 502
         raise HTTPException(status_code=status_code, detail=message) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail="QuickBooks operation failed") from exc
@@ -44,6 +45,25 @@ def get_accounts(principal: AuthenticatedPrincipal = Depends(require_permission(
     return {"count": len(accounts), "accounts": accounts}
 
 
+@router.get("/resources/{resource}")
+def get_resource(
+    resource: Literal["customers", "vendors", "accounts", "invoices", "payments", "bills", "purchases", "journal_entries"],
+    changed_since: str | None = Query(default=None),
+    cursor: int | None = Query(default=None, ge=1),
+    limit: int = Query(default=100, ge=1, le=1000),
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.FINANCIAL_READ)),
+) -> dict[str, Any]:
+    rows, next_cursor = _safe_call(
+        lambda: _connector(principal.organization_id).list_resource_page(
+            resource,
+            changed_since=changed_since,
+            cursor=cursor,
+            limit=limit,
+        )
+    )
+    return {"resource": resource, "count": len(rows), "records": rows, "next_cursor": next_cursor}
+
+
 def _get_report(organization_id: str, report_name: str, start_date: date | None, end_date: date | None, accounting_method: Literal["Accrual", "Cash"]) -> dict[str, Any]:
     return _safe_call(lambda: _connector(organization_id).report(report_name, start_date=start_date, end_date=end_date, accounting_method=accounting_method))
 
@@ -55,7 +75,7 @@ def get_profit_and_loss(
     accounting_method: Literal["Accrual", "Cash"] = Query(default="Accrual"),
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.FINANCIAL_READ)),
 ) -> dict[str, Any]:
-    return _get_report(principal.organization_id, "ProfitAndLoss", start_date, end_date, accounting_method)
+    return _get_report(principal.organization_id, "profit_loss", start_date, end_date, accounting_method)
 
 
 @router.get("/reports/balance-sheet")
@@ -65,7 +85,7 @@ def get_balance_sheet(
     accounting_method: Literal["Accrual", "Cash"] = Query(default="Accrual"),
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.FINANCIAL_READ)),
 ) -> dict[str, Any]:
-    return _get_report(principal.organization_id, "BalanceSheet", start_date, end_date, accounting_method)
+    return _get_report(principal.organization_id, "balance_sheet", start_date, end_date, accounting_method)
 
 
 @router.get("/reports/cash-flow")
@@ -75,23 +95,61 @@ def get_cash_flow(
     accounting_method: Literal["Accrual", "Cash"] = Query(default="Accrual"),
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.FINANCIAL_READ)),
 ) -> dict[str, Any]:
-    return _get_report(principal.organization_id, "CashFlow", start_date, end_date, accounting_method)
+    return _get_report(principal.organization_id, "cash_flow", start_date, end_date, accounting_method)
+
+
+@router.get("/reports/aged-receivables")
+def get_aged_receivables(
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    accounting_method: Literal["Accrual", "Cash"] = Query(default="Accrual"),
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.FINANCIAL_READ)),
+) -> dict[str, Any]:
+    return _get_report(principal.organization_id, "aged_receivables", start_date, end_date, accounting_method)
+
+
+@router.get("/reports/aged-payables")
+def get_aged_payables(
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    accounting_method: Literal["Accrual", "Cash"] = Query(default="Accrual"),
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.FINANCIAL_READ)),
+) -> dict[str, Any]:
+    return _get_report(principal.organization_id, "aged_payables", start_date, end_date, accounting_method)
 
 
 @router.post("/sync")
 def synchronize_financials(
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
+    mode: Literal["full", "incremental"] = Query(default="full"),
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.FINANCIAL_WRITE)),
 ) -> dict[str, Any]:
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=422, detail="start_date must not exceed end_date")
-    return _safe_call(lambda: QuickBooksFinancialSyncService(principal.organization_id).sync(start_date=start_date, end_date=end_date))
+    return _safe_call(lambda: QuickBooksFinancialSyncService(principal.organization_id).sync(start_date=start_date, end_date=end_date, mode=mode))
 
 
 @router.get("/sync/status")
 def synchronization_status(principal: AuthenticatedPrincipal = Depends(require_permission(Permission.FINANCIAL_READ))) -> dict[str, Any]:
     return QuickBooksFinancialSyncService(principal.organization_id).status()
+
+
+@router.get("/verification")
+def verification_status(principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ))) -> dict[str, Any]:
+    return _connector(principal.organization_id).safe_status(include_resources=True)
+
+
+@router.post("/verification")
+def run_verification(
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    page_size: int = Query(default=100, ge=1, le=1000),
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_WRITE)),
+) -> dict[str, Any]:
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=422, detail="start_date must not exceed end_date")
+    return _safe_call(lambda: QuickBooksFinancialSyncService(principal.organization_id).verification(start_date=start_date, end_date=end_date, page_size=page_size))
 
 
 @router.get("/executive-summary")
@@ -134,8 +192,8 @@ def _latest_snapshot(session, organization_id: str, snapshot_type: str) -> Finan
     return session.query(FinancialSnapshot).filter_by(organization_id=organization_id, snapshot_type=snapshot_type).order_by(FinancialSnapshot.captured_at.desc()).first()
 
 
-def _report_values(payload: dict[str, Any]) -> dict[str, float]:
-    values: dict[str, float] = {}
+def _report_values(payload: dict[str, Any]) -> dict[str, str]:
+    values: dict[str, str] = {}
 
     def visit(node: Any) -> None:
         if isinstance(node, dict):
@@ -143,11 +201,10 @@ def _report_values(payload: dict[str, Any]) -> dict[str, float]:
             if isinstance(columns, list) and columns:
                 label = str((columns[0] or {}).get("value") or "").strip().lower()
                 for column in reversed(columns[1:]):
-                    try:
-                        values[label] = float((column or {}).get("value"))
+                    amount = _decimal_text((column or {}).get("value"))
+                    if amount is not None:
+                        values[label] = amount
                         break
-                    except (TypeError, ValueError):
-                        continue
             for value in node.values():
                 visit(value)
         elif isinstance(node, list):
@@ -158,8 +215,15 @@ def _report_values(payload: dict[str, Any]) -> dict[str, float]:
     return values
 
 
-def _first(values: dict[str, float], *names: str) -> float | None:
+def _first(values: dict[str, str], *names: str) -> str | None:
     for name in names:
         if name in values:
             return values[name]
     return None
+
+
+def _decimal_text(value: Any) -> str | None:
+    try:
+        return str(Decimal(str(value)))
+    except (InvalidOperation, TypeError, ValueError):
+        return None

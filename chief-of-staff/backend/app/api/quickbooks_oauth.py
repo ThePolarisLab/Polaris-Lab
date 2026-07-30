@@ -7,7 +7,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 
-from app.connectors.quickbooks import QuickBooksConnector
+from app.connectors.quickbooks import QuickBooksConnector, QuickBooksConnectorError
 from app.connectors.quickbooks_credentials import QuickBooksCredentialStore
 from app.connectors.quickbooks_oauth import QuickBooksOAuthError, QuickBooksOAuthService
 from app.security.dependencies import require_permission
@@ -20,15 +20,28 @@ def _connector_manager(principal: AuthenticatedPrincipal = Depends(require_permi
     return principal
 
 
+def _authorization_url(principal: AuthenticatedPrincipal) -> str:
+    return QuickBooksOAuthService().authorization_url(
+        organization_id=principal.organization_id,
+        identity_id=principal.identity_id,
+    )
+
+
+@router.get("/authorize-url")
+def quickbooks_authorization_url(principal: AuthenticatedPrincipal = Depends(_connector_manager)) -> dict[str, str]:
+    """Return the Intuit authorization URL after normal Polaris auth headers are validated."""
+    try:
+        return {"authorization_url": _authorization_url(principal)}
+    except QuickBooksOAuthError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.get("/authorize")
 def authorize_quickbooks(principal: AuthenticatedPrincipal = Depends(_connector_manager)) -> RedirectResponse:
     """Start the dedicated Polaris QuickBooks authorization flow."""
     try:
         return RedirectResponse(
-            QuickBooksOAuthService().authorization_url(
-                organization_id=principal.organization_id,
-                identity_id=principal.identity_id,
-            ),
+            _authorization_url(principal),
             status_code=status.HTTP_307_TEMPORARY_REDIRECT,
         )
     except QuickBooksOAuthError as exc:
@@ -63,5 +76,11 @@ def quickbooks_callback(
 @router.delete("/connection")
 def disconnect_quickbooks(principal: AuthenticatedPrincipal = Depends(_connector_manager)) -> dict[str, bool | str]:
     """Remove the stored QuickBooks authorization for the active organization."""
-    QuickBooksCredentialStore(principal.organization_id).delete()
-    return {"disconnected": True, "organization_id": principal.organization_id}
+    store = QuickBooksCredentialStore(principal.organization_id)
+    try:
+        QuickBooksConnector(credential_store=store).disconnect(revoke=True)
+    except (QuickBooksConnectorError, QuickBooksOAuthError):
+        # Local deletion is still safe and tenant-bound when provider revocation is unavailable.
+        pass
+    store.delete()
+    return {"disconnected": True, "organization_id": principal.organization_id, "revocation_attempted": True}

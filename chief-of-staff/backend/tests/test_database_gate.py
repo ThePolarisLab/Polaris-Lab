@@ -7,6 +7,7 @@ import sys
 import textwrap
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
+ALEMBIC_HEAD = "202607300001"
 
 
 def _sqlite_url(path: Path) -> str:
@@ -65,6 +66,12 @@ def test_clean_sqlite_upgrade_head_starts_and_has_expected_schema(tmp_path: Path
         columns = {column['name']: column for column in inspector.get_columns('trucks')}
         assert 'organization_id' in columns
         assert columns['organization_id']['nullable'] is False
+        credential_columns = {column['name'] for column in inspector.get_columns('quickbooks_oauth_credentials')}
+        assert 'verified_company_name' in credential_columns
+        assert 'reauthorization_required' in credential_columns
+        history_columns = {column['name'] for column in inspector.get_columns('financial_sync_history')}
+        assert 'sync_mode' in history_columns
+        assert 'checkpoint_after' in history_columns
         indexes = {index['name'] for index in inspector.get_indexes('trucks')}
         assert 'ix_trucks_organization_id' in indexes
         unique_constraints = {constraint['name'] for constraint in inspector.get_unique_constraints('trucks')}
@@ -79,7 +86,7 @@ def test_clean_sqlite_upgrade_head_starts_and_has_expected_schema(tmp_path: Path
 def test_upgrade_head_is_idempotent(tmp_path: Path) -> None:
     db_url = _sqlite_url(tmp_path / "idempotent.db")
     _run_python(
-        """
+        f"""
         from alembic import command
         from alembic.config import Config
         from sqlalchemy import create_engine, inspect
@@ -88,7 +95,7 @@ def test_upgrade_head_is_idempotent(tmp_path: Path) -> None:
         command.upgrade(config, 'head')
         command.upgrade(config, 'head')
         version = create_engine(__import__('os').environ['DATABASE_URL']).connect().exec_driver_sql('SELECT version_num FROM alembic_version').scalar_one()
-        assert version == '202607290003'
+        assert version == '{ALEMBIC_HEAD}'
         assert 'organizations' in inspect(create_engine(__import__('os').environ['DATABASE_URL'])).get_table_names()
         """,
         db_url,
@@ -130,7 +137,7 @@ def test_tenant_table_inventories_are_complete() -> None:
 def test_current_seeded_database_upgrade_preserves_tenant_rows(tmp_path: Path) -> None:
     db_url = _sqlite_url(tmp_path / "current-seeded.db")
     _run_python(
-        """
+        f"""
         import os
         import sqlite3
         from alembic import command
@@ -166,7 +173,7 @@ def test_current_seeded_database_upgrade_preserves_tenant_rows(tmp_path: Path) -
 
         connection = sqlite3.connect(path)
         assert connection.execute('SELECT organization_id, details FROM memory_entries WHERE id = 1').fetchone() == ('org-a', 'preserve me')
-        assert connection.execute('SELECT version_num FROM alembic_version').fetchone()[0] == '202607290003'
+        assert connection.execute('SELECT version_num FROM alembic_version').fetchone()[0] == '{ALEMBIC_HEAD}'
         """,
         db_url,
     )
@@ -175,7 +182,7 @@ def test_current_seeded_database_upgrade_preserves_tenant_rows(tmp_path: Path) -
 def test_legacy_single_organization_backfills_and_preserves_sensitive_rows(tmp_path: Path) -> None:
     db_url = _sqlite_url(tmp_path / "legacy-single.db")
     _run_python(
-        """
+        f"""
         import os
         import sqlite3
         from alembic import command
@@ -220,7 +227,7 @@ def test_legacy_single_organization_backfills_and_preserves_sensitive_rows(tmp_p
         assert created_at == '2026-01-02T03:04:05'
         credential = connection.execute('SELECT id, organization_id, realm_id, encrypted_refresh_token, connected_at, updated_at FROM quickbooks_oauth_credentials WHERE id = 7').fetchone()
         assert credential == (7, 'org-a', 'realm-1', 'encrypted-refresh-token-value', '2026-01-03T00:00:00', '2026-01-04T00:00:00')
-        assert connection.execute('SELECT version_num FROM alembic_version').fetchone()[0] == '202607290003'
+        assert connection.execute('SELECT version_num FROM alembic_version').fetchone()[0] == '{ALEMBIC_HEAD}'
         """,
         db_url,
     )
@@ -317,7 +324,7 @@ def test_legacy_rows_without_organization_fail_safely(tmp_path: Path) -> None:
 def test_no_organization_legacy_rows_can_be_backfilled_only_with_explicit_bootstrap(tmp_path: Path) -> None:
     db_url = _sqlite_url(tmp_path / "legacy-no-org-explicit.db")
     _run_python(
-        """
+        f"""
         import os
         import sqlite3
         from alembic import command
@@ -339,7 +346,7 @@ def test_no_organization_legacy_rows_can_be_backfilled_only_with_explicit_bootst
         connection = sqlite3.connect(path)
         assert connection.execute('SELECT id, slug, display_name FROM organizations').fetchone() == ('org-mor', 'mor-logistics', 'MOR Logistics Manitoba Limited')
         assert connection.execute('SELECT organization_id, details FROM memory_entries WHERE id = 1').fetchone() == ('org-mor', 'preserve me')
-        assert connection.execute('SELECT version_num FROM alembic_version').fetchone()[0] == '202607290003'
+        assert connection.execute('SELECT version_num FROM alembic_version').fetchone()[0] == '{ALEMBIC_HEAD}'
         """,
         db_url,
         extra_env={

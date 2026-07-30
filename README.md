@@ -32,3 +32,16 @@ python -m alembic upgrade head && python -m uvicorn app.main:app --host 0.0.0.0 
 Set `POLARIS_FRONTEND_URL` to the deployed frontend origin, not `localhost`, for hosted environments.
 
 See `docs/database/database-lifecycle.md`, `docs/database/tenant-backfill-plan.md`, `docs/database/rollback-and-recovery.md`, and `docs/deployment/render-persistent-deployment.md` for the full Phase 2/2.1 database lifecycle process.
+
+## QuickBooks Production Setup
+
+Phase 3A keeps QuickBooks Online read-only and tenant-bound. Configure Intuit credentials in Render or another secret manager, never in GitHub or source control. Use `chief-of-staff/backend/.env.quickbooks.example` as the variable inventory.
+
+Production prerequisites:
+
+- hosted `DATABASE_URL` points to persistent PostgreSQL, not temporary SQLite;
+- `python -m alembic upgrade head` succeeds before API startup;
+- public `/` and `/health` expose only generic status;
+- `POLARIS_FRONTEND_URL` points to the deployed frontend origin.
+
+Operator setup and smoke-test steps are documented in `docs/integrations/quickbooks-production-runbook.md`. Runtime ownership and the Python/Hermes boundary are documented in `docs/architecture/ADR-026-quickbooks-runtime-ownership.md`.
