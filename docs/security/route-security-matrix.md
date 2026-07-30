@@ -1,6 +1,6 @@
 # FastAPI Route Security Matrix
 
-Baseline branch: `phase1.1/tenant-isolation-hardening`  
+Baseline branch: `phase2/database-gate`  
 Scope: Polaris Chief of Staff FastAPI routers mounted from `chief-of-staff/backend/app/main.py`.
 
 ## Classification Legend
@@ -96,8 +96,10 @@ Scope: Polaris Chief of Staff FastAPI routers mounted from `chief-of-staff/backe
 
 Every query over tenant-owned records must filter by `AuthenticatedPrincipal.organization_id`. See `docs/security/tenant-isolation.md` for the ownership inventory.
 
+## Database Gate Note
+
+Phase 2 does not add HTTP routes. It makes tenant-owned schema enforcement Alembic-managed and blocks staging/production startup when the database is unversioned or stale. Existing route classifications above remain unchanged.
+
 ## Remaining Later-Phase Work
 
-- Backfill/migrate existing persistent environments through the Database Gate.
-- Replace `Base.metadata.create_all` with migrations in the Database Gate.
-- Continue Motive, Outlook, API versioning, deployment, and CI expansion outside this phase.
+- Continue Motive, Outlook, API versioning, deployment infrastructure, and non-database CI expansion outside this phase.
