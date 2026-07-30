@@ -89,6 +89,31 @@ def test_authorized_access_succeeds(client):
     assert response.json()["company_name"] == "MOR Logistics Manitoba Limited"
 
 
+def test_public_root_and_health_do_not_expose_runtime_metadata(client):
+    for path in ("/", "/health"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+        serialized = response.text.lower()
+        assert "environment" not in serialized
+        assert "organization" not in serialized
+        assert "polaris_" not in serialized
+        assert "capabilities" not in serialized
+
+
+def test_detailed_system_metadata_requires_authentication(client):
+    for path in ("/api/v1/system/health", "/api/v1/system/info", "/api/v1/system/version"):
+        response = client.get(path)
+        assert response.status_code == 401
+
+
+def test_detailed_system_metadata_is_authenticated(client):
+    headers = seed_identity(role="owner")
+    response = client.get("/api/v1/system/info", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["environment"] == "test"
+
+
 def test_connector_disconnect_requires_manage_permission(client):
     headers = seed_identity(role="viewer")
     response = client.delete("/api/v1/connectors/quickbooks/oauth/connection", headers=headers)
