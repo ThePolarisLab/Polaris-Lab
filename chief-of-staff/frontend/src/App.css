@@ -29,6 +29,76 @@ a:focus-visible {
   outline-offset: 3px;
 }
 
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #07131c;
+}
+
+.login-panel {
+  width: min(100%, 430px);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.24);
+}
+
+.login-brand {
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+
+.login-form {
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+}
+
+.login-form h1 {
+  margin: 0 0 4px;
+  font-size: 1.5rem;
+}
+
+.login-form label {
+  display: grid;
+  gap: 7px;
+  color: #9fb5c1;
+  font-size: 0.84rem;
+  font-weight: 750;
+}
+
+.login-form input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #edf8fb;
+  background: rgba(3, 11, 17, 0.82);
+  padding: 9px 11px;
+}
+
+.auth-message,
+.forbidden-banner {
+  border: 1px solid rgba(255, 193, 94, 0.3);
+  color: #ffd391;
+  background: rgba(158, 99, 20, 0.14);
+}
+
+.auth-message {
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 0.84rem;
+}
+
+.forbidden-banner {
+  margin: 16px clamp(20px, 4vw, 58px) 0;
+  border-radius: 8px;
+  padding: 11px 14px;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
 .polaris-app-shell {
   min-height: 100vh;
   display: grid;
@@ -408,6 +478,15 @@ a:focus-visible {
 
 .workspace-overlay {
   display: none;
+}
+
+.primary-button {
+  min-height: 42px;
+  border: 0;
+  border-radius: 8px;
+  color: #041018;
+  background: #8bd2ef;
+  font-weight: 800;
 }
 
 @media (max-width: 960px) {

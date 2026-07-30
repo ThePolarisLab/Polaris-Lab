@@ -6,6 +6,7 @@ from app.connectors.base import BaseConnector
 from app.connectors.models import ConnectorHealth, ConnectorStatus, SyncResult
 from app.connectors.registry import ConnectorRegistry, connector_registry
 from app.main import app
+from tests.auth_helpers import seed_principal
 
 
 class ExampleConnector(BaseConnector):
@@ -57,8 +58,9 @@ def test_connector_health_api() -> None:
     connector_registry.clear()
     connector_registry.register(ExampleConnector())
     client = TestClient(app)
+    _, _, headers = seed_principal("viewer")
 
-    response = client.get("/api/v1/connectors")
+    response = client.get("/api/v1/connectors", headers=headers)
 
     assert response.status_code == 200
     assert response.json()[0]["name"] == "example"

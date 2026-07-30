@@ -9,9 +9,13 @@ from app.database.database import SessionLocal
 from app.events import ConnectorEvent, EventActor, EventSource, EventSubject, event_bus
 from app.organizations.schemas import OrganizationCreate, OrganizationRead
 from app.organizations.service import OrganizationConflictError, OrganizationService
+from app.security.dependencies import require_organization_path_match, require_permission
+from app.security.models import AuthenticatedPrincipal, Permission
 
 
 router = APIRouter(prefix="/api/v1/organizations", tags=["organizations"])
+
+organization_manage = Depends(require_permission(Permission.ORGANIZATION_MANAGE))
 
 
 def get_session() -> Generator[Session, None, None]:
@@ -22,7 +26,7 @@ def get_session() -> Generator[Session, None, None]:
         session.close()
 
 
-@router.post("", response_model=OrganizationRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=OrganizationRead, status_code=status.HTTP_201_CREATED, dependencies=[organization_manage])
 def create_organization(
     request: OrganizationCreate,
     session: Session = Depends(get_session),
@@ -55,7 +59,7 @@ def create_organization(
     return OrganizationRead.model_validate(organization)
 
 
-@router.get("", response_model=list[OrganizationRead])
+@router.get("", response_model=list[OrganizationRead], dependencies=[organization_manage])
 def list_organizations(session: Session = Depends(get_session)) -> list[OrganizationRead]:
     return [
         OrganizationRead.model_validate(item)
@@ -63,9 +67,10 @@ def list_organizations(session: Session = Depends(get_session)) -> list[Organiza
     ]
 
 
-@router.get("/{organization_id}", response_model=OrganizationRead)
+@router.get("/{organization_id}", response_model=OrganizationRead, dependencies=[organization_manage])
 def get_organization(
     organization_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_organization_path_match),
     session: Session = Depends(get_session),
 ) -> OrganizationRead:
     organization = OrganizationService(session).get(organization_id)

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.github_engine.client import GitHubClient, GitHubEngineError
 from app.github_engine.schemas import (
@@ -7,12 +7,17 @@ from app.github_engine.schemas import (
     GitHubOperationResult,
     PullRequestCreateRequest,
 )
+from app.security.dependencies import require_permission
+from app.security.models import Permission
 
 
 router = APIRouter(
     prefix="/api/v1/github",
     tags=["Polaris GitHub Engine"],
 )
+
+github_read = Depends(require_permission(Permission.CONNECTOR_READ))
+github_manage = Depends(require_permission(Permission.CONNECTOR_MANAGE))
 
 
 def run(operation):
@@ -22,7 +27,7 @@ def run(operation):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@router.get("/status", response_model=GitHubOperationResult)
+@router.get("/status", response_model=GitHubOperationResult, dependencies=[github_read])
 def status():
     def op():
         client = GitHubClient()
@@ -42,7 +47,7 @@ def status():
     return run(op)
 
 
-@router.get("/branches", response_model=GitHubOperationResult)
+@router.get("/branches", response_model=GitHubOperationResult, dependencies=[github_read])
 def branches():
     return run(
         lambda: GitHubOperationResult(
@@ -60,7 +65,7 @@ def branches():
     )
 
 
-@router.get("/repository", response_model=GitHubOperationResult)
+@router.get("/repository", response_model=GitHubOperationResult, dependencies=[github_read])
 def repository():
     def op():
         repo = GitHubClient().repository_info()
@@ -82,7 +87,7 @@ def repository():
     return run(op)
 
 
-@router.get("/tree", response_model=GitHubOperationResult)
+@router.get("/tree", response_model=GitHubOperationResult, dependencies=[github_read])
 def repository_tree(
     ref: str = Query(default="main", min_length=1, max_length=200),
     recursive: bool = Query(default=True),
@@ -112,7 +117,7 @@ def repository_tree(
     return run(op)
 
 
-@router.get("/files/read", response_model=GitHubOperationResult)
+@router.get("/files/read", response_model=GitHubOperationResult, dependencies=[github_read])
 def read_file(
     path: str = Query(min_length=1, max_length=1000),
     ref: str = Query(default="main", min_length=1, max_length=200),
@@ -126,7 +131,7 @@ def read_file(
     )
 
 
-@router.get("/search", response_model=GitHubOperationResult)
+@router.get("/search", response_model=GitHubOperationResult, dependencies=[github_read])
 def search_code(
     q: str = Query(min_length=1, max_length=300),
     ref: str | None = Query(default=None, max_length=200),
@@ -158,7 +163,7 @@ def search_code(
     return run(op)
 
 
-@router.get("/commits", response_model=GitHubOperationResult)
+@router.get("/commits", response_model=GitHubOperationResult, dependencies=[github_read])
 def commits(
     ref: str = Query(default="main", min_length=1, max_length=200),
     path: str | None = Query(default=None, max_length=1000),
@@ -191,7 +196,7 @@ def commits(
     return run(op)
 
 
-@router.post("/branches", response_model=GitHubOperationResult)
+@router.post("/branches", response_model=GitHubOperationResult, dependencies=[github_manage])
 def create_branch(payload: BranchCreateRequest):
     return run(
         lambda: GitHubOperationResult(
@@ -205,7 +210,7 @@ def create_branch(payload: BranchCreateRequest):
     )
 
 
-@router.put("/files", response_model=GitHubOperationResult)
+@router.put("/files", response_model=GitHubOperationResult, dependencies=[github_manage])
 def write_file(payload: FileWriteRequest):
     return run(
         lambda: GitHubOperationResult(
@@ -222,7 +227,7 @@ def write_file(payload: FileWriteRequest):
     )
 
 
-@router.post("/pull-requests", response_model=GitHubOperationResult)
+@router.post("/pull-requests", response_model=GitHubOperationResult, dependencies=[github_manage])
 def create_pr(payload: PullRequestCreateRequest):
     return run(
         lambda: GitHubOperationResult(

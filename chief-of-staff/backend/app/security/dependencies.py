@@ -21,16 +21,16 @@ def get_session() -> Generator[Session, None, None]:
 
 def get_principal(
     authorization: str | None = Header(default=None),
-    organization_id: str | None = Header(default=None, alias="X-Polaris-Organization"),
+    organization_header: str | None = Header(default=None, alias="X-Polaris-Organization"),
     session: Session = Depends(get_session),
 ) -> AuthenticatedPrincipal:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="bearer credential required")
-    if not organization_id:
+    if not organization_header:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="organization header required")
     try:
         return SecurityService(session).authenticate(
-            LocalTokenProvider(), authorization.removeprefix("Bearer ").strip(), organization_id
+            LocalTokenProvider(), authorization.removeprefix("Bearer ").strip(), organization_header
         )
     except AuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
@@ -49,3 +49,12 @@ def require_permission(permission: Permission) -> Callable[..., AuthenticatedPri
         return principal
 
     return dependency
+
+
+def require_organization_path_match(
+    organization_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_principal),
+) -> AuthenticatedPrincipal:
+    if organization_id != principal.organization_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="organization access denied")
+    return principal

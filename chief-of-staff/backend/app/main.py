@@ -16,7 +16,7 @@ from app.models.financial_snapshot import FinancialAccount, FinancialSnapshot, F
 from app.missions.models import Mission, MissionTask, Workflow
 from app.organizations.models import Organization
 from app.identity.models import Identity, OrganizationMembership
-from app.connectors.quickbooks_credentials import QuickBooksOAuthCredential
+from app.connectors.quickbooks_credentials import QuickBooksOAuthCredential, QuickBooksOAuthState
 
 # API Routers
 from app.api.chat import router as chat_router
@@ -60,15 +60,10 @@ app.add_middleware(
 )
 
 organization_read = [Depends(require_permission(Permission.ORGANIZATION_READ))]
-organization_manage = [Depends(require_permission(Permission.ORGANIZATION_MANAGE))]
-identity_read = [Depends(require_permission(Permission.IDENTITY_READ))]
-identity_manage = [Depends(require_permission(Permission.IDENTITY_MANAGE))]
-connector_read = [Depends(require_permission(Permission.CONNECTOR_READ))]
-connector_manage = [Depends(require_permission(Permission.CONNECTOR_MANAGE))]
 executive_read = [Depends(require_permission(Permission.EXECUTIVE_READ))]
 
 app.include_router(company_router, dependencies=organization_read)
-app.include_router(truck_router, dependencies=organization_read)
+app.include_router(truck_router)
 app.include_router(memory_router, dependencies=executive_read)
 app.include_router(chat_router, dependencies=executive_read)
 app.include_router(missions_router, dependencies=executive_read)
@@ -77,17 +72,17 @@ app.include_router(memory_search_router, dependencies=executive_read)
 app.include_router(reasoning_router, dependencies=executive_read)
 app.include_router(team_notes_router, dependencies=executive_read)
 app.include_router(dashboard_router, dependencies=executive_read)
-app.include_router(github_engine_router, dependencies=connector_read)
-app.include_router(code_understanding_router, dependencies=connector_read)
-app.include_router(refactoring_router, dependencies=connector_manage)
+app.include_router(github_engine_router)
+app.include_router(code_understanding_router, dependencies=[Depends(require_permission(Permission.CONNECTOR_READ))])
+app.include_router(refactoring_router, dependencies=[Depends(require_permission(Permission.CONNECTOR_READ))])
 app.include_router(work_context_router, dependencies=executive_read)
-app.include_router(system_router, dependencies=organization_read)
-app.include_router(connectors_router, dependencies=connector_manage)
-app.include_router(quickbooks_oauth_router, dependencies=connector_manage)
-app.include_router(quickbooks_financials_router, dependencies=connector_manage)
+app.include_router(system_router)
+app.include_router(connectors_router)
+app.include_router(quickbooks_oauth_router)
+app.include_router(quickbooks_financials_router)
 app.include_router(events_router, dependencies=organization_read)
-app.include_router(organizations_router, dependencies=organization_manage)
-app.include_router(identity_router, dependencies=identity_manage)
+app.include_router(organizations_router)
+app.include_router(identity_router)
 app.include_router(auth_router)
 
 
