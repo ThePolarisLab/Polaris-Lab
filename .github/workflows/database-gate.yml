@@ -108,6 +108,8 @@ jobs:
         run: |
           alembic upgrade head
           alembic current
+      - name: Idempotent PostgreSQL upgrade
+        run: alembic upgrade head
 
   backend-tests:
     name: Backend pytest
