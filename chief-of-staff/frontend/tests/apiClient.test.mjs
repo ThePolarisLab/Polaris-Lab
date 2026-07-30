@@ -43,6 +43,22 @@ test("attaches bearer token and organization headers", async () => {
   assert.equal(captured.options.headers["X-Polaris-Organization"], "org-1");
 });
 
+test("sends authenticated delete requests", async () => {
+  reset();
+  api.setAuthSession({ accessToken: "token-1", organizationId: "org-1" });
+  let captured;
+  globalThis.fetch = async (url, options) => {
+    captured = { url, options };
+    return { ok: true, status: 200, json: async () => ({ disconnected: true }) };
+  };
+
+  await api.apiClient.delete("/api/v1/connectors/quickbooks/oauth/connection");
+
+  assert.equal(captured.options.method, "DELETE");
+  assert.equal(captured.options.headers.Authorization, "Bearer token-1");
+  assert.equal(captured.options.headers["X-Polaris-Organization"], "org-1");
+});
+
 test("clears session and emits auth change on 401", async () => {
   reset();
   api.setAuthSession({ accessToken: "expired", organizationId: "org-1" });
