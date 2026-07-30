@@ -74,13 +74,42 @@ def _tenant_rows_needing_backfill(table_name: str) -> int:
     return int(_scalar(f"SELECT COUNT(*) FROM {table_name} WHERE organization_id IS NULL") or 0)
 
 
+def _legacy_bootstrap_organization(explicit_id: str, organization_ids: list[str]) -> str | None:
+    if organization_ids or not explicit_id or "organizations" not in _tables():
+        return None
+
+    slug = os.getenv("POLARIS_TENANT_BACKFILL_ORGANIZATION_SLUG", "").strip()
+    display_name = os.getenv("POLARIS_TENANT_BACKFILL_ORGANIZATION_NAME", "").strip()
+    if not slug or not display_name:
+        return None
+
+    _execute(
+        """
+        INSERT INTO organizations (id, slug, display_name, legal_name, status, created_at, updated_at)
+        VALUES (:id, :slug, :display_name, NULL, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        id=explicit_id,
+        slug=slug,
+        display_name=display_name,
+    )
+    return explicit_id
+
+
 def _backfill_organization_id() -> str | None:
     organization_ids = _organization_ids()
     explicit = os.getenv("POLARIS_TENANT_BACKFILL_ORGANIZATION_ID", "").strip()
+    bootstrapped = _legacy_bootstrap_organization(explicit, organization_ids)
+    if bootstrapped:
+        return bootstrapped
+
+    organization_ids = _organization_ids()
     if explicit:
         if explicit not in organization_ids:
             raise RuntimeError(
-                "POLARIS_TENANT_BACKFILL_ORGANIZATION_ID does not match an existing organization"
+                "POLARIS_TENANT_BACKFILL_ORGANIZATION_ID does not match an existing organization. "
+                "For a no-organization legacy database, also provide "
+                "POLARIS_TENANT_BACKFILL_ORGANIZATION_SLUG and "
+                "POLARIS_TENANT_BACKFILL_ORGANIZATION_NAME after taking a verified backup."
             )
         return explicit
     if len(organization_ids) == 1:
@@ -176,7 +205,11 @@ def upgrade() -> None:
         if organization_id is None:
             raise RuntimeError(
                 "Legacy tenant backfill found tenant-owned rows but no organizations. "
-                "Create or map an organization after taking a verified backup, then retry."
+                "Create or map an organization after taking a verified backup, then retry. "
+                "On shell-less deployments, provide POLARIS_TENANT_BACKFILL_ORGANIZATION_ID, "
+                "POLARIS_TENANT_BACKFILL_ORGANIZATION_SLUG, and "
+                "POLARIS_TENANT_BACKFILL_ORGANIZATION_NAME only after verifying all legacy rows "
+                "belong to that organization."
             )
         for table_name in tables_with_null_rows:
             _execute(
