@@ -48,16 +48,20 @@ def test_clean_sqlite_upgrade_head_starts_and_has_expected_schema(tmp_path: Path
         """
         from alembic import command
         from alembic.config import Config
-        from sqlalchemy import create_engine, inspect
+        from sqlalchemy import create_engine, inspect, text
         from app.database.schema_guard import assert_database_at_head
 
         command.upgrade(Config('alembic.ini'), 'head')
         assert_database_at_head()
-        inspector = inspect(create_engine(__import__('os').environ['DATABASE_URL']))
+        engine = create_engine(__import__('os').environ['DATABASE_URL'])
+        inspector = inspect(engine)
         tables = set(inspector.get_table_names())
         assert 'organizations' in tables
         assert 'trucks' in tables
         assert 'quickbooks_oauth_credentials' in tables
+        with engine.connect() as connection:
+            assert connection.execute(text('SELECT COUNT(*) FROM organizations')).scalar_one() == 0
+            assert connection.execute(text('SELECT COUNT(*) FROM memory_entries')).scalar_one() == 0
         columns = {column['name']: column for column in inspector.get_columns('trucks')}
         assert 'organization_id' in columns
         assert columns['organization_id']['nullable'] is False
@@ -118,6 +122,51 @@ def test_tenant_table_inventories_are_complete() -> None:
         assert set(add_columns.TENANT_TABLES) == expected
         assert set(backfill.TENANT_TABLES) == expected
         assert set(validator_tables) == expected
+        """,
+        db_url,
+    )
+
+
+def test_current_seeded_database_upgrade_preserves_tenant_rows(tmp_path: Path) -> None:
+    db_url = _sqlite_url(tmp_path / "current-seeded.db")
+    _run_python(
+        """
+        import os
+        import sqlite3
+        from alembic import command
+        from alembic.config import Config
+
+        path = os.environ['DATABASE_URL'].removeprefix('sqlite:///')
+        connection = sqlite3.connect(path)
+        connection.executescript('''
+        CREATE TABLE organizations (id TEXT PRIMARY KEY, slug TEXT, display_name TEXT, legal_name TEXT, status TEXT, created_at TEXT, updated_at TEXT);
+        CREATE TABLE identities (id TEXT PRIMARY KEY, email TEXT, display_name TEXT, status TEXT, created_at TEXT, updated_at TEXT);
+        CREATE TABLE organization_memberships (id INTEGER PRIMARY KEY, organization_id TEXT, identity_id TEXT, role TEXT, status TEXT, created_at TEXT);
+        CREATE TABLE companies (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, name TEXT, description TEXT, website TEXT, industry TEXT, location TEXT, mission TEXT, created_at TEXT, updated_at TEXT);
+        CREATE TABLE trucks (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, unit_number TEXT, make TEXT, model TEXT, year INTEGER, vin TEXT, license_plate TEXT, status TEXT, notes TEXT, created_at TEXT, updated_at TEXT);
+        CREATE TABLE memory_entries (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, category TEXT, title TEXT, details TEXT, importance INTEGER, source TEXT, created_at TEXT);
+        CREATE TABLE knowledge_relationships (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, source TEXT, target TEXT, relation TEXT, created_at TEXT);
+        CREATE TABLE missions (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, code TEXT, title TEXT, description TEXT, status TEXT, priority TEXT, owner TEXT, company TEXT, progress INTEGER, created_at TEXT, started_at TEXT, due_at TEXT, completed_at TEXT);
+        CREATE TABLE mission_workflows (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, mission_id INTEGER, title TEXT, status TEXT, progress INTEGER, position INTEGER);
+        CREATE TABLE mission_tasks (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, workflow_id INTEGER, title TEXT, status TEXT, position INTEGER, system TEXT, capability TEXT, notes TEXT, completed_at TEXT);
+        CREATE TABLE team_notes (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, author TEXT, note_type TEXT, status TEXT, title TEXT, details TEXT, target_entity TEXT, assigned_to TEXT, due_at TEXT, created_at TEXT, updated_at TEXT, resolved_at TEXT);
+        CREATE TABLE financial_accounts (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, qbo_id TEXT, name TEXT, fully_qualified_name TEXT, account_type TEXT, account_subtype TEXT, active INTEGER, current_balance REAL, payload TEXT, synced_at TEXT);
+        CREATE TABLE financial_snapshots (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, snapshot_type TEXT, period_start TEXT, period_end TEXT, accounting_method TEXT, payload TEXT, captured_at TEXT);
+        CREATE TABLE financial_sync_history (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, status TEXT, started_at TEXT, completed_at TEXT, duration_ms INTEGER, accounts_imported INTEGER, company_name TEXT, error_message TEXT);
+        CREATE TABLE quickbooks_oauth_credentials (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, realm_id TEXT, encrypted_refresh_token TEXT, scopes TEXT, connected_at TEXT, updated_at TEXT);
+        CREATE TABLE quickbooks_oauth_states (state TEXT PRIMARY KEY, organization_id TEXT NOT NULL, identity_id TEXT, created_at TEXT, expires_at TEXT, consumed_at TEXT);
+        INSERT INTO organizations VALUES ('org-a', 'org-a', 'Org A', NULL, 'active', '2026-01-01', '2026-01-01');
+        INSERT INTO memory_entries VALUES (1, 'org-a', 'ops', 'Seeded memory', 'preserve me', 3, 'test', '2026-01-02');
+        ''')
+        connection.commit()
+        connection.close()
+
+        command.stamp(Config('alembic.ini'), '202607290001')
+        command.upgrade(Config('alembic.ini'), 'head')
+
+        connection = sqlite3.connect(path)
+        assert connection.execute('SELECT organization_id, details FROM memory_entries WHERE id = 1').fetchone() == ('org-a', 'preserve me')
+        assert connection.execute('SELECT version_num FROM alembic_version').fetchone()[0] == '202607290003'
         """,
         db_url,
     )
@@ -263,6 +312,42 @@ def test_legacy_rows_without_organization_fail_safely(tmp_path: Path) -> None:
         expect_success=False,
     )
     assert "no organizations" in result.stderr or "no organizations" in result.stdout
+
+
+def test_no_organization_legacy_rows_can_be_backfilled_only_with_explicit_bootstrap(tmp_path: Path) -> None:
+    db_url = _sqlite_url(tmp_path / "legacy-no-org-explicit.db")
+    _run_python(
+        """
+        import os
+        import sqlite3
+        from alembic import command
+        from alembic.config import Config
+
+        path = os.environ['DATABASE_URL'].removeprefix('sqlite:///')
+        connection = sqlite3.connect(path)
+        connection.executescript('''
+        CREATE TABLE organizations (id TEXT PRIMARY KEY, slug TEXT, display_name TEXT, legal_name TEXT, status TEXT, created_at TEXT, updated_at TEXT);
+        CREATE TABLE memory_entries (id INTEGER PRIMARY KEY, category TEXT, title TEXT, details TEXT, importance INTEGER, source TEXT, created_at TEXT);
+        INSERT INTO memory_entries VALUES (1, 'ops', 'Legacy memory', 'preserve me', 3, 'test', '2026-01-01');
+        ''')
+        connection.commit()
+        connection.close()
+
+        command.stamp(Config('alembic.ini'), '202607290001')
+        command.upgrade(Config('alembic.ini'), 'head')
+
+        connection = sqlite3.connect(path)
+        assert connection.execute('SELECT id, slug, display_name FROM organizations').fetchone() == ('org-mor', 'mor-logistics', 'MOR Logistics Manitoba Limited')
+        assert connection.execute('SELECT organization_id, details FROM memory_entries WHERE id = 1').fetchone() == ('org-mor', 'preserve me')
+        assert connection.execute('SELECT version_num FROM alembic_version').fetchone()[0] == '202607290003'
+        """,
+        db_url,
+        extra_env={
+            "POLARIS_TENANT_BACKFILL_ORGANIZATION_ID": "org-mor",
+            "POLARIS_TENANT_BACKFILL_ORGANIZATION_SLUG": "mor-logistics",
+            "POLARIS_TENANT_BACKFILL_ORGANIZATION_NAME": "MOR Logistics Manitoba Limited",
+        },
+    )
 
 
 def test_partial_schema_is_rejected_by_adoption_validator(tmp_path: Path) -> None:
