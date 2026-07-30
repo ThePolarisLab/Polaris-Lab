@@ -34,16 +34,12 @@ def _safe_call(operation):
 
 
 @router.get("/company")
-def get_company(
-    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
-) -> dict[str, Any]:
+def get_company(principal: AuthenticatedPrincipal = Depends(require_permission(Permission.FINANCIAL_READ))) -> dict[str, Any]:
     return _safe_call(lambda: _connector(principal.organization_id).company_info())
 
 
 @router.get("/accounts")
-def get_accounts(
-    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
-) -> dict[str, Any]:
+def get_accounts(principal: AuthenticatedPrincipal = Depends(require_permission(Permission.FINANCIAL_READ))) -> dict[str, Any]:
     accounts = _safe_call(lambda: _connector(principal.organization_id).accounts())
     return {"count": len(accounts), "accounts": accounts}
 
@@ -94,16 +90,12 @@ def synchronize_financials(
 
 
 @router.get("/sync/status")
-def synchronization_status(
-    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.FINANCIAL_READ)),
-) -> dict[str, Any]:
+def synchronization_status(principal: AuthenticatedPrincipal = Depends(require_permission(Permission.FINANCIAL_READ))) -> dict[str, Any]:
     return QuickBooksFinancialSyncService(principal.organization_id).status()
 
 
 @router.get("/executive-summary")
-def executive_summary(
-    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.FINANCIAL_READ)),
-) -> dict[str, Any]:
+def executive_summary(principal: AuthenticatedPrincipal = Depends(require_permission(Permission.FINANCIAL_READ))) -> dict[str, Any]:
     with SessionLocal() as session:
         profit_loss = _latest_snapshot(session, principal.organization_id, "profit_loss")
         balance_sheet = _latest_snapshot(session, principal.organization_id, "balance_sheet")
