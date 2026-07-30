@@ -57,10 +57,7 @@ def test_missing_token_returns_401(client):
 
 
 def test_invalid_token_returns_401(client):
-    response = client.get(
-        "/company",
-        headers={"Authorization": "Bearer invalid", "X-Polaris-Organization": "org-1"},
-    )
+    response = client.get("/company", headers={"Authorization": "Bearer invalid", "X-Polaris-Organization": "org-1"})
     assert response.status_code == 401
 
 
@@ -100,11 +97,7 @@ def test_connector_disconnect_requires_manage_permission(client):
 
 def test_quickbooks_oauth_state_is_single_use_and_org_bound(monkeypatch):
     service = QuickBooksOAuthService()
-    url = service.authorization_url(
-        organization_id="org-1",
-        identity_id="identity-1",
-        organization_slug="org-one",
-    )
+    url = service.authorization_url(organization_id="org-1", identity_id="identity-1")
     state = parse_qs(urlparse(url).query)["state"][0]
 
     monkeypatch.setattr(
@@ -122,7 +115,6 @@ def test_quickbooks_oauth_state_is_single_use_and_org_bound(monkeypatch):
     context = service.complete_authorization(code="code", realm_id="realm-1", state=state)
     assert context.organization_id == "org-1"
     assert context.identity_id == "identity-1"
-    assert context.organization_slug == "org-one"
 
     with pytest.raises(QuickBooksOAuthError, match="already been used"):
         service.complete_authorization(code="code-2", realm_id="realm-2", state=state)
