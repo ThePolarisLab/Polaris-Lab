@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: Polaris Lab
-Last updated: 2026-07-29
+Last updated: 2026-07-30
 
 ## Purpose
 
@@ -24,10 +24,15 @@ Polaris is being developed as an AI-enabled operating system and Chief of Staff 
 - Phase 1 Security Gate
 - Phase 1.1 Tenant Isolation Hardening
 - Phase 1.2 Integration Verification
+- Phase 2 Database Gate
 
 ### In progress
 
-- Phase 2 Database Gate — Alembic lifecycle, adoption validation, tenant backfill, startup migration enforcement, and backup/rollback documentation.
+- Phase 2.1 Persistent Deployment Hardening — Render PostgreSQL cutover prerequisite, migration-before-start command, public health minimization, hosted frontend URL correction, and deployment persistence verification.
+
+### Blocked
+
+- Phase 3A QuickBooks Production Adapter and Read-Only Verification — blocked until Render uses persistent PostgreSQL and QuickBooks credentials can survive redeploy/restart.
 
 ### Current engineering capabilities
 
@@ -43,7 +48,8 @@ Polaris can currently:
 - produce deterministic plain-English module explanations;
 - analyze large Python files in syntax-aware chunks;
 - enforce configurable analysis limits with a hard safety ceiling;
-- run backend, frontend, TypeScript, security, runtime, and database lifecycle checks in GitHub Actions.
+- run backend, frontend, TypeScript, security, runtime, and database lifecycle checks in GitHub Actions;
+- enforce Alembic schema lifecycle for staging and production startup.
 
 ## Product Direction
 
@@ -59,25 +65,45 @@ The platform must remain explainable, reviewable, testable, and safe at every st
 
 ## Near-Term Priorities
 
-### Phase 2 — Database Gate
+### Phase 2.1 — Persistent Deployment Hardening
 
-Goal: establish a versioned production database lifecycle before new integration or deployment work.
+Goal: align the live Render deployment with the Phase 2 database lifecycle before live QuickBooks verification.
 
 Planned outcomes:
 
-- Alembic-managed schema lifecycle;
-- clean SQLite and PostgreSQL-compatible installs;
-- existing database adoption validation;
-- tenant ownership backfill with fail-closed ambiguous cases;
-- staging/production startup enforcement;
-- migration CI and rollback documentation.
+- Render service uses persistent PostgreSQL, not temporary SQLite;
+- migrations run before API startup;
+- hosted frontend URL is configured outside local development;
+- public root and health responses expose no environment, organization, version, capability, database, or connector metadata;
+- detailed system metadata requires authentication and organization context;
+- deploy, redeploy, and free-tier wake-up preserve tenant and connector data.
 
 Scope boundaries:
 
 - no Motive implementation;
 - no Outlook implementation;
+- no QuickBooks production adapter implementation;
 - no API versioning migration;
-- no deployment infrastructure changes beyond migration commands and runbooks.
+- no broad deployment infrastructure refactor.
+
+### Phase 3A — QuickBooks Production Adapter and Read-Only Verification
+
+Goal: connect Polaris safely to the live QuickBooks Online company after persistent database cutover.
+
+Planned outcomes:
+
+- production QuickBooks HTTPS client behind the existing adapter contract;
+- encrypted refresh-token rotation and connector health;
+- company identity verification for MOR LOGISTICS MANITOBA LIMITED;
+- read-only paginated resource reads and financial reports;
+- full and incremental sync evidence;
+- no accounting writes.
+
+Scope boundaries:
+
+- do not begin while hosted production uses temporary SQLite;
+- do not implement Motive or Outlook;
+- do not commit production credentials.
 
 ### PGE-003.3 — Cross-file Dependency Resolution
 
@@ -208,6 +234,8 @@ Exit criteria:
 - stable engineering, operational, and executive workflows;
 - documented security model;
 - versioned database lifecycle with tested recovery procedures;
+- persistent production database verified across deploy/restart;
+- live QuickBooks and Motive evidence gates complete;
 - release checklist completed;
 - production-readiness review approved.
 
@@ -262,7 +290,8 @@ Before release:
 - rollback approach documented;
 - critical workflows tested;
 - known limitations recorded;
-- repository state clean.
+- repository state clean;
+- hosted production storage is persistent and backed up.
 
 ## Safety Principles
 
@@ -282,7 +311,9 @@ Polaris engineering follows these rules:
 
 Near-term quality work includes:
 
-- complete Phase 2 Database Gate review and merge after CI passes;
+- complete Phase 2.1 persistent deployment hardening and verify Render PostgreSQL cutover;
+- complete Phase 3A QuickBooks production adapter after persistent database verification;
+- implement external production identity provider before broad rollout;
 - expand backend coverage beyond the GitHub and code-understanding engines;
 - add API endpoint tests;
 - add frontend tests;

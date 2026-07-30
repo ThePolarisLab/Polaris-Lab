@@ -1,7 +1,7 @@
 # Tenant Isolation Model
 
-Status date: 2026-07-29  
-Scope: Phase 1.1 Tenant Isolation Hardening plus Phase 2 Database Gate lifecycle enforcement.
+Status date: 2026-07-30  
+Scope: Phase 1.1 Tenant Isolation Hardening, Phase 2 Database Gate lifecycle enforcement, and Phase 2.1 persistent deployment hardening.
 
 ## Source of Truth
 
@@ -42,10 +42,12 @@ Service-level functions that access tenant data must accept `organization_id` ex
 
 Tenant-owned database columns are now part of the Alembic-managed schema lifecycle. Existing pre-Alembic databases must be validated with `python -m app.database.validate_schema` before stamping or upgrading. Backfill may assign legacy rows automatically only when exactly one organization exists; otherwise the migration fails unless an operator supplies `POLARIS_TENANT_BACKFILL_ORGANIZATION_ID` after a verified backup and ownership review.
 
+Hosted staging and production must use persistent PostgreSQL. Temporary SQLite paths such as `sqlite:////tmp/polaris.db` are allowed only for disposable local, test, or preview scenarios and must not hold QuickBooks credentials or financial evidence.
+
 ## Public Callback Exception
 
 `GET /api/v1/connectors/quickbooks/oauth/callback` remains public at the HTTP authentication layer because Intuit cannot send Polaris bearer headers. The callback is protected by the OAuth state record, which is signed, expiring, single-use, principal-bound, and organization-bound.
 
 ## Out of Scope
 
-Motive persistence, Outlook persistence, API versioning, and deployment infrastructure hardening remain later phases. New tenant-owned persistence must not be added without an Alembic migration and explicit tenant ownership documentation.
+Motive persistence, Outlook persistence, API versioning, and broad deployment automation remain later phases. New tenant-owned persistence must not be added without an Alembic migration and explicit tenant ownership documentation.

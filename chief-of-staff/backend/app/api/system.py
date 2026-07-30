@@ -1,17 +1,20 @@
-"""Builder-facing runtime information endpoints."""
+"""Authenticated runtime information endpoints."""
 
 from datetime import datetime, timezone
 import os
 import time
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy import text
 
 from app.core.config import settings
 from app.database.database import engine
+from app.security.dependencies import require_permission
+from app.security.models import Permission
 
 router = APIRouter(prefix="/api/v1/system", tags=["builder-system"])
 _STARTED_AT = time.time()
+_system_read = Depends(require_permission(Permission.CONNECTOR_READ))
 
 
 def _database_status() -> str:
@@ -23,9 +26,9 @@ def _database_status() -> str:
     return "connected"
 
 
-@router.get("/health")
+@router.get("/health", dependencies=[_system_read])
 def system_health(response: Response):
-    """Return API and database readiness for the Builder Console."""
+    """Return authenticated API and database readiness for operators."""
     database_status = _database_status()
     if database_status != "connected":
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -40,9 +43,9 @@ def system_health(response: Response):
     }
 
 
-@router.get("/info")
+@router.get("/info", dependencies=[_system_read])
 def system_info():
-    """Return non-secret runtime metadata for operational visibility."""
+    """Return authenticated non-secret runtime metadata for operational visibility."""
     return {
         "service": settings.service_name,
         "environment": settings.environment,
@@ -53,9 +56,9 @@ def system_info():
     }
 
 
-@router.get("/version")
+@router.get("/version", dependencies=[_system_read])
 def system_version():
-    """Return the deployed Polaris build identity."""
+    """Return the authenticated Polaris build identity."""
     return {
         "version": settings.version,
         "git_commit": os.getenv("POLARIS_GIT_COMMIT", "unknown"),

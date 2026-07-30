@@ -75,31 +75,7 @@ app.include_router(auth_router)
 
 @app.get("/")
 def root():
-    return {
-        "service": settings.service_name,
-        "version": settings.version,
-        "environment": settings.environment,
-        "organization": settings.organization_slug,
-        "database": "Connected",
-        "capabilities": [
-            "EXP-014B Work Context Engine",
-            "PGE-002 Repository Intelligence",
-            "PGE-003 Code Understanding Engine",
-            "PGE-004.1 Complexity Engine",
-            "PGE-008.1 Connector SDK",
-            "PGE-008.1 Connector Event Bus",
-            "PGE-008.2 GitHub Connector",
-            "PGE-008.3 Canonical Event Contract",
-            "PGE-008.4A Organization Foundation",
-            "PGE-008.4B Identity and Membership",
-            "PGE-008.4C Authentication and Authorization",
-            "PGE-009.6B QuickBooks Connector Registration",
-            "PGE-009.6C Polaris QuickBooks OAuth and Token Storage",
-            "PGE-009.6G QuickBooks Financial API Foundation",
-            "PGE-009.6H Financial Snapshot Engine",
-            "PGE-009.6I Executive Financial Dashboard",
-        ],
-    }
+    return {"status": "ok"}
 
 
 @app.get("/health", tags=["runtime"])
@@ -107,15 +83,6 @@ def health(response: Response):
     database_status = health_database_status()
     if database_status != "connected":
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "degraded"}
 
-    return {
-        "status": "ok" if database_status == "connected" else "degraded",
-        "service": settings.service_name,
-        "version": settings.version,
-        "environment": settings.environment,
-        "organization": settings.organization_slug,
-        "checks": {
-            "api": "ready",
-            "database": database_status,
-        },
-    }
+    return {"status": "ok"}
