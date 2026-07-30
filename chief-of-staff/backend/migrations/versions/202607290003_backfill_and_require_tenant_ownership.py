@@ -34,12 +34,23 @@ TENANT_TABLES = (
 )
 
 
+def _inspector() -> sa.Inspector:
+    return sa.inspect(op.get_bind())
+
+
 def _tables() -> set[str]:
-    return set(sa.inspect(op.get_bind()).get_table_names())
+    return set(_inspector().get_table_names())
 
 
 def _columns(table_name: str) -> set[str]:
-    return {column["name"] for column in sa.inspect(op.get_bind()).get_columns(table_name)}
+    return {column["name"] for column in _inspector().get_columns(table_name)}
+
+
+def _organization_id_is_nullable(table_name: str) -> bool:
+    for column in _inspector().get_columns(table_name):
+        if column["name"] == "organization_id":
+            return bool(column.get("nullable", True))
+    return False
 
 
 def _scalar(sql: str, **params: object) -> object:
@@ -61,12 +72,6 @@ def _tenant_rows_needing_backfill(table_name: str) -> int:
     if table_name not in _tables() or "organization_id" not in _columns(table_name):
         return 0
     return int(_scalar(f"SELECT COUNT(*) FROM {table_name} WHERE organization_id IS NULL") or 0)
-
-
-def _tenant_row_count(table_name: str) -> int:
-    if table_name not in _tables() or "organization_id" not in _columns(table_name):
-        return 0
-    return int(_scalar(f"SELECT COUNT(*) FROM {table_name}") or 0)
 
 
 def _backfill_organization_id() -> str | None:
@@ -125,6 +130,8 @@ def _backfill_children_from_parents() -> None:
 
 
 def _make_org_not_nullable(table_name: str) -> None:
+    if not _organization_id_is_nullable(table_name):
+        return
     with op.batch_alter_table(table_name) as batch_op:
         batch_op.alter_column("organization_id", existing_type=sa.String(), nullable=False)
 
@@ -185,8 +192,7 @@ def upgrade() -> None:
 
     for table_name in TENANT_TABLES:
         if table_name in _tables() and "organization_id" in _columns(table_name):
-            if _tenant_row_count(table_name) == 0 or _tenant_rows_needing_backfill(table_name) == 0:
-                _make_org_not_nullable(table_name)
+            _make_org_not_nullable(table_name)
 
 
 def downgrade() -> None:
