@@ -1,7 +1,7 @@
 # Tenant Isolation Model
 
 Status date: 2026-07-30  
-Scope: Phase 1.1 Tenant Isolation Hardening, Phase 2 Database Gate lifecycle enforcement, and Phase 2.1 persistent deployment hardening.
+Scope: Phase 1.1 Tenant Isolation Hardening, Phase 2 Database Gate lifecycle enforcement, Phase 2.1 persistent deployment hardening, and Phase 3A QuickBooks production adapter.
 
 ## Source of Truth
 
@@ -17,10 +17,12 @@ For authenticated requests, `AuthenticatedPrincipal.organization_id` is the auth
 | Memory | `MemoryEntry` | Organization | `organization_id` FK | List/create/search/reasoning evidence are principal-org scoped; create requires `executive.write`. |
 | Knowledge relationships | `KnowledgeRelationship` | Organization | `organization_id` FK; unique relationship per org | Relationship reads and entity traversal require principal org. |
 | Missions | `Mission`, `Workflow`, `MissionTask` | Organization | `organization_id` FK on each model | Mission lists, detail reads, creates, and task updates are principal-org scoped; mutations require `executive.write`. |
-| Dashboard | Aggregation service | Organization | Derived from tenant-owned sources | Dashboard service accepts organization ID and filters notes, missions, trucks, and reasoning evidence. |
-| Financial cache | `FinancialAccount`, `FinancialSnapshot`, `FinancialSyncHistory` | Organization | `organization_id` FK | Reads, status, sync, and summaries use principal org; writes require `financial.write`. |
-| QuickBooks credentials | `QuickBooksOAuthCredential` | Organization | `organization_id` FK, unique | Credential store requires explicit organization ID and never falls back to environment slug. |
+| Dashboard | Aggregation service | Organization | Derived from tenant-owned sources | Dashboard service accepts organization ID and filters notes, missions, trucks, reasoning evidence, and financial cache reads. |
+| Financial cache | `FinancialAccount`, `FinancialSnapshot`, `FinancialSyncHistory` | Organization | `organization_id` FK | Reads, status, sync, summaries, resource counts, report availability, and checkpoints use principal org; writes require `financial.write`. |
+| QuickBooks credentials | `QuickBooksOAuthCredential` | Organization | `organization_id` FK, unique | Credential store requires explicit organization ID and never falls back to environment slug. Safe metadata includes verification status, last sync, last refresh, and reauthorization state. |
 | QuickBooks OAuth state | `QuickBooksOAuthState` | Organization + principal | `organization_id` and `identity_id` FKs | State is signed, persisted, expiring, single-use, principal-bound, organization-bound, and atomically consumed. |
+| QuickBooks production verification | Credential metadata + sync history | Organization | Derived from active credential organization | Verification status is safe metadata only; no tokens, OAuth codes, raw state, encryption keys, or realm IDs are exposed. |
+| Hermes QuickBooks contract | TypeScript interfaces/evidence model | Contract only in Phase 3A | Evidence envelopes carry organization/tenant scope | Hermes does not own production refresh tokens or realm IDs in Phase 3A. Python owns live tenant credentials. |
 | Identities | `Identity` | Platform identity directory | Global identity, visible through membership | Reads require a membership in the caller's organization unless future platform identity APIs are added. |
 | Memberships | `OrganizationMembership` | Organization | `organization_id` FK | Membership routes require path org to match principal org and identity permissions. |
 | Organizations | `Organization` | Platform tenant registry | Tenant root | Normal users list only their org; platform admins can create/list/read all orgs. |
@@ -40,13 +42,19 @@ Service-level functions that access tenant data must accept `organization_id` ex
 
 ## Database Lifecycle Rule
 
-Tenant-owned database columns are now part of the Alembic-managed schema lifecycle. Existing pre-Alembic databases must be validated with `python -m app.database.validate_schema` before stamping or upgrading. Backfill may assign legacy rows automatically only when exactly one organization exists; otherwise the migration fails unless an operator supplies `POLARIS_TENANT_BACKFILL_ORGANIZATION_ID` after a verified backup and ownership review.
+Tenant-owned database columns are part of the Alembic-managed schema lifecycle. Existing pre-Alembic databases must be validated with `python -m app.database.validate_schema` before stamping or upgrading. Backfill may assign legacy rows automatically only when exactly one organization exists; otherwise the migration fails unless an operator supplies `POLARIS_TENANT_BACKFILL_ORGANIZATION_ID` after a verified backup and ownership review.
+
+If a legacy database contains tenant-owned rows but no organizations, the migration fails unless the operator supplies all three one-time bootstrap variables documented in `docs/database/tenant-backfill-plan.md`. That path is a verified legacy adoption flow, not a clean-install default and not an ownership guess.
 
 Hosted staging and production must use persistent PostgreSQL. Temporary SQLite paths such as `sqlite:////tmp/polaris.db` are allowed only for disposable local, test, or preview scenarios and must not hold QuickBooks credentials or financial evidence.
 
 ## Public Callback Exception
 
-`GET /api/v1/connectors/quickbooks/oauth/callback` remains public at the HTTP authentication layer because Intuit cannot send Polaris bearer headers. The callback is protected by the OAuth state record, which is signed, expiring, single-use, principal-bound, and organization-bound.
+`GET /api/v1/connectors/quickbooks/oauth/callback` remains public at the HTTP authentication layer because Intuit cannot send Polaris bearer headers. The callback is protected by the OAuth state record, which is signed, expiring, single-use, principal-bound, and organization-bound. Phase 3A also verifies the resulting CompanyInfo against the configured Mor Logistics company before accepting synchronized financial data.
+
+## QuickBooks Read-Only Boundary
+
+QuickBooks routes may read Intuit data, refresh/rotate OAuth tokens, verify company identity, cache read-only financial snapshots in Polaris, or disconnect/revoke credentials. They must not create, update, void, delete, or post QuickBooks transactions in Phase 3A.
 
 ## Out of Scope
 
