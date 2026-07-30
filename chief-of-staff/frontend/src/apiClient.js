@@ -85,8 +85,11 @@ export const apiClient = Object.freeze({
     return apiRequest(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(body ?? {}),
     });
+  },
+  delete(path) {
+    return apiRequest(path, { method: "DELETE" });
   },
 });
 
