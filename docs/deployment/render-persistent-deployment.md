@@ -54,7 +54,7 @@ Longer term, prefer a Render pre-deploy migration command or one-off migration j
 
 ## Cutover Procedure
 
-1. Create a Render PostgreSQL database.
+1. Create or select a Render PostgreSQL database.
 2. Copy the database Internal Database URL.
 3. In the web service Environment page, replace any SQLite `DATABASE_URL` with the PostgreSQL URL.
 4. Set `POLARIS_FRONTEND_URL` to the deployed frontend URL.
@@ -85,6 +85,22 @@ The current blueprint start command runs `alembic upgrade head`; if an operator 
 Data in `/tmp/polaris.db` is not durable production data. Before switching to PostgreSQL, decide explicitly whether it is disposable test data or must be manually exported.
 
 Do not silently copy `/tmp` data into production PostgreSQL. If it must be preserved, take a backup, inspect ownership, validate the schema, and perform an operator-reviewed import into PostgreSQL.
+
+## Handling Legacy PostgreSQL Rows Without Organizations
+
+If deployment fails with:
+
+```text
+Legacy tenant backfill found tenant-owned rows but no organizations.
+```
+
+then the PostgreSQL database is not empty. It contains tenant-owned legacy rows but no `organizations` row. Polaris fails closed because it cannot infer ownership.
+
+Preferred options:
+
+1. If the database contains only disposable test data, reset or recreate the database through Render/Blueprint controls.
+2. If the legacy rows must be preserved and all rows have been verified to belong to one organization, set the explicit one-time bootstrap variables described in `docs/database/tenant-backfill-plan.md`, deploy once, then remove those variables.
+3. If ownership is mixed or unknown, stop and perform a manual data mapping. Do not use the one-time bootstrap path.
 
 ## QuickBooks Gate
 
