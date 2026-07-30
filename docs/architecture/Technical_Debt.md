@@ -1,6 +1,7 @@
 # Polaris Technical Debt Register
 
-**Baseline date:** 2026-07-20
+**Baseline date:** 2026-07-20  
+**Last updated:** 2026-07-30
 
 This register records verified or strongly evidenced improvement opportunities. It is not a promise that every item must be fixed immediately.
 
@@ -8,10 +9,11 @@ This register records verified or strongly evidenced improvement opportunities. 
 
 **Area:** Platform architecture  
 **Priority:** High  
-**Status:** Open  
-**Observation:** The repository contains a legacy Python/FastAPI operational application and a newer TypeScript intelligence platform.  
+**Status:** Resolved for QuickBooks Phase 3A; still applies to future cross-runtime integrations  
+**Observation:** The repository contains a Python/FastAPI operational application and a TypeScript intelligence platform.  
 **Risk:** Domain data, ownership, deployment, and integration assumptions may diverge.  
-**Recommendation:** Define explicit cross-runtime contracts before sharing persistence or runtime state.
+**Resolution:** ADR-026 assigns production QuickBooks OAuth, credential persistence, token rotation, live HTTPS calls, and sync to Python. Hermes remains the connector/evidence/checkpoint contract and mocked/sandbox test harness for Phase 3A.  
+**Recommendation:** Future connectors must define runtime ownership before sharing persistence or runtime state.
 
 ## TD-002 — Persistence strategy is intentionally incomplete
 
@@ -26,19 +28,18 @@ This register records verified or strongly evidenced improvement opportunities. 
 
 **Area:** Security  
 **Priority:** High  
-**Status:** Open  
-**Observation:** Domain ownership safeguards exist in selected components, but a repository-wide identity and authorization model is not yet documented.  
-**Risk:** Inconsistent access control across operational, memory, graph, decision, and engineering capabilities.  
-**Recommendation:** Define principals, scopes, tenant boundaries, service identities, and audit requirements before broad deployment.
+**Status:** Resolved for Phase 1; external IdP replacement remains later-phase debt  
+**Observation:** Phase 1 established route security, organization context, permission checks, and frontend session handling.  
+**Risk:** Local token bootstrap is still a development/test-oriented model.  
+**Recommendation:** Replace local token bootstrap with the selected production identity provider in a later authentication rollout.
 
 ## TD-004 — Legacy application configuration and migrations need hardening
 
 **Area:** Legacy application  
 **Priority:** Medium  
-**Status:** Open  
-**Observation:** Earlier architecture inspection identified embedded local configuration and startup-time schema creation.  
-**Risk:** Environment portability and controlled schema evolution remain limited.  
-**Recommendation:** Confirm current state, externalize configuration, and introduce versioned migrations before production use.
+**Status:** Resolved by Phase 2 Database Gate and Phase 2.1 deployment hardening  
+**Observation:** Earlier architecture inspection identified embedded local configuration, startup-time schema creation, and temporary SQLite production deployment risk.  
+**Resolution:** Phase 2 introduced Alembic migrations, adoption validation, migration startup enforcement, and backup/rollback documentation. Phase 2.1 moved production deployment guidance to persistent PostgreSQL, migration-before-startup, and generic public health responses.
 
 ## TD-005 — Architecture and ADR indexing is fragmented
 
@@ -93,6 +94,15 @@ This register records verified or strongly evidenced improvement opportunities. 
 **Observation:** Daily logs summarize repository state while roadmaps, ADRs, and release notes serve different source-of-truth purposes.  
 **Risk:** Chronological summaries may become inconsistent with authoritative documents.  
 **Recommendation:** Treat daily logs as historical records and update canonical roadmap or architecture documents separately when status changes.
+
+## TD-011 — QuickBooks production smoke test requires live operator evidence
+
+**Area:** Integrations  
+**Priority:** High before closing Issue #61  
+**Status:** Open until production verification is complete  
+**Observation:** CI must use mocks/sandbox and cannot hold production Intuit credentials.  
+**Risk:** Implementation can pass CI before the live company is authorized and verified.  
+**Recommendation:** Keep Issue #61 open until the runbook checklist is completed against `MOR LOGISTICS MANITOBA LIMITED` with operator evidence.
 
 ## Review policy
 
