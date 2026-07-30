@@ -1,6 +1,6 @@
 # FastAPI Route Security Matrix
 
-Baseline branch: `phase2/database-gate`  
+Baseline branch: `phase2.1/persistent-deployment-hardening`  
 Scope: Polaris Chief of Staff FastAPI routers mounted from `chief-of-staff/backend/app/main.py`.
 
 ## Classification Legend
@@ -17,11 +17,8 @@ Scope: Polaris Chief of Staff FastAPI routers mounted from `chief-of-staff/backe
 
 | Method | Path | Classification | Required Control | Justification |
 |---|---|---|---|---|
-| GET | `/` | public | none | Non-secret service landing metadata. |
-| GET | `/health` | health check | none | External readiness/liveness check; response must remain non-secret. |
-| GET | `/api/v1/system/health` | health check | none | Builder/runtime readiness check with API/database status only. |
-| GET | `/api/v1/system/info` | public | none | Non-secret runtime metadata used by the Builder runtime contract. |
-| GET | `/api/v1/system/version` | public | none | Non-secret build identity used by the Builder runtime contract. |
+| GET | `/` | public | none | Generic liveness response only: `{"status":"ok"}`. No environment, organization, version, capability, database, or connector metadata. |
+| GET | `/health` | health check | none | External readiness/liveness check. Response is limited to `{"status":"ok"}` or `{"status":"degraded"}` with HTTP status; no runtime metadata. |
 | POST | `/api/v1/auth/local/token` | public in development/test only | local-token secret validation; disabled in production | Local bootstrap for existing development auth model. Must return 404 outside development/test. |
 | GET | `/api/v1/connectors/quickbooks/oauth/callback` | OAuth callback | signed, unexpired, atomic single-use, org-bound OAuth state | Intuit redirects cannot include Polaris bearer headers; authorization comes from validated state. |
 
@@ -51,6 +48,9 @@ Scope: Polaris Chief of Staff FastAPI routers mounted from `chief-of-staff/backe
 | POST | `/team-notes/{note_id}/resolve` | permission-protected | `executive.write` | Note ID plus organization filter. |
 | GET | `/dashboard/executive` | permission-protected | `executive.read` | Aggregates only organization-filtered sources. |
 | GET | `/work-context/{work_item_id}` | permission-protected | `executive.read` | Existing work-context read surface. |
+| GET | `/api/v1/system/health` | permission-protected | `connector.read` | Detailed runtime/database status is authenticated and org-context bound. |
+| GET | `/api/v1/system/info` | permission-protected | `connector.read` | Detailed service metadata is authenticated and org-context bound. |
+| GET | `/api/v1/system/version` | permission-protected | `connector.read` | Detailed version/build identity is authenticated and org-context bound. |
 | GET | `/api/v1/events/health` | internal | `organization.read` | Metrics only; no event payloads. |
 | GET | `/api/v1/events/metrics` | internal | `organization.read` | Metrics only; no event payloads. |
 | GET | `/api/v1/events/recent` | internal | `organization.read` | Retained events filtered by principal organization. |
@@ -98,8 +98,9 @@ Every query over tenant-owned records must filter by `AuthenticatedPrincipal.org
 
 ## Database Gate Note
 
-Phase 2 does not add HTTP routes. It makes tenant-owned schema enforcement Alembic-managed and blocks staging/production startup when the database is unversioned or stale. Existing route classifications above remain unchanged.
+Phase 2 does not add HTTP routes. It makes tenant-owned schema enforcement Alembic-managed and blocks staging/production startup when the database is unversioned or stale. Phase 2.1 further reduces public health metadata and requires detailed system status to be authenticated.
 
 ## Remaining Later-Phase Work
 
-- Continue Motive, Outlook, API versioning, deployment infrastructure, and non-database CI expansion outside this phase.
+- Continue QuickBooks production verification only after persistent PostgreSQL cutover is complete.
+- Continue Motive, Outlook, API versioning, and broader deployment automation outside this phase.
