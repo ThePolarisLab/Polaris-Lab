@@ -1,19 +1,22 @@
 # Database Lifecycle
 
-Status date: 2026-07-29  
-Scope: Phase 2 Database Gate.
+Status date: 2026-07-30  
+Scope: Phase 2 Database Gate plus Phase 2.1 persistent deployment hardening.
 
 ## Supported Database Targets
 
 - Local and test: SQLite via `sqlite:///...`.
 - Production/staging: PostgreSQL-compatible URLs via `DATABASE_URL`. The application normalizes `postgres://` and `postgresql://` to SQLAlchemy's `postgresql+psycopg://` driver form.
 
+Hosted production and staging services must not use SQLite under `/tmp`. Temporary container storage is not durable and can lose Alembic revision state, tenant data, connector credentials, financial snapshots, and sync history on redeploy, restart, spin-down, or instance replacement.
+
 ## Required Environment Variables
 
-- `DATABASE_URL`: database connection URL. Defaults to `sqlite:///./polaris.db` only for local development.
+- `DATABASE_URL`: database connection URL. Defaults to `sqlite:///./polaris.db` only for local development. Hosted staging and production must use persistent PostgreSQL.
 - `POLARIS_ENV`: `development`, `test`, `staging`, or `production`.
 - `POLARIS_AUTO_CREATE_SCHEMA`: optional. In `development` and `test`, defaults to enabled for isolated local bootstrap. In `staging` and `production`, automatic schema creation is never allowed.
 - `POLARIS_TENANT_BACKFILL_ORGANIZATION_ID`: optional operator-supplied organization ID for legacy multi-organization tenant backfill. Use only after a verified backup and ownership review.
+- `POLARIS_FRONTEND_URL`: deployed frontend origin for hosted environments. Do not use `localhost` in staging or production.
 
 ## Clean Installation
 
@@ -61,7 +64,15 @@ backup
 -> run health and smoke checks
 ```
 
-Production and staging requests must never trigger schema creation or mutation.
+Production and staging requests must never trigger schema creation or mutation. The current Render web service starts with:
+
+```bash
+python -m alembic upgrade head && python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+Use a Render pre-deploy command or one-off migration job before increasing web concurrency beyond one instance, so only one migration process runs against the production database.
+
+See `docs/deployment/render-persistent-deployment.md` for the hosted cutover checklist.
 
 ## Common Commands
 
