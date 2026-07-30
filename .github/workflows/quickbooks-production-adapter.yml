@@ -1,0 +1,163 @@
+name: QuickBooks Production Adapter
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "chief-of-staff/backend/**"
+      - "chief-of-staff/frontend/**"
+      - "src/hermes/connectors/quickbooks/**"
+      - "tests/hermes/*QuickBooks*"
+      - "docs/integrations/quickbooks*"
+      - "docs/security/**"
+      - "docs/releases/**"
+      - ".github/workflows/quickbooks-production-adapter.yml"
+      - "package.json"
+      - "package-lock.json"
+  push:
+    branches: [main]
+    paths:
+      - "chief-of-staff/backend/**"
+      - "chief-of-staff/frontend/**"
+      - "src/hermes/connectors/quickbooks/**"
+      - "tests/hermes/*QuickBooks*"
+      - "docs/integrations/quickbooks*"
+      - "docs/security/**"
+      - "docs/releases/**"
+      - ".github/workflows/quickbooks-production-adapter.yml"
+      - "package.json"
+      - "package-lock.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-quickbooks:
+    name: Backend QuickBooks mocked tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chief-of-staff/backend
+    env:
+      PYTHONPATH: .
+      POLARIS_ENV: test
+      POLARIS_AUTH_SECRET: quickbooks-production-adapter-ci-secret
+      POLARIS_LOCAL_AUTH_SECRET: quickbooks-local-token-secret-with-enough-length
+      POLARIS_QBO_CLIENT_ID: test-client-id
+      POLARIS_QBO_CLIENT_SECRET: test-client-secret
+      POLARIS_QBO_REDIRECT_URI: http://localhost:8000/api/v1/connectors/quickbooks/oauth/callback
+      POLARIS_QBO_OAUTH_STATE_SECRET: quickbooks-state-secret-with-enough-length
+      POLARIS_QBO_TOKEN_ENCRYPTION_KEY: uPlZqC60CQaQGFL-kQo-xUOyEE5uNUAyxKmwbzfdiVo=
+      POLARIS_QBO_EXPECTED_COMPANY_NAME: MOR LOGISTICS MANITOBA LIMITED
+      POLARIS_QBO_RETRY_BASE_SECONDS: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: chief-of-staff/backend/requirements.txt
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Compile backend and migrations
+        run: python -m compileall app migrations
+      - name: Run QuickBooks backend tests
+        run: python -m pytest -q tests/test_quickbooks_connector.py
+      - name: Run backend regression tests
+        run: python -m pytest -q
+
+  database-regression:
+    name: Database Gate regression
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chief-of-staff/backend
+    env:
+      DATABASE_URL: sqlite:////tmp/polaris-qbo.db
+      POLARIS_ENV: test
+      POLARIS_AUTO_CREATE_SCHEMA: "false"
+      POLARIS_AUTH_SECRET: quickbooks-production-adapter-ci-secret
+      POLARIS_QBO_TOKEN_ENCRYPTION_KEY: uPlZqC60CQaQGFL-kQo-xUOyEE5uNUAyxKmwbzfdiVo=
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: chief-of-staff/backend/requirements.txt
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Upgrade fresh SQLite schema
+        run: |
+          alembic upgrade head
+          alembic current
+      - name: Idempotent upgrade
+        run: alembic upgrade head
+      - name: Destructive downgrade remains blocked
+        run: |
+          if alembic downgrade -1; then
+            echo "Unsafe downgrade unexpectedly succeeded"
+            exit 1
+          fi
+
+  hermes-typescript:
+    name: Hermes QuickBooks TypeScript tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install root dependencies
+        run: npm ci
+      - name: Run root QuickBooks tests
+        run: npm test -- --runTestsByPath tests/hermes/IntuitQuickBooksApiClient.test.ts tests/hermes/QuickBooksConnector.test.ts
+      - name: Run root TypeScript regression
+        run: npm test
+
+  frontend:
+    name: Frontend tests and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chief-of-staff/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: chief-of-staff/frontend/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Run frontend tests
+        run: npm test
+      - name: Production build
+        run: npm run build
+
+  secret-scan:
+    name: QuickBooks secret pattern scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject tracked production secret artifacts
+        run: |
+          set -euo pipefail
+          if git ls-files | grep -Ei '(^|/)(.*quickbooks.*\.(secret|token|key|pem|p12|pfx)|.*intuit.*\.(secret|token|key|pem|p12|pfx))$'; then
+            echo "Tracked QuickBooks production secret-looking file detected"
+            exit 1
+          fi
+      - name: Scan for committed QuickBooks credential values
+        run: |
+          set -euo pipefail
+          if git grep -InE '(access_token|refresh_token|client_secret|realmId|POLARIS_QBO_CLIENT_SECRET)\s*[:=]\s*[A-Za-z0-9_./+=-]{24,}' -- ':!docs/**' ':!**/*.example' ':!**/*.test.ts' ':!**/*.test.mjs' ':!chief-of-staff/backend/tests/**' ':!.github/workflows/quickbooks-production-adapter.yml'; then
+            echo "Potential committed QuickBooks credential detected"
+            exit 1
+          fi
