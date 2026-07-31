@@ -70,6 +70,19 @@ TENANT_TABLES = {
 }
 
 LEGACY_TENANT_OPTIONAL = {"organization_id"}
+LEGACY_TABLE_OPTIONAL_COLUMNS: dict[str, set[str]] = {
+    "financial_accounts": {"organization_slug"},
+    "financial_snapshots": {"organization_slug"},
+    "financial_sync_history": {
+        "organization_slug",
+        "sync_mode",
+        "resource_counts",
+        "report_availability",
+        "checkpoint_before",
+        "checkpoint_after",
+        "verification_status",
+    },
+}
 SYSTEM_TABLES = {"alembic_version"}
 BASELINE_REVISION = "202607290001"
 HEAD_REVISION = "head"
@@ -131,7 +144,10 @@ def validate_schema() -> ValidationResult:
             )
         if missing:
             current_compatible = False
-            allowed_missing = LEGACY_TENANT_OPTIONAL if table_name in TENANT_TABLES else set()
+            allowed_missing: set[str] = set()
+            if table_name in TENANT_TABLES:
+                allowed_missing.update(LEGACY_TENANT_OPTIONAL)
+            allowed_missing.update(LEGACY_TABLE_OPTIONAL_COLUMNS.get(table_name, set()))
             if not missing.issubset(allowed_missing):
                 legacy_compatible = False
             details.append(f"{table_name} missing {', '.join(sorted(missing))}")
