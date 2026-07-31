@@ -141,18 +141,21 @@ def login(
 ) -> SessionTokenResponse:
     service = ProductionAuthService(session)
     try:
-        with session.begin():
-            tokens = service.login(
-                email=payload.email,
-                password=payload.password,
-                ip_address=_client_ip(request),
-                user_agent=_user_agent(request),
-            )
+        tokens = service.login(
+            email=payload.email,
+            password=payload.password,
+            ip_address=_client_ip(request),
+            user_agent=_user_agent(request),
+        )
+        session.commit()
     except RateLimitError as exc:
+        session.commit()
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="too many failed login attempts") from exc
     except AuthenticationError as exc:
+        session.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     except AuthorizationError as exc:
+        session.commit()
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     return SessionTokenResponse(
         access_token=tokens.access_token,
@@ -171,13 +174,14 @@ def refresh(
 ) -> SessionTokenResponse:
     service = ProductionAuthService(session)
     try:
-        with session.begin():
-            tokens = service.refresh(
-                refresh_token=payload.refresh_token,
-                ip_address=_client_ip(request),
-                user_agent=_user_agent(request),
-            )
+        tokens = service.refresh(
+            refresh_token=payload.refresh_token,
+            ip_address=_client_ip(request),
+            user_agent=_user_agent(request),
+        )
+        session.commit()
     except AuthenticationError as exc:
+        session.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     return SessionTokenResponse(
         access_token=tokens.access_token,
@@ -196,9 +200,10 @@ def logout(
     if not authorization or not authorization.startswith("Bearer "):
         return LogoutResponse(revoked=True)
     try:
-        with session.begin():
-            ProductionAuthService(session).logout_access_token(authorization.removeprefix("Bearer ").strip())
+        ProductionAuthService(session).logout_access_token(authorization.removeprefix("Bearer ").strip())
+        session.commit()
     except AuthenticationError:
+        session.rollback()
         return LogoutResponse(revoked=True)
     return LogoutResponse(revoked=True)
 
