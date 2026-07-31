@@ -8,9 +8,12 @@ os.environ.setdefault("POLARIS_BOOTSTRAP_SECRET", "bootstrap-secret-with-enough-
 
 from fastapi.testclient import TestClient
 import pytest
+from sqlalchemy import event
 
-from app.auth.service import BOOTSTRAP_ORGANIZATION_ID
+from app.auth.models import ProductionAuthBootstrapState
+from app.auth.service import BOOTSTRAP_IDENTITY_ID, BOOTSTRAP_ORGANIZATION_ID
 from app.database.database import Base, SessionLocal, engine
+from app.identity.models import Identity, OrganizationMembership
 from app.main import app
 from app.organizations.models import Organization
 
@@ -63,6 +66,34 @@ def test_bootstrap_repairs_existing_target_organization_with_missing_legal_name(
         assert organization.slug == "mor-logistics"
         assert organization.display_name == "MOR Logistics"
         assert organization.legal_name == "MOR LOGISTICS MANITOBA LIMITED"
+
+
+def test_bootstrap_inserts_identity_before_completion_marker(client):
+    statements: list[str] = []
+
+    def record_statement(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if "INSERT INTO identities" in statement or "INSERT INTO production_auth_bootstrap_state" in statement:
+            statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_statement)
+    try:
+        response = _bootstrap(client)
+    finally:
+        event.remove(engine, "before_cursor_execute", record_statement)
+
+    assert response.status_code == 201
+    identity_insert_index = next(index for index, statement in enumerate(statements) if "INSERT INTO identities" in statement)
+    marker_insert_index = next(index for index, statement in enumerate(statements) if "INSERT INTO production_auth_bootstrap_state" in statement)
+    assert identity_insert_index < marker_insert_index
+
+    with SessionLocal() as session:
+        assert session.get(Identity, BOOTSTRAP_IDENTITY_ID) is not None
+        assert session.get(Organization, BOOTSTRAP_ORGANIZATION_ID) is not None
+        assert session.get(ProductionAuthBootstrapState, "first-admin") is not None
+        assert session.query(OrganizationMembership).filter_by(
+            organization_id=BOOTSTRAP_ORGANIZATION_ID,
+            identity_id=BOOTSTRAP_IDENTITY_ID,
+        ).one()
 
 
 def test_bootstrap_rejects_existing_target_organization_with_material_legal_name_mismatch(client):
