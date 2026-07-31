@@ -113,6 +113,18 @@ def _normalize_email(value: str) -> str:
     return value.strip().lower()
 
 
+def _normalize_identity_value(value: str | None) -> str:
+    return " ".join((value or "").strip().split()).casefold()
+
+
+def _is_blank(value: str | None) -> bool:
+    return not (value or "").strip()
+
+
+def _matches_or_blank(value: str | None, expected: str) -> bool:
+    return _is_blank(value) or _normalize_identity_value(value) == _normalize_identity_value(expected)
+
+
 def hash_password(password: str) -> str:
     if len(password) < MIN_PASSWORD_LENGTH:
         raise ValueError("password must be at least 12 characters")
@@ -198,8 +210,13 @@ class ProductionAuthService:
         password_hash = hash_password(password)
         organization = self._session.get(Organization, BOOTSTRAP_ORGANIZATION_ID)
         if organization is not None:
-            if organization.slug != BOOTSTRAP_ORGANIZATION_SLUG or organization.legal_name != BOOTSTRAP_ORGANIZATION_LEGAL_NAME:
+            if organization.slug != BOOTSTRAP_ORGANIZATION_SLUG:
                 raise BootstrapUnavailableError("existing organization does not match bootstrap target")
+            if not _matches_or_blank(organization.legal_name, BOOTSTRAP_ORGANIZATION_LEGAL_NAME):
+                raise BootstrapUnavailableError("existing organization does not match bootstrap target")
+            organization.display_name = BOOTSTRAP_ORGANIZATION_DISPLAY_NAME
+            organization.legal_name = BOOTSTRAP_ORGANIZATION_LEGAL_NAME
+            organization.status = OrganizationStatus.ACTIVE.value
         else:
             organization = Organization(
                 id=BOOTSTRAP_ORGANIZATION_ID,
