@@ -78,6 +78,20 @@ TENANT_TABLES = {
     "outlook_sync_history",
 }
 
+LEGACY_OPTIONAL_TABLES = {
+    "production_password_credentials",
+    "production_auth_sessions",
+    "production_auth_bootstrap_state",
+    "production_login_attempts",
+    "outlook_oauth_credentials",
+    "outlook_oauth_states",
+    "outlook_folders",
+    "outlook_folder_checkpoints",
+    "outlook_messages",
+    "outlook_attachments",
+    "outlook_message_classifications",
+    "outlook_sync_history",
+}
 LEGACY_TENANT_OPTIONAL = {"organization_id"}
 LEGACY_TABLE_OPTIONAL_COLUMNS: dict[str, set[str]] = {
     "financial_accounts": {"organization_slug"},
@@ -131,18 +145,23 @@ def validate_schema() -> ValidationResult:
         )
 
     missing_tables = set(EXPECTED_COLUMNS) - user_tables
-    if missing_tables:
+    blocking_missing_tables = missing_tables - LEGACY_OPTIONAL_TABLES
+    if blocking_missing_tables:
         return ValidationResult(
             "partial",
             "Database is missing expected tables and cannot be stamped safely: "
-            + ", ".join(sorted(missing_tables)),
+            + ", ".join(sorted(blocking_missing_tables)),
         )
 
-    current_compatible = True
+    current_compatible = not missing_tables
     legacy_compatible = True
     details: list[str] = []
+    if missing_tables:
+        details.append("missing post-baseline tables: " + ", ".join(sorted(missing_tables)))
 
     for table_name, expected in EXPECTED_COLUMNS.items():
+        if table_name not in user_tables:
+            continue
         actual = _table_columns(inspector, table_name)
         missing = expected - actual
         extra = actual - expected
