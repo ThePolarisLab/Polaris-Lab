@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from app.api import outlook as outlook_api
 from app.connectors.models import ConnectorStatus
 from app.connectors.outlook import OutlookConnector, OutlookConnectorError
 from app.connectors.outlook_oauth import READ_ONLY_SCOPE, OutlookOAuthError, OutlookOAuthService
@@ -60,6 +61,44 @@ def test_outlook_oauth_configuration_rejects_write_scopes(monkeypatch):
 
     with pytest.raises(OutlookOAuthError):
         OutlookOAuthService._validate_configuration()
+
+
+def test_outlook_rejects_non_graph_continuation_url_before_authentication():
+    connector = OutlookConnector()
+
+    def fail_authenticate():
+        raise AssertionError("authenticate must not run for unsafe provider URLs")
+
+    connector.authenticate = fail_authenticate
+
+    with pytest.raises(OutlookConnectorError) as exc:
+        connector._request_absolute_json("GET", "https://attacker.example/messages", operation="message delta")
+
+    assert exc.value.status == ConnectorStatus.DEGRADED
+    assert "unsafe provider continuation URL" in str(exc.value)
+
+
+def test_outlook_accepts_configured_graph_continuation_path():
+    connector = OutlookConnector()
+    url = "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$skiptoken=abc"
+
+    assert connector._validated_graph_url(url, "message delta") == url
+
+
+def test_attention_mailbox_lookup_uses_metadata_without_decrypting(monkeypatch):
+    class FakeStore:
+        def __init__(self, organization_id: str) -> None:
+            self.organization_id = organization_id
+
+        def metadata(self) -> dict[str, object]:
+            return {"mailbox_address": "Executive@Example.COM"}
+
+        def load_credential(self):
+            raise AssertionError("attention reads must not decrypt refresh-token credentials")
+
+    monkeypatch.setattr(outlook_api, "OutlookCredentialStore", FakeStore)
+
+    assert outlook_api._mailbox_address("org-a") == "executive@example.com"
 
 
 def test_deterministic_classification_allows_multiple_categories():
