@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -26,6 +27,7 @@ from app.organizations.models import Organization
 
 DEFAULT_FOLDERS = ("Inbox", "Sent Items", "Archive")
 EXCLUDED_FOLDERS = {"deleted items", "junk email"}
+logger = logging.getLogger(__name__)
 
 
 class OutlookSyncError(RuntimeError):
@@ -91,6 +93,16 @@ class OutlookSyncService:
 
                 self.connector.authenticate()
                 mailbox = self.connector.mailbox_identity()
+                logger.info(
+                    "Outlook sync authenticated mailbox",
+                    extra={
+                        "organization_id": self.organization_id,
+                        "outlook_sync_run_id": run_id,
+                        "outlook_sync_mode": mode,
+                        "outlook_mailbox_id": mailbox.get("id"),
+                        "outlook_mailbox_address": mailbox.get("mail") or mailbox.get("userPrincipalName"),
+                    },
+                )
                 folders = self._discover_folders(run_id)
                 active_folders = [folder for folder in folders if _folder_allowed(folder.display_name)]
                 stats.folders_scanned = len(active_folders)
@@ -246,6 +258,7 @@ class OutlookSyncService:
             if not isinstance(messages, list):
                 raise OutlookSyncError("fetch_messages", "Outlook message response was malformed")
             stats.messages_discovered += len(messages)
+            _log_fetched_messages(self.organization_id, run_id, mode, folder, messages)
             self._persist_messages(folder, messages, run_id=run_id, stats=stats)
             next_link = payload.get("@odata.nextLink")
             delta_link = payload.get("@odata.deltaLink")
@@ -265,6 +278,7 @@ class OutlookSyncService:
         with SessionLocal.begin() as session:
             for message in messages:
                 provider_id = str(message.get("id") or "")
+                subject = _safe_subject(message.get("subject"))
                 if not provider_id:
                     continue
                 if "@removed" in message:
@@ -273,6 +287,7 @@ class OutlookSyncService:
                         existing.removed_at = now
                         existing.last_seen_at = now
                         stats.messages_removed += 1
+                        _log_message_write(self.organization_id, run_id, folder, "removed", existing, provider_id, existing.subject)
                     continue
                 normalized = _normalize_message(message, organization_id=self.organization_id, organization_slug=org_slug, folder_id=folder.provider_folder_id, run_id=run_id, observed_at=now)
                 existing = session.query(OutlookMessage).filter_by(organization_id=self.organization_id, provider_message_id=provider_id).one_or_none()
@@ -281,14 +296,17 @@ class OutlookSyncService:
                     session.add(existing)
                     session.flush()
                     stats.messages_inserted += 1
+                    _log_message_write(self.organization_id, run_id, folder, "inserted", existing, provider_id, subject)
                 else:
                     if _message_changed(existing, normalized):
                         for key, value in normalized.items():
                             setattr(existing, key, value)
                         stats.messages_updated += 1
+                        _log_message_write(self.organization_id, run_id, folder, "updated", existing, provider_id, subject)
                     else:
                         existing.last_seen_at = now
                         stats.messages_unchanged += 1
+                        _log_message_write(self.organization_id, run_id, folder, "unchanged", existing, provider_id, subject)
                 _replace_classifications(session, existing, org_slug=org_slug, classifications=classify_message(existing))
                 if bool(message.get("hasAttachments")):
                     stats.attachments_indexed += self._persist_attachments(session, existing, org_slug=org_slug)
@@ -502,6 +520,58 @@ def classify_message(message: OutlookMessage) -> list[dict]:
     if message.importance == "high":
         matches.append({"category": "High Importance", "confidence": "high", "reason": "Source message importance is high", "rule": "source_high_importance"})
     return matches or [{"category": "unclassified", "confidence": "low", "reason": "No deterministic rule matched", "rule": "unclassified_fallback"}]
+
+
+def _log_fetched_messages(organization_id: str, run_id: str, mode: str, folder: OutlookFolder, messages: list[dict]) -> None:
+    logger.info(
+        "Outlook sync fetched message page",
+        extra={
+            "organization_id": organization_id,
+            "outlook_sync_run_id": run_id,
+            "outlook_sync_mode": mode,
+            "outlook_folder_id": folder.provider_folder_id,
+            "outlook_folder_name": folder.display_name,
+            "outlook_messages_fetched": len(messages),
+            "outlook_message_subjects": [
+                {
+                    "provider_message_id": str(message.get("id") or ""),
+                    "subject": _safe_subject(message.get("subject")),
+                    "has_attachments": bool(message.get("hasAttachments")),
+                    "removed": "@removed" in message,
+                }
+                for message in messages
+                if isinstance(message, dict)
+            ],
+        },
+    )
+
+
+def _log_message_write(
+    organization_id: str,
+    run_id: str,
+    folder: OutlookFolder,
+    action: str,
+    row: OutlookMessage,
+    provider_id: str,
+    subject: str | None,
+) -> None:
+    logger.info(
+        "Outlook sync message persistence decision",
+        extra={
+            "organization_id": organization_id,
+            "outlook_sync_run_id": run_id,
+            "outlook_folder_id": folder.provider_folder_id,
+            "outlook_folder_name": folder.display_name,
+            "outlook_message_write_action": action,
+            "outlook_message_table": "outlook_messages",
+            "outlook_message_row_id": row.id,
+            "outlook_provider_message_id": provider_id,
+            "outlook_message_subject": subject,
+            "outlook_conversation_id": row.conversation_id,
+            "outlook_received_at": row.received_at.isoformat() if row.received_at else None,
+            "outlook_importance": row.importance,
+        },
+    )
 
 
 def _safe_body(value: str) -> tuple[str, bool]:
