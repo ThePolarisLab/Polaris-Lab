@@ -26,12 +26,40 @@ def _indexes(table_name: str) -> set[str]:
     return {index["name"] for index in sa.inspect(op.get_bind()).get_indexes(table_name)}
 
 
+def _columns(table_name: str) -> dict[str, dict[str, object]]:
+    if table_name not in _tables():
+        return {}
+    return {column["name"]: column for column in sa.inspect(op.get_bind()).get_columns(table_name)}
+
+
 def _create_index_if_missing(name: str, table_name: str, columns: list[str], *, unique: bool = False) -> None:
     if name not in _indexes(table_name):
         op.create_index(name, table_name, columns, unique=unique)
 
 
+def _align_membership_id_type() -> None:
+    if "organization_memberships" not in _tables() or "id" not in _columns("organization_memberships"):
+        return
+    column_type = _columns("organization_memberships")["id"]["type"]
+    if isinstance(column_type, sa.String):
+        return
+    bind = op.get_bind()
+    if bind.dialect.name == "sqlite":
+        with op.batch_alter_table("organization_memberships") as batch_op:
+            batch_op.alter_column("id", existing_type=column_type, type_=sa.String(), existing_nullable=False)
+    else:
+        op.alter_column(
+            "organization_memberships",
+            "id",
+            existing_type=column_type,
+            type_=sa.String(),
+            existing_nullable=False,
+            postgresql_using="id::text",
+        )
+
+
 def upgrade() -> None:
+    _align_membership_id_type()
     existing = _tables()
 
     if "production_password_credentials" not in existing:
@@ -111,3 +139,8 @@ def downgrade() -> None:
     ):
         if table_name in _tables():
             op.drop_table(table_name)
+    if "organization_memberships" in _tables() and isinstance(_columns("organization_memberships").get("id", {}).get("type"), sa.String):
+        raise RuntimeError(
+            "unsafe downgrade blocked: organization_memberships.id was widened to string for ORM compatibility. "
+            "Restore from a verified backup if rollback is required."
+        )
