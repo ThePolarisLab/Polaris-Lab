@@ -57,6 +57,30 @@ function authHeaders() {
   return headers;
 }
 
+function normalizeHeaders(input = {}) {
+  const headers = {};
+  if (!input) return headers;
+  if (typeof Headers !== "undefined" && input instanceof Headers) {
+    input.forEach((value, key) => { headers[key] = value; });
+    return headers;
+  }
+  if (Array.isArray(input)) {
+    for (const [key, value] of input) headers[key] = value;
+    return headers;
+  }
+  return { ...input };
+}
+
+function requestOptions(options = {}) {
+  const { headers: suppliedHeaders, ...rest } = options;
+  const headers = {
+    Accept: "application/json",
+    ...normalizeHeaders(suppliedHeaders),
+    ...authHeaders(),
+  };
+  return { ...rest, headers };
+}
+
 async function parsePayload(response) {
   return response.json().catch(() => ({}));
 }
@@ -79,14 +103,7 @@ async function refreshSession() {
 }
 
 export async function apiRequest(path, options = {}, retryOnUnauthorized = true) {
-  const response = await fetch(`${runtimeConfig.apiBaseUrl}${path}`, {
-    headers: {
-      Accept: "application/json",
-      ...authHeaders(),
-      ...options.headers,
-    },
-    ...options,
-  });
+  const response = await fetch(`${runtimeConfig.apiBaseUrl}${path}`, requestOptions(options));
 
   const payload = await parsePayload(response);
 
