@@ -5,6 +5,7 @@ from collections.abc import Callable, Generator
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.auth.service import ProductionAuthService, is_managed_environment
 from app.database.database import SessionLocal
 from app.security.models import AuthenticatedPrincipal, Permission
 from app.security.providers import LocalTokenProvider
@@ -28,10 +29,15 @@ def get_principal(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="bearer credential required")
     if not organization_header:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="organization header required")
+
+    credential = authorization.removeprefix("Bearer ").strip()
     try:
-        return SecurityService(session).authenticate(
-            LocalTokenProvider(), authorization.removeprefix("Bearer ").strip(), organization_header
-        )
+        if is_managed_environment():
+            return ProductionAuthService(session).authenticate_access_token(credential, organization_header)
+        try:
+            return ProductionAuthService(session).authenticate_access_token(credential, organization_header)
+        except AuthenticationError:
+            return SecurityService(session).authenticate(LocalTokenProvider(), credential, organization_header)
     except AuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     except AuthorizationError as exc:

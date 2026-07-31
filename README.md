@@ -33,6 +33,22 @@ Set `POLARIS_FRONTEND_URL` to the deployed frontend origin, not `localhost`, for
 
 See `docs/database/database-lifecycle.md`, `docs/database/tenant-backfill-plan.md`, `docs/database/rollback-and-recovery.md`, and `docs/deployment/render-persistent-deployment.md` for the full Phase 2/2.1 database lifecycle process.
 
+## Production Authentication Bootstrap
+
+Production and staging keep `/api/v1/auth/local/token` disabled. Use the Phase 3B first-admin bootstrap to create the initial Mor Logistics organization owner, then remove the one-time bootstrap secret from Render.
+
+Required hosted auth variables:
+
+```text
+POLARIS_SESSION_SECRET=<minimum 32 random characters>
+POLARIS_BOOTSTRAP_ADMIN_EMAIL=<admin email address>
+POLARIS_BOOTSTRAP_SECRET=<one-time random value, minimum 32 characters>
+POLARIS_ACCESS_TOKEN_TTL_SECONDS=900
+POLARIS_REFRESH_TOKEN_TTL_SECONDS=1209600
+```
+
+Bootstrap and login procedure: `docs/security/production-auth-bootstrap.md`.
+
 ## QuickBooks Production Setup
 
 Phase 3A keeps QuickBooks Online read-only and tenant-bound. Configure Intuit credentials in Render or another secret manager, never in GitHub or source control. Use `chief-of-staff/backend/.env.quickbooks.example` as the variable inventory.
@@ -42,6 +58,7 @@ Production prerequisites:
 - hosted `DATABASE_URL` points to persistent PostgreSQL, not temporary SQLite;
 - `python -m alembic upgrade head` succeeds before API startup;
 - public `/` and `/health` expose only generic status;
-- `POLARIS_FRONTEND_URL` points to the deployed frontend origin.
+- `POLARIS_FRONTEND_URL` points to the deployed frontend origin;
+- production admin authentication works and `/api/v1/auth/me` confirms the active owner principal.
 
 Operator setup and smoke-test steps are documented in `docs/integrations/quickbooks-production-runbook.md`. Runtime ownership and the Python/Hermes boundary are documented in `docs/architecture/ADR-026-quickbooks-runtime-ownership.md`.

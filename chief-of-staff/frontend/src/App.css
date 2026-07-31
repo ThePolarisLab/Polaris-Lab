@@ -55,9 +55,22 @@ a:focus-visible {
   padding: 22px;
 }
 
-.login-form h1 {
+.bootstrap-form {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(127, 201, 232, 0.025);
+}
+
+.login-form h1,
+.login-form h2 {
   margin: 0 0 4px;
+}
+
+.login-form h1 {
   font-size: 1.5rem;
+}
+
+.login-form h2 {
+  font-size: 1rem;
 }
 
 .login-form label {
@@ -89,6 +102,13 @@ a:focus-visible {
   border-radius: 8px;
   padding: 10px 12px;
   font-size: 0.84rem;
+}
+
+.auth-message.success {
+  margin: 0 22px 22px;
+  border-color: rgba(89, 199, 139, 0.32);
+  color: #9ee6bd;
+  background: rgba(43, 148, 99, 0.12);
 }
 
 .forbidden-banner {
@@ -487,6 +507,12 @@ a:focus-visible {
   color: #041018;
   background: #8bd2ef;
   font-weight: 800;
+}
+
+.primary-button.secondary {
+  color: #dff6ff;
+  background: rgba(127, 201, 232, 0.16);
+  border: 1px solid rgba(127, 201, 232, 0.2);
 }
 
 @media (max-width: 960px) {

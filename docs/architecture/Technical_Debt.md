@@ -24,14 +24,14 @@ This register records verified or strongly evidenced improvement opportunities. 
 **Risk:** Durability, concurrency, migrations, recovery, and multi-instance behavior are not yet established.  
 **Recommendation:** Select persistent adapters through domain-specific ADRs and preserve repository contracts.
 
-## TD-003 — Authentication and authorization require a unified model
+## TD-003 — External identity provider remains future work
 
 **Area:** Security  
-**Priority:** High  
-**Status:** Resolved for Phase 1; external IdP replacement remains later-phase debt  
-**Observation:** Phase 1 established route security, organization context, permission checks, and frontend session handling.  
-**Risk:** Local token bootstrap is still a development/test-oriented model.  
-**Recommendation:** Replace local token bootstrap with the selected production identity provider in a later authentication rollout.
+**Priority:** High before broad external rollout  
+**Status:** Accepted after Phase 3B  
+**Observation:** Phase 3B replaces the production login blocker with one-time first-admin bootstrap and internal-launch email/password sessions, while keeping `/api/v1/auth/local/token` disabled in production/staging.  
+**Risk:** Internal password sessions are suitable for controlled launch but do not provide enterprise SSO, MFA, delegated identity lifecycle, or centralized offboarding.  
+**Recommendation:** Select and integrate the production identity provider before broad human-user rollout. Keep Phase 3B sessions as an internal bridge, not the final identity strategy.
 
 ## TD-004 — Legacy application configuration and migrations need hardening
 

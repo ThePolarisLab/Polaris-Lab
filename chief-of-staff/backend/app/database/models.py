@@ -1,5 +1,11 @@
 """Import all SQLAlchemy models so Alembic and runtime share one metadata graph."""
 
+from app.auth.models import (  # noqa: F401
+    ProductionAuthBootstrapState,
+    ProductionAuthSession,
+    ProductionLoginAttempt,
+    ProductionPasswordCredential,
+)
 from app.connectors.quickbooks_credentials import (  # noqa: F401
     QuickBooksOAuthCredential,
     QuickBooksOAuthState,

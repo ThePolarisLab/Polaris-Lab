@@ -17,9 +17,11 @@ import {
   X,
 } from "lucide-react";
 import {
-  clearAuthSession,
+  completeBootstrap,
   getAuthSession,
-  loginWithLocalToken,
+  getBootstrapStatus,
+  loginWithPassword,
+  logoutSession,
 } from "./apiClient";
 import BuilderConsole from "./components/BuilderConsole";
 import ExecutiveDashboard from "./components/ExecutiveDashboard";
@@ -44,24 +46,60 @@ function parseHash() {
 }
 
 function LoginScreen({ reason, onAuthenticated }) {
-  const [identityId, setIdentityId] = useState("");
-  const [organizationId, setOrganizationId] = useState(runtimeConfig.auth.organizationId);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [bootstrapSecret, setBootstrapSecret] = useState("");
+  const [bootstrapPassword, setBootstrapPassword] = useState("");
+  const [bootstrapAvailable, setBootstrapAvailable] = useState(false);
+  const [checkingBootstrap, setCheckingBootstrap] = useState(true);
   const [error, setError] = useState(reason === "expired" ? "Your session expired. Sign in again." : "");
+  const [bootstrapMessage, setBootstrapMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    getBootstrapStatus()
+      .then((status) => { if (mounted) setBootstrapAvailable(Boolean(status.available)); })
+      .catch(() => { if (mounted) setBootstrapAvailable(false); })
+      .finally(() => { if (mounted) setCheckingBootstrap(false); });
+    return () => { mounted = false; };
+  }, []);
 
   async function handleSubmit(event) {
     event.preventDefault();
-    if (!identityId.trim() || !organizationId.trim()) {
-      setError("Identity and organization are required.");
+    if (!email.trim() || !password) {
+      setError("Email and password are required.");
       return;
     }
     try {
       setSubmitting(true);
       setError("");
-      const session = await loginWithLocalToken({ identityId: identityId.trim(), organizationId: organizationId.trim() });
+      const session = await loginWithPassword({ email: email.trim(), password });
+      window.location.hash = "#executive/connectors";
       onAuthenticated(session);
     } catch (requestError) {
       setError(requestError.message || "Sign in failed.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleBootstrap(event) {
+    event.preventDefault();
+    if (!bootstrapSecret || bootstrapPassword.length < 12) {
+      setBootstrapMessage("Bootstrap secret and a 12+ character password are required.");
+      return;
+    }
+    try {
+      setSubmitting(true);
+      setBootstrapMessage("");
+      await completeBootstrap({ bootstrapSecret, password: bootstrapPassword });
+      setBootstrapAvailable(false);
+      setBootstrapSecret("");
+      setBootstrapPassword("");
+      setBootstrapMessage("First administrator created. Remove the bootstrap secret from Render, then sign in.");
+    } catch (requestError) {
+      setBootstrapMessage(requestError.message || "Bootstrap failed.");
     } finally {
       setSubmitting(false);
     }
@@ -77,16 +115,32 @@ function LoginScreen({ reason, onAuthenticated }) {
         <form className="login-form" onSubmit={handleSubmit}>
           <h1 id="login-title">Sign in</h1>
           <label>
-            Identity ID
-            <input value={identityId} onChange={(event) => setIdentityId(event.target.value)} autoComplete="username" required />
+            Email
+            <input value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" type="email" required />
           </label>
           <label>
-            Organization ID
-            <input value={organizationId} onChange={(event) => setOrganizationId(event.target.value)} required />
+            Password
+            <input value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" type="password" required />
           </label>
           {error && <div className="auth-message" role="alert">{error}</div>}
           <button type="submit" className="primary-button" disabled={submitting}>{submitting ? "Signing in..." : "Sign In"}</button>
         </form>
+        {!checkingBootstrap && bootstrapAvailable && (
+          <form className="login-form bootstrap-form" onSubmit={handleBootstrap}>
+            <h2>First administrator bootstrap</h2>
+            <label>
+              One-time bootstrap secret
+              <input value={bootstrapSecret} onChange={(event) => setBootstrapSecret(event.target.value)} autoComplete="one-time-code" type="password" required />
+            </label>
+            <label>
+              Admin password
+              <input value={bootstrapPassword} onChange={(event) => setBootstrapPassword(event.target.value)} autoComplete="new-password" type="password" minLength={12} required />
+            </label>
+            {bootstrapMessage && <div className="auth-message" role="status">{bootstrapMessage}</div>}
+            <button type="submit" className="primary-button secondary" disabled={submitting}>{submitting ? "Creating..." : "Create First Admin"}</button>
+          </form>
+        )}
+        {!bootstrapAvailable && bootstrapMessage && <div className="auth-message success" role="status">{bootstrapMessage}</div>}
       </section>
     </main>
   );
@@ -167,8 +221,8 @@ export default function App() {
     };
   }, []);
 
-  function handleLogout() {
-    clearAuthSession("logout");
+  async function handleLogout() {
+    await logoutSession();
     setForbiddenMessage("");
   }
 

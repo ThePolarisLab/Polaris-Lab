@@ -26,10 +26,11 @@ Polaris is being developed as an AI-enabled operating system and Chief of Staff 
 - Phase 1.2 Integration Verification
 - Phase 2 Database Gate
 - Phase 2.1 Persistent Deployment Hardening
+- Phase 3A QuickBooks Production Adapter implementation
 
 ### In progress
 
-- Phase 3A QuickBooks Production Adapter — live read-only QuickBooks Online adapter, company verification, resource/report reads, safe sync, and operator smoke-test runbook for Issue #61.
+- Phase 3B Production Authentication Bootstrap — first-admin onboarding, password sessions, refresh rotation, deployed frontend login, and operator runbook needed before live QuickBooks OAuth verification.
 
 ### Current engineering capabilities
 
@@ -47,7 +48,8 @@ Polaris can currently:
 - enforce configurable analysis limits with a hard safety ceiling;
 - run backend, frontend, TypeScript, security, runtime, and database lifecycle checks in GitHub Actions;
 - enforce Alembic schema lifecycle for staging and production startup;
-- operate hosted staging/production on persistent PostgreSQL with generic public health responses.
+- operate hosted staging/production on persistent PostgreSQL with generic public health responses;
+- provide a tenant-bound QuickBooks production adapter implementation awaiting authenticated live operator verification.
 
 ## Product Direction
 
@@ -63,28 +65,42 @@ The platform must remain explainable, reviewable, testable, and safe at every st
 
 ## Near-Term Priorities
 
-### Phase 3A — QuickBooks Production Adapter and Read-Only Verification
+### Phase 3B — Production Authentication Bootstrap
 
-Goal: connect Polaris safely to the live QuickBooks Online company for Mor Logistics through a tenant-bound, read-only adapter after the persistent PostgreSQL prerequisite.
+Goal: unblock internal production use and live QuickBooks verification without weakening the Security Gate or enabling development local tokens in production.
 
 Planned outcomes:
 
-- Python-owned OAuth, encrypted credential storage, refresh-token rotation, and live Intuit HTTPS calls;
-- company identity verification against `MOR LOGISTICS MANITOBA LIMITED` before accepting synchronized data;
-- paginated reads for company, customers, vendors, accounts, invoices, payments, bills, purchases, and journal entries;
-- report reads for Profit and Loss, Balance Sheet, Cash Flow, Aged Receivables, and Aged Payables;
-- full and incremental read-only sync into Polaris financial cache;
-- safe verification endpoint and connector health states;
-- production smoke-test runbook and Issue #61 evidence checklist;
-- no accounting writes.
+- one-time bootstrap for `org-mor-logistics` and `mor-admin` using Render-managed admin email and strong bootstrap secret;
+- bcrypt password credential storage;
+- signed short-lived access tokens;
+- hashed refresh tokens with rotation and replay rejection;
+- logout/session revocation;
+- login rate limiting;
+- deployed frontend email/password login and first-admin bootstrap screen;
+- production auth operator runbook and route matrix updates.
 
 Scope boundaries:
 
-- do not implement Motive or modify Issue #62;
-- do not implement Outlook;
-- do not add QuickBooks accounting writes;
-- do not migrate API versioning;
-- do not commit production credentials or put them in CI.
+- do not set `POLARIS_ENV=development` in production;
+- do not re-enable `/api/v1/auth/local/token` in production/staging;
+- do not implement Motive or Outlook;
+- do not start QuickBooks OAuth automatically;
+- do not close Issue #61 before live operator evidence.
+
+### Phase 3A Follow-through — QuickBooks Live Operator Verification
+
+Goal: connect Polaris safely to the live QuickBooks Online company for Mor Logistics through the merged tenant-bound, read-only adapter after production authentication works.
+
+Required outcomes:
+
+- production admin login works;
+- QuickBooks OAuth is initiated by an authenticated owner with `connector.write`;
+- company identity verifies against `MOR LOGISTICS MANITOBA LIMITED`;
+- read-only resource/report verification completes;
+- full and incremental sync evidence is recorded;
+- no accounting writes occur;
+- Issue #61 checklist is updated only with live operator evidence.
 
 ### PGE-003.3 — Cross-file Dependency Resolution
 
@@ -163,51 +179,6 @@ Required safeguards:
 
 ## Release Roadmap
 
-### v0.5 — Intelligent Engineering Assistant
-
-Exit criteria:
-
-- PGE-003.3 complete;
-- repository-wide dependency graph available;
-- automated backend tests passing;
-- architecture and API documentation updated;
-- no unresolved critical defects.
-
-### v0.6 — Self-Understanding Codebase
-
-Exit criteria:
-
-- PGE-004 complete;
-- repository-wide code-quality findings available;
-- documented false-positive handling;
-- baseline technical-debt report generated.
-
-### v0.7 — Refactoring and Impact Analysis
-
-Exit criteria:
-
-- PGE-005 complete;
-- change-impact reports available before implementation;
-- affected-test recommendations included;
-- risk scoring documented and tested.
-
-### v0.8 — Engineering Knowledge Graph
-
-Exit criteria:
-
-- persistent relationships between repositories, modules, symbols, APIs, tests, and engineering decisions;
-- searchable engineering memory;
-- traceable evidence for generated conclusions.
-
-### v0.9 — Controlled Engineering Automation
-
-Exit criteria:
-
-- guarded change proposals;
-- branch creation and pull-request workflow automation;
-- mandatory CI and review gates;
-- no direct uncontrolled writes to main.
-
 ### v1.0 — Polaris Chief of Staff Platform
 
 Exit criteria:
@@ -216,6 +187,7 @@ Exit criteria:
 - documented security model;
 - versioned database lifecycle with tested recovery procedures;
 - persistent production database verified across deploy/restart;
+- production authentication bootstrap complete and external IdP decision documented;
 - production QuickBooks read-only verification completed for Issue #61;
 - Motive and Outlook decisions completed or explicitly deferred;
 - release checklist completed;
@@ -258,63 +230,7 @@ A work item is complete only when all applicable conditions are met:
 Before merge:
 
 - no failing CI checks;
-- no unresolved critical review comments;
-- no known secret committed to the repository;
-- no unapproved production-side effect;
-- backward compatibility considered;
-- error handling covered;
-- tests demonstrate the intended behavior.
-
-Before release:
-
-- release notes prepared;
-- version and documentation aligned;
-- rollback approach documented;
-- critical workflows tested;
-- known limitations recorded;
-- repository state clean;
-- hosted production storage is persistent and backed up;
-- live integration smoke tests have operator evidence where required.
-
-## Safety Principles
-
-Polaris engineering follows these rules:
-
-- evidence before assumption;
-- least privilege;
-- read-only by default;
-- explicit approval before writes or execution;
-- no source execution inside static-analysis engines;
-- no production secrets in tests or documentation;
-- deterministic analysis where practical;
-- uncertainty must be reported rather than hidden;
-- main must remain stable.
-
-## Technical-Debt Priorities
-
-Near-term quality work includes:
-
-- complete Phase 3A QuickBooks production adapter and live operator verification;
-- implement external production identity provider before broad rollout;
-- expand backend coverage beyond the GitHub and code-understanding engines;
-- add API endpoint tests;
-- add frontend tests;
-- add linting, formatting, and type-checking gates;
-- review stale branches;
-- improve release versioning;
-- strengthen configuration validation;
-- introduce structured logging and operational diagnostics.
-
-## Work Classification
-
-- ARC — Architecture
-- PGE — Polaris GitHub and engineering intelligence
-- INT — Integrations
-- OPS — Operations
-- INF — Infrastructure
-- DOC — Documentation
-- SEC — Security
-
-## Decision Rule
-
-When speed conflicts with safety, correctness, traceability, or maintainability, Polaris will choose the safer and more reviewable path unless the Builder explicitly approves a documented exception.
+- no unreviewed critical or high security findings;
+- no undocumented public API changes;
+- no production secrets in source control;
+- no tenant-owned persistence without migration and tenant-isolation review.
