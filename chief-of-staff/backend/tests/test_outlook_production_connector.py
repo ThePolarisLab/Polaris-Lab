@@ -8,7 +8,7 @@ from app.api import outlook as outlook_api
 from app.connectors.models import ConnectorStatus
 from app.connectors.outlook import OutlookConnector, OutlookConnectorError
 from app.connectors.outlook_oauth import READ_ONLY_SCOPE, OutlookOAuthError, OutlookOAuthService
-from app.models.outlook import OutlookMessage
+from app.models.outlook import OutlookAttachment, OutlookFolder, OutlookMessage
 from app.services.outlook_sync import _safe_body, classify_message
 
 
@@ -27,6 +27,54 @@ def _message(subject: str, body: str = "", *, importance: str = "normal") -> Out
         last_seen_at=datetime.now(timezone.utc),
         synced_at=datetime.now(timezone.utc),
     )
+
+
+def test_outlook_folder_creation_uses_single_organization_slug_source():
+    values = {
+        "organization_slug": "mor-logistics",
+        "display_name": "Inbox",
+        "parent_folder_id": None,
+        "well_known_name": "inbox",
+        "child_folder_count": 0,
+        "total_item_count": 1,
+        "unread_item_count": 0,
+        "is_sync_enabled": True,
+        "synced_at": datetime.now(timezone.utc),
+    }
+
+    row = OutlookFolder(
+        organization_id="org-mor-logistics",
+        provider_folder_id="folder-inbox",
+        **values,
+    )
+
+    assert row.organization_id == "org-mor-logistics"
+    assert row.organization_slug == "mor-logistics"
+    assert row.provider_folder_id == "folder-inbox"
+
+
+def test_outlook_attachment_creation_uses_single_organization_slug_source():
+    values = {
+        "organization_slug": "mor-logistics",
+        "filename": "pod.pdf",
+        "mime_type": "application/pdf",
+        "size": 1234,
+        "is_inline": False,
+        "content_id": None,
+        "attachment_type": "#microsoft.graph.fileAttachment",
+        "synced_at": datetime.now(timezone.utc),
+    }
+
+    row = OutlookAttachment(
+        organization_id="org-mor-logistics",
+        message_id=42,
+        provider_attachment_id="attachment-1",
+        **values,
+    )
+
+    assert row.organization_id == "org-mor-logistics"
+    assert row.organization_slug == "mor-logistics"
+    assert row.provider_attachment_id == "attachment-1"
 
 
 def test_default_outlook_scope_is_read_only():
