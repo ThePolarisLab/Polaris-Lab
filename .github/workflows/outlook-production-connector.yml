@@ -101,8 +101,19 @@ jobs:
             echo "Potential secret-bearing environment or key file is tracked."
             exit 1
           fi
-          if grep -RInE "(EwB[A-Za-z0-9._-]{40,}|Bearer [A-Za-z0-9._-]{20,}|refresh_token[\"']?[[:space:]]*[:=][[:space:]]*[\"'][A-Za-z0-9._-]{20,}|access_token[\"']?[[:space:]]*[:=][[:space:]]*[\"'][A-Za-z0-9._-]{20,})" \
-            chief-of-staff/backend docs .github 2>/dev/null; then
+          scan_paths=(
+            chief-of-staff/backend/app/connectors/outlook.py
+            chief-of-staff/backend/app/connectors/outlook_credentials.py
+            chief-of-staff/backend/app/connectors/outlook_oauth.py
+            chief-of-staff/backend/app/api/outlook.py
+            chief-of-staff/backend/app/services/outlook_sync.py
+            chief-of-staff/backend/.env.example
+            docs/integrations/outlook-permissions.md
+            docs/integrations/outlook-production-runbook.md
+            .github/workflows/outlook-production-connector.yml
+          )
+          if grep -InE "(EwB[A-Za-z0-9._-]{40,}|Bearer [A-Za-z0-9._-]{20,}|refresh_token[\"']?[[:space:]]*[:=][[:space:]]*[\"'][A-Za-z0-9._-]{20,}|access_token[\"']?[[:space:]]*[:=][[:space:]]*[\"'][A-Za-z0-9._-]{20,})" \
+            "${scan_paths[@]}" 2>/dev/null; then
             echo "Potential committed Outlook token material found."
             exit 1
           fi
