@@ -104,13 +104,15 @@ class FakeSession:
         self.close_called = True
 
 
-def _seed_organization(*, slug: str = "mor-logistics") -> str:
-    organization_id = f"org-test-{uuid4().hex}"
+def _seed_organization(*, slug: str | None = None) -> str:
+    suffix = uuid4().hex
+    organization_id = f"org-test-{suffix}"
+    organization_slug = slug if slug is not None else f"mor-logistics-{suffix}"
     with SessionLocal.begin() as session:
         session.add(
             Organization(
                 id=organization_id,
-                slug=slug,
+                slug=organization_slug,
                 display_name="MOR Logistics",
                 legal_name="MOR LOGISTICS MANITOBA LIMITED",
             )
@@ -257,7 +259,8 @@ def test_start_history_rejects_missing_or_blank_organization_slug():
 
 
 def test_failed_sync_history_preserves_organization_slug(monkeypatch):
-    organization_id = _seed_organization(slug="mor-logistics")
+    slug = f"mor-logistics-failed-{uuid4().hex}"
+    organization_id = _seed_organization(slug=slug)
     service = QuickBooksFinancialSyncService(organization_id, connector=FakeConnector("fetch_company_info"))
     service.store = FakeStore()
     monkeypatch.setattr(service, "_last_checkpoint", lambda: None)
@@ -266,14 +269,15 @@ def test_failed_sync_history_preserves_organization_slug(monkeypatch):
         service.sync(mode="incremental")
 
     history = _latest_history(organization_id)
-    assert history.organization_slug == "mor-logistics"
+    assert history.organization_slug == slug
     assert history.status == "failed"
     assert history.completed_at is not None
     assert "fetch_company_info" in str(history.error_message)
 
 
 def test_successful_sync_history_preserves_slug_and_updates_last_sync(monkeypatch):
-    organization_id = _seed_organization(slug="mor-logistics")
+    slug = f"mor-logistics-success-{uuid4().hex}"
+    organization_id = _seed_organization(slug=slug)
     service = QuickBooksFinancialSyncService(organization_id, connector=FakeConnector())
     service.store = FakeStore()
     monkeypatch.setattr(service, "_write_sync_payload", lambda *args, **kwargs: None)
@@ -281,7 +285,7 @@ def test_successful_sync_history_preserves_slug_and_updates_last_sync(monkeypatc
     result = service.sync(mode="incremental")
 
     history = _latest_history(organization_id)
-    assert history.organization_slug == "mor-logistics"
+    assert history.organization_slug == slug
     assert history.status == "success"
     assert history.completed_at is not None
     assert result["last_sync"] == history.completed_at.isoformat()
@@ -289,8 +293,10 @@ def test_successful_sync_history_preserves_slug_and_updates_last_sync(monkeypatc
 
 
 def test_sync_history_slug_cannot_be_borrowed_from_another_tenant():
-    first_org = _seed_organization(slug="mor-logistics")
-    second_org = _seed_organization(slug="other-tenant")
+    first_slug = f"mor-logistics-{uuid4().hex}"
+    second_slug = f"other-tenant-{uuid4().hex}"
+    first_org = _seed_organization(slug=first_slug)
+    second_org = _seed_organization(slug=second_slug)
 
     first_history_id = QuickBooksFinancialSyncService(first_org, connector=FakeConnector())._start_history(
         datetime.now(timezone.utc),
@@ -309,6 +315,6 @@ def test_sync_history_slug_cannot_be_borrowed_from_another_tenant():
         assert first_history is not None
         assert second_history is not None
         assert first_history.organization_id == first_org
-        assert first_history.organization_slug == "mor-logistics"
+        assert first_history.organization_slug == first_slug
         assert second_history.organization_id == second_org
-        assert second_history.organization_slug == "other-tenant"
+        assert second_history.organization_slug == second_slug
