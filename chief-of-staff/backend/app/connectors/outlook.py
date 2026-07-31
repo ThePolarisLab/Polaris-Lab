@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import threading
@@ -19,9 +20,10 @@ from app.connectors.models import ConnectorHealth, ConnectorStatus, SyncResult
 from app.connectors.outlook_credentials import OutlookCredentialError, OutlookCredentialStore
 from app.connectors.outlook_oauth import GRAPH_BASE_URL, OutlookOAuthError, OutlookOAuthService
 
-_REAUTH_CODES = {400, 401, 403}
+_GRAPH_AUTH_CODES = {401, 403}
 _ORG_LOCKS: dict[str, threading.Lock] = {}
 _ORG_LOCKS_GUARD = threading.Lock()
+logger = logging.getLogger(__name__)
 
 
 class OutlookConnectorError(RuntimeError):
@@ -178,7 +180,7 @@ class OutlookConnector(BaseConnector):
             "GET",
             f"/me/messages/{_quote_segment(message_id)}/attachments",
             operation="attachment metadata",
-            params={"$top": "100", "$select": "id,name,contentType,size,isInline,contentId"},
+            params={"$top": "100", "$select": "id,name,contentType,size,isInline,lastModifiedDateTime"},
         )
 
     def safe_status(self) -> dict[str, Any]:
@@ -229,10 +231,12 @@ class OutlookConnector(BaseConnector):
         last_error: OutlookConnectorError | None = None
         for attempt in range(1, self._max_attempts() + 1):
             self.authenticate()
+            correlation_id = _correlation_id()
             headers = {
                 "Accept": "application/json",
                 "Authorization": f"Bearer {self._access_token}",
-                "X-Polaris-Correlation": _correlation_id(),
+                "client-request-id": correlation_id,
+                "X-Polaris-Correlation": correlation_id,
             }
             if prefer_text_body:
                 headers["Prefer"] = 'outlook.body-content-type="text"'
@@ -277,6 +281,11 @@ class OutlookConnector(BaseConnector):
         return url
 
     def _json_response(self, response: httpx.Response, operation: str) -> dict[str, Any]:
+        if response.status_code >= 400:
+            details = _graph_error_details(response)
+            _log_graph_error(operation, response, details)
+        else:
+            details = {}
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After")
             if retry_after:
@@ -284,15 +293,15 @@ class OutlookConnector(BaseConnector):
                     self._sleep(min(float(retry_after), 30.0))
                 except ValueError:
                     pass
-            raise OutlookConnectorError(f"Outlook {operation} is rate limited", status=ConnectorStatus.RATE_LIMITED, retryable=True)
-        if response.status_code in _REAUTH_CODES:
-            message = f"Outlook {operation} authorization failed with HTTP {response.status_code}"
-            self._store().record_refresh_failure(message, reauthorization_required=response.status_code in {400, 401})
+            raise OutlookConnectorError(_graph_failure_message(operation, response, details, fallback="is rate limited"), status=ConnectorStatus.RATE_LIMITED, retryable=True)
+        if response.status_code in _GRAPH_AUTH_CODES:
+            message = _graph_failure_message(operation, response, details, fallback="authorization failed")
+            self._store().record_refresh_failure(message, reauthorization_required=response.status_code == 401)
             raise OutlookConnectorError(message, status=ConnectorStatus.REAUTHORIZATION_REQUIRED)
         if response.status_code >= 500:
-            raise OutlookConnectorError(f"Outlook {operation} failed with HTTP {response.status_code}", status=ConnectorStatus.DEGRADED, retryable=True)
+            raise OutlookConnectorError(_graph_failure_message(operation, response, details), status=ConnectorStatus.DEGRADED, retryable=True)
         if response.status_code >= 400:
-            raise OutlookConnectorError(f"Outlook {operation} failed with HTTP {response.status_code}", status=ConnectorStatus.DEGRADED)
+            raise OutlookConnectorError(_graph_failure_message(operation, response, details), status=ConnectorStatus.DEGRADED)
         try:
             payload = response.json()
         except ValueError as exc:
@@ -407,6 +416,68 @@ def _quote_segment(value: str) -> str:
 
 def _correlation_id() -> str:
     return f"outlook-{int(time.time() * 1000)}"
+
+
+def _graph_error_details(response: httpx.Response) -> dict[str, str | None]:
+    payload: Any = None
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    error = payload.get("error") if isinstance(payload, dict) and isinstance(payload.get("error"), dict) else {}
+    inner = error.get("innerError") or error.get("innererror") if isinstance(error, dict) else {}
+    if not isinstance(inner, dict):
+        inner = {}
+    message = error.get("message") if isinstance(error, dict) else None
+    if not isinstance(message, str) or not message:
+        message = response.text[:500] if response.text else None
+    code = error.get("code") if isinstance(error, dict) else None
+    request_id = (
+        inner.get("request-id")
+        or inner.get("requestId")
+        or response.headers.get("request-id")
+        or response.headers.get("client-request-id")
+    )
+    return {
+        "code": _redact(str(code)) if code else None,
+        "message": _redact(str(message)) if message else None,
+        "request_id": _redact(str(request_id)) if request_id else None,
+    }
+
+
+def _log_graph_error(operation: str, response: httpx.Response, details: dict[str, str | None]) -> None:
+    logger.warning(
+        "Outlook Graph %s failed with HTTP %s graph_code=%s graph_request_id=%s graph_message=%s",
+        operation,
+        response.status_code,
+        details.get("code") or "unknown",
+        details.get("request_id") or "unknown",
+        details.get("message") or "unknown",
+        extra={
+            "outlook_operation": operation,
+            "graph_http_status": response.status_code,
+            "graph_error_code": details.get("code"),
+            "graph_error_message": details.get("message"),
+            "graph_request_id": details.get("request_id"),
+        },
+    )
+
+
+def _graph_failure_message(
+    operation: str,
+    response: httpx.Response,
+    details: dict[str, str | None],
+    *,
+    fallback: str = "failed",
+) -> str:
+    parts = [f"Outlook {operation} {fallback} with HTTP {response.status_code}"]
+    if details.get("code"):
+        parts.append(f"graph_code={details['code']}")
+    if details.get("message"):
+        parts.append(f"graph_message={details['message']}")
+    if details.get("request_id"):
+        parts.append(f"graph_request_id={details['request_id']}")
+    return " ".join(parts)
 
 
 def _redact(value: str) -> str:
