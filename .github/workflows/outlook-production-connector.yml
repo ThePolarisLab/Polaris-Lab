@@ -1,0 +1,100 @@
+name: Outlook Production Connector
+
+on:
+  pull_request:
+    paths:
+      - "chief-of-staff/backend/app/connectors/outlook*.py"
+      - "chief-of-staff/backend/app/models/outlook.py"
+      - "chief-of-staff/backend/app/services/outlook_sync.py"
+      - "chief-of-staff/backend/app/api/outlook.py"
+      - "chief-of-staff/backend/migrations/**"
+      - "chief-of-staff/backend/tests/test_outlook_production_connector.py"
+      - "chief-of-staff/backend/tests/test_schema_adoption_inventory.py"
+      - "chief-of-staff/frontend/**"
+      - "docs/integrations/outlook-*.md"
+      - ".github/workflows/outlook-production-connector.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "chief-of-staff/backend/app/connectors/outlook*.py"
+      - "chief-of-staff/backend/app/models/outlook.py"
+      - "chief-of-staff/backend/app/services/outlook_sync.py"
+      - "chief-of-staff/backend/app/api/outlook.py"
+      - "chief-of-staff/backend/migrations/**"
+      - "chief-of-staff/backend/tests/test_outlook_production_connector.py"
+      - "chief-of-staff/backend/tests/test_schema_adoption_inventory.py"
+      - "chief-of-staff/frontend/**"
+      - "docs/integrations/outlook-*.md"
+      - ".github/workflows/outlook-production-connector.yml"
+
+jobs:
+  backend-outlook:
+    name: Backend Outlook tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chief-of-staff/backend
+    env:
+      POLARIS_ENV: test
+      DATABASE_URL: sqlite:///./outlook-test.db
+      POLARIS_AUTH_SECRET: polaris-test-secret-at-least-32-characters
+      POLARIS_SESSION_SECRET: polaris-test-session-secret-at-least-32-characters
+      POLARIS_QBO_CLIENT_ID: test-qbo-client-id
+      POLARIS_QBO_CLIENT_SECRET: test-qbo-client-secret
+      POLARIS_QBO_REDIRECT_URI: http://localhost:8000/api/v1/connectors/quickbooks/oauth/callback
+      POLARIS_QBO_OAUTH_STATE_SECRET: test-qbo-state-secret-at-least-32-characters
+      POLARIS_QBO_TOKEN_ENCRYPTION_KEY: uNGBy5tQXI3oqHr9FowynhX4dV13I_tSQ5dqGDuHObs=
+      POLARIS_OUTLOOK_CLIENT_ID: test-outlook-client-id
+      POLARIS_OUTLOOK_CLIENT_SECRET: test-outlook-client-secret
+      POLARIS_OUTLOOK_REDIRECT_URI: http://localhost:8000/api/v1/outlook/callback
+      POLARIS_OUTLOOK_OAUTH_STATE_SECRET: test-outlook-state-secret-at-least-32-chars
+      POLARIS_OUTLOOK_TOKEN_ENCRYPTION_KEY: uNGBy5tQXI3oqHr9FowynhX4dV13I_tSQ5dqGDuHObs=
+      POLARIS_OUTLOOK_SCOPES: openid profile email offline_access https://graph.microsoft.com/Mail.Read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Alembic upgrade
+        run: python -m alembic upgrade head
+      - name: Outlook backend tests
+        run: python -m pytest tests/test_outlook_production_connector.py tests/test_schema_adoption_inventory.py
+
+  frontend-outlook:
+    name: Frontend Outlook build/tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chief-of-staff/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: chief-of-staff/frontend/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Run frontend tests
+        run: npm test -- --run
+      - name: Build frontend
+        run: npm run build
+
+  secret-scan:
+    name: Outlook secret pattern scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify no live Outlook secrets are committed
+        shell: bash
+        run: |
+          if grep -RInE "(refresh_token|access_token|client_secret|authorization_code|Bearer )[A-Za-z0-9._~+/=-]{16,}" \
+            chief-of-staff/backend app docs .github 2>/dev/null; then
+            echo "Potential committed Outlook secret material found."
+            exit 1
+          fi
