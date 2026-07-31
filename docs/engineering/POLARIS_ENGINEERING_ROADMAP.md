@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: Polaris Lab
-Last updated: 2026-07-30
+Last updated: 2026-07-31
 
 ## Purpose
 
@@ -27,10 +27,12 @@ Polaris is being developed as an AI-enabled operating system and Chief of Staff 
 - Phase 2 Database Gate
 - Phase 2.1 Persistent Deployment Hardening
 - Phase 3A QuickBooks Production Adapter implementation
+- Phase 3B Production Authentication Bootstrap core implementation
 
 ### In progress
 
-- Phase 3B Production Authentication Bootstrap — first-admin onboarding, password sessions, refresh rotation, deployed frontend login, and operator runbook needed before live QuickBooks OAuth verification.
+- Phase 3A follow-through — QuickBooks live operator verification after the QBO sync-history hotfix is merged and deployed.
+- Phase 3B.1 Production Hardening Cleanup — schema drift audit, adoption inventory guardrail, dead-code cleanup, and v1.0 scope re-baseline.
 
 ### Current engineering capabilities
 
@@ -46,10 +48,11 @@ Polaris can currently:
 - produce deterministic plain-English module explanations;
 - analyze large Python files in syntax-aware chunks;
 - enforce configurable analysis limits with a hard safety ceiling;
-- run backend, frontend, TypeScript, security, runtime, and database lifecycle checks in GitHub Actions;
+- run backend, frontend, TypeScript, security, runtime, QuickBooks, and database lifecycle checks in GitHub Actions;
 - enforce Alembic schema lifecycle for staging and production startup;
 - operate hosted staging/production on persistent PostgreSQL with generic public health responses;
-- provide a tenant-bound QuickBooks production adapter implementation awaiting authenticated live operator verification.
+- authenticate the first Mor Logistics production owner through the hosted frontend;
+- provide a tenant-bound QuickBooks production adapter implementation awaiting final read-only sync evidence.
 
 ## Product Direction
 
@@ -65,32 +68,28 @@ The platform must remain explainable, reviewable, testable, and safe at every st
 
 ## Near-Term Priorities
 
-### Phase 3B — Production Authentication Bootstrap
+### Phase 3B.1 — Production Hardening Cleanup
 
-Goal: unblock internal production use and live QuickBooks verification without weakening the Security Gate or enabling development local tokens in production.
+Goal: remove small but meaningful production-readiness risks before declaring the QuickBooks path complete.
 
 Planned outcomes:
 
-- one-time bootstrap for `org-mor-logistics` and `mor-admin` using Render-managed admin email and strong bootstrap secret;
-- bcrypt password credential storage;
-- signed short-lived access tokens;
-- hashed refresh tokens with rotation and replay rejection;
-- logout/session revocation;
-- login rate limiting;
-- deployed frontend email/password login and first-admin bootstrap screen;
-- production auth operator runbook and route matrix updates.
+- schema adoption inventory aligned with current financial cache SQLAlchemy models;
+- regression test that catches future financial-cache model/adoption-inventory drift;
+- documented production schema drift audit procedure;
+- dead frontend backup file removed from `src`;
+- v1.0 punch list updated with the current 86-89% readiness band and an explicit narrow-vs-broad v1.0 decision.
 
 Scope boundaries:
 
-- do not set `POLARIS_ENV=development` in production;
-- do not re-enable `/api/v1/auth/local/token` in production/staging;
+- do not change auth, OAuth, refresh, frontend retry, or QuickBooks permissions;
 - do not implement Motive or Outlook;
-- do not start QuickBooks OAuth automatically;
-- do not close Issue #61 before live operator evidence.
+- do not change deployment infrastructure;
+- do not merge the QBO sync-history hotfix without human review.
 
 ### Phase 3A Follow-through — QuickBooks Live Operator Verification
 
-Goal: connect Polaris safely to the live QuickBooks Online company for Mor Logistics through the merged tenant-bound, read-only adapter after production authentication works.
+Goal: connect Polaris safely to the live QuickBooks Online company for Mor Logistics through the merged tenant-bound, read-only adapter after production authentication works and the sync-history hotfix is deployed.
 
 Required outcomes:
 
@@ -101,6 +100,15 @@ Required outcomes:
 - full and incremental sync evidence is recorded;
 - no accounting writes occur;
 - Issue #61 checklist is updated only with live operator evidence.
+
+### External Identity Decision
+
+Goal: decide whether the internal production auth bootstrap is sufficient for internal v1.0 or whether external IdP integration is required before the release label.
+
+Decision options:
+
+- internal v1.0: ship with production bootstrap/password sessions for controlled Mor Logistics use, defer external IdP to v1.1;
+- broader v1.0: require external IdP before production-ready approval.
 
 ### PGE-003.3 — Cross-file Dependency Resolution
 
@@ -191,7 +199,8 @@ Exit criteria:
 - production QuickBooks read-only verification completed for Issue #61;
 - Motive and Outlook decisions completed or explicitly deferred;
 - release checklist completed;
-- production-readiness review approved.
+- production-readiness review approved;
+- repository visibility reviewed and set to private unless stakeholders explicitly approve public visibility.
 
 ## Engineering Workflow
 
@@ -233,4 +242,5 @@ Before merge:
 - no unreviewed critical or high security findings;
 - no undocumented public API changes;
 - no production secrets in source control;
-- no tenant-owned persistence without migration and tenant-isolation review.
+- no tenant-owned persistence without migration and tenant-isolation review;
+- no model/adoption-inventory drift for tables touched by the change.
