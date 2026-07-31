@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -188,6 +191,70 @@ def test_outlook_attachment_creation_uses_single_organization_slug_source():
     assert row.organization_id == "org-mor-logistics"
     assert row.organization_slug == "mor-logistics"
     assert row.provider_attachment_id == "attachment-1"
+
+
+def test_attachment_metadata_request_uses_base_attachment_select(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["headers"] = request.headers
+        return httpx.Response(200, json={"value": []}, request=request)
+
+    connector = OutlookConnector(http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+    connector.authenticate = lambda: None
+    connector._access_token = "safe-access-token"
+
+    assert connector.list_attachments("message 1") == {"value": []}
+
+    parsed = urlparse(str(captured["url"]))
+    query = parse_qs(parsed.query)
+    selected = set(query["$select"][0].split(","))
+
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "graph.microsoft.com"
+    assert parsed.path == "/v1.0/me/messages/message%201/attachments"
+    assert query["$top"] == ["100"]
+    assert selected == {"id", "name", "contentType", "size", "isInline", "lastModifiedDateTime"}
+    assert "contentId" not in selected
+    headers = captured["headers"]
+    assert headers["Authorization"] == "Bearer safe-access-token"
+    assert headers["Accept"] == "application/json"
+    assert headers["client-request-id"].startswith("outlook-")
+    assert headers["X-Polaris-Correlation"] == headers["client-request-id"]
+
+
+def test_attachment_metadata_graph_error_payload_is_logged(caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={
+                "error": {
+                    "code": "Request_UnsupportedQuery",
+                    "message": "Could not find a property named 'contentId' on type 'microsoft.graph.attachment'.",
+                    "innerError": {"request-id": "graph-request-123"},
+                }
+            },
+            request=request,
+        )
+
+    connector = OutlookConnector(http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+    connector.authenticate = lambda: None
+    connector._access_token = "safe-access-token"
+
+    with caplog.at_level(logging.WARNING, logger="app.connectors.outlook"):
+        with pytest.raises(OutlookConnectorError) as exc:
+            connector.list_attachments("message-1")
+
+    message = str(exc.value)
+    assert exc.value.status == ConnectorStatus.DEGRADED
+    assert "Request_UnsupportedQuery" in message
+    assert "contentId" in message
+    assert "graph-request-123" in message
+    assert "safe-access-token" not in message
+    assert "Request_UnsupportedQuery" in caplog.text
+    assert "graph-request-123" in caplog.text
+    assert "safe-access-token" not in caplog.text
 
 
 def test_default_outlook_scope_is_read_only():
