@@ -49,6 +49,7 @@ class FinancialSyncHistory(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     organization_id: Mapped[str] = mapped_column(String, ForeignKey("organizations.id"), nullable=False, index=True)
+    organization_slug: Mapped[str] = mapped_column(String, nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(30), index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
