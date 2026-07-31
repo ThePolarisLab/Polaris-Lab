@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -391,9 +392,11 @@ def _correlation_id() -> str:
 
 
 def _redact(value: str) -> str:
-    redacted = value
-    for marker in ("access_token", "refresh_token", "client_secret", "authorization", "code", "state"):
-        redacted = redacted.replace(marker + "=", marker + "=[REDACTED]")
-    if "Bearer " in redacted:
-        redacted = redacted.split("Bearer ", 1)[0] + "Bearer [REDACTED]"
+    redacted = re.sub(
+        r"(?i)\b(access_token|refresh_token|client_secret|authorization_code|code|state)\s*[:=]\s*[^\s,;]+",
+        lambda match: f"{match.group(1)}=[REDACTED]",
+        value,
+    )
+    redacted = re.sub(r"(?i)\bAuthorization\s*[:=]\s*Bearer\s+[^\s,;]+", "Authorization=Bearer [REDACTED]", redacted)
+    redacted = re.sub(r"(?i)\bBearer\s+[^\s,;]+", "Bearer [REDACTED]", redacted)
     return redacted
