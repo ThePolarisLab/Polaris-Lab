@@ -63,3 +63,17 @@ Production prerequisites:
 - schema drift audit passes after any database incident or model/migration change.
 
 Operator setup and smoke-test steps are documented in `docs/integrations/quickbooks-production-runbook.md`. Runtime ownership and the Python/Hermes boundary are documented in `docs/architecture/ADR-026-quickbooks-runtime-ownership.md`.
+
+## Outlook Production Setup
+
+Track 4B adds a tenant-bound, read-only Microsoft 365 Outlook connector. It ingests approved folders, stores normalized message and attachment metadata, preserves provenance, and powers conservative executive attention views. It is not a general-purpose email client.
+
+Required Microsoft Graph delegated scopes:
+
+```text
+openid profile email offline_access https://graph.microsoft.com/Mail.Read
+```
+
+Forbidden in Track 4B: send, reply, forward, delete, move, mark read/unread, flag/category edits, drafts, mailbox rules, calendar, contacts, Teams, and webhooks.
+
+Use `chief-of-staff/backend/.env.example` for the Outlook variable inventory. Operator setup, privacy boundaries, verification, and rollback are documented in `docs/integrations/outlook-production-runbook.md`; permission boundaries are documented in `docs/integrations/outlook-permissions.md`.
