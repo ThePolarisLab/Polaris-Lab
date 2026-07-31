@@ -204,7 +204,6 @@ class OutlookSyncService:
                 if row is None:
                     row = OutlookFolder(
                         organization_id=self.organization_id,
-                        organization_slug=org_slug,
                         provider_folder_id=folder_id,
                         **values,
                     )
@@ -325,7 +324,6 @@ class OutlookSyncService:
                 session.add(
                     OutlookAttachment(
                         organization_id=self.organization_id,
-                        organization_slug=org_slug,
                         message_id=message.id,
                         provider_attachment_id=attachment_id,
                         **values,
