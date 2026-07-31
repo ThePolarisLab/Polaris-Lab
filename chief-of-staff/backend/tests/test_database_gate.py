@@ -7,7 +7,7 @@ import sys
 import textwrap
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
-ALEMBIC_HEAD = "202607300004"
+ALEMBIC_HEAD = "202607310001"
 
 
 def _sqlite_url(path: Path) -> str:
@@ -22,6 +22,7 @@ def _run_python(script: str, database_url: str, *, extra_env: dict[str, str] | N
             "POLARIS_ENV": "test",
             "POLARIS_AUTH_SECRET": "database-gate-test-secret-value",
             "POLARIS_QBO_TOKEN_ENCRYPTION_KEY": "uPlZqC60CQaQGFL-kQo-xUOyEE5uNUAyxKmwbzfdiVo=",
+            "POLARIS_OUTLOOK_TOKEN_ENCRYPTION_KEY": "uPlZqC60CQaQGFL-kQo-xUOyEE5uNUAyxKmwbzfdiVo=",
             "POLARIS_AUTO_CREATE_SCHEMA": "false",
         }
     )
@@ -60,6 +61,8 @@ def test_clean_sqlite_upgrade_head_starts_and_has_expected_schema(tmp_path: Path
         assert 'organizations' in tables
         assert 'trucks' in tables
         assert 'quickbooks_oauth_credentials' in tables
+        assert 'outlook_oauth_credentials' in tables
+        assert 'outlook_messages' in tables
         with engine.connect() as connection:
             assert connection.execute(text('SELECT COUNT(*) FROM organizations')).scalar_one() == 0
             assert connection.execute(text('SELECT COUNT(*) FROM memory_entries')).scalar_one() == 0
@@ -72,6 +75,9 @@ def test_clean_sqlite_upgrade_head_starts_and_has_expected_schema(tmp_path: Path
         history_columns = {column['name'] for column in inspector.get_columns('financial_sync_history')}
         assert 'sync_mode' in history_columns
         assert 'checkpoint_after' in history_columns
+        outlook_history_columns = {column['name'] for column in inspector.get_columns('outlook_sync_history')}
+        assert 'organization_slug' in outlook_history_columns
+        assert 'checkpoint_after' in outlook_history_columns
         indexes = {index['name'] for index in inspector.get_indexes('trucks')}
         assert 'ix_trucks_organization_id' in indexes
         unique_constraints = {constraint['name'] for constraint in inspector.get_unique_constraints('trucks')}
@@ -107,11 +113,11 @@ def test_tenant_table_inventories_are_complete() -> None:
     _run_python(
         """
         import importlib
-        from app.database.validate_schema import TENANT_TABLES as validator_tables
+        from app.database.validate_schema import LEGACY_OPTIONAL_TABLES, TENANT_TABLES as validator_tables
 
         add_columns = importlib.import_module('migrations.versions.202607290002_add_nullable_tenant_columns')
         backfill = importlib.import_module('migrations.versions.202607290003_backfill_and_require_tenant_ownership')
-        expected = {
+        phase1_expected = {
             'companies',
             'trucks',
             'memory_entries',
@@ -126,9 +132,22 @@ def test_tenant_table_inventories_are_complete() -> None:
             'quickbooks_oauth_credentials',
             'quickbooks_oauth_states',
         }
-        assert set(add_columns.TENANT_TABLES) == expected
-        assert set(backfill.TENANT_TABLES) == expected
-        assert set(validator_tables) == expected
+        post_baseline_tenant_tables = {
+            'production_auth_sessions',
+            'production_auth_bootstrap_state',
+            'outlook_oauth_credentials',
+            'outlook_oauth_states',
+            'outlook_folders',
+            'outlook_folder_checkpoints',
+            'outlook_messages',
+            'outlook_attachments',
+            'outlook_message_classifications',
+            'outlook_sync_history',
+        }
+        assert set(add_columns.TENANT_TABLES) == phase1_expected
+        assert set(backfill.TENANT_TABLES) == phase1_expected
+        assert set(validator_tables) == phase1_expected | post_baseline_tenant_tables
+        assert post_baseline_tenant_tables.issubset(set(LEGACY_OPTIONAL_TABLES))
         """,
         db_url,
     )
@@ -157,7 +176,7 @@ def test_current_seeded_database_upgrade_preserves_tenant_rows(tmp_path: Path) -
         CREATE TABLE mission_workflows (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, mission_id INTEGER, title TEXT, status TEXT, progress INTEGER, position INTEGER);
         CREATE TABLE mission_tasks (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, workflow_id INTEGER, title TEXT, status TEXT, position INTEGER, system TEXT, capability TEXT, notes TEXT, completed_at TEXT);
         CREATE TABLE team_notes (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, author TEXT, note_type TEXT, status TEXT, title TEXT, details TEXT, target_entity TEXT, assigned_to TEXT, due_at TEXT, created_at TEXT, updated_at TEXT, resolved_at TEXT);
-        CREATE TABLE financial_accounts (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, qbo_id TEXT, name TEXT, fully_qualified_name TEXT, account_type TEXT, account_subtype TEXT, active INTEGER, current_balance REAL, payload TEXT, synced_at TEXT);
+        CREATE TABLE financial_accounts (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, name TEXT, fully_qualified_name TEXT, account_type TEXT, account_subtype TEXT, active INTEGER, current_balance REAL, payload TEXT, synced_at TEXT);
         CREATE TABLE financial_snapshots (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, snapshot_type TEXT, period_start TEXT, period_end TEXT, accounting_method TEXT, payload TEXT, captured_at TEXT);
         CREATE TABLE financial_sync_history (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, status TEXT, started_at TEXT, completed_at TEXT, duration_ms INTEGER, accounts_imported INTEGER, company_name TEXT, error_message TEXT);
         CREATE TABLE quickbooks_oauth_credentials (id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, realm_id TEXT, encrypted_refresh_token TEXT, scopes TEXT, connected_at TEXT, updated_at TEXT);
