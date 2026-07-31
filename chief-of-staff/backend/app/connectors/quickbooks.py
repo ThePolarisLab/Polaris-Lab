@@ -34,6 +34,7 @@ RESOURCE_ENTITY: dict[str, str] = {
     "customers": "Customer",
     "vendors": "Vendor",
     "accounts": "Account",
+    "items": "Item",
     "invoices": "Invoice",
     "payments": "Payment",
     "bills": "Bill",
