@@ -2,6 +2,7 @@ from fastapi import Depends, FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
+from app.core.logging import configure_application_logging
 from app.database.schema_guard import health_database_status, prepare_database_for_runtime
 from app.security.dependencies import require_permission
 from app.security.models import Permission
@@ -35,6 +36,7 @@ from app.connectors.outlook import OutlookConnector
 from app.connectors.quickbooks import QuickBooksConnector
 from app.connectors.registry import connector_registry
 
+configure_application_logging()
 prepare_database_for_runtime()
 connector_registry.register(GitHubConnector(), replace=True)
 connector_registry.register(QuickBooksConnector(), replace=True)
