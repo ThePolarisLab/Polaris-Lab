@@ -327,7 +327,8 @@ class QuickBooksFinancialSyncService:
         end_date: date | None,
         mode: str,
     ) -> None:
-        self._upsert_accounts(session, accounts, captured_at)
+        organization_slug = self._organization_slug(session)
+        self._upsert_accounts(session, accounts, captured_at, organization_slug)
         self._snapshot(session, "company", company, captured_at, start_date, end_date)
         for resource, rows in resources.items():
             self._snapshot(
@@ -375,13 +376,20 @@ class QuickBooksFinancialSyncService:
         history.checkpoint_after = checkpoint_after
         history.verification_status = str(verification["identity_verification_status"])
 
-    def _upsert_accounts(self, session, accounts: list[dict[str, Any]], synced_at: datetime) -> None:
+    def _upsert_accounts(
+        self,
+        session,
+        accounts: list[dict[str, Any]],
+        synced_at: datetime,
+        organization_slug: str,
+    ) -> None:
         for account in accounts:
             qbo_id = str(account.get("Id") or "")
             if not qbo_id:
                 continue
             row = session.query(FinancialAccount).filter_by(organization_id=self.organization_id, qbo_id=qbo_id).one_or_none()
             values = {
+                "organization_slug": organization_slug,
                 "name": str(account.get("Name") or account.get("FullyQualifiedName") or qbo_id),
                 "fully_qualified_name": account.get("FullyQualifiedName"),
                 "account_type": account.get("AccountType"),

@@ -7,7 +7,7 @@ import sys
 import textwrap
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
-ALEMBIC_HEAD = "202607300002"
+ALEMBIC_HEAD = "202607300003"
 
 
 def _sqlite_url(path: Path) -> str:

@@ -16,6 +16,7 @@ class FinancialAccount(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     organization_id: Mapped[str] = mapped_column(String, ForeignKey("organizations.id"), nullable=False, index=True)
+    organization_slug: Mapped[str] = mapped_column(String, nullable=False, index=True)
     qbo_id: Mapped[str] = mapped_column(String(80), index=True)
     name: Mapped[str] = mapped_column(String(255))
     fully_qualified_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
