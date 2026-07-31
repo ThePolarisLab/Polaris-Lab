@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -21,6 +22,7 @@ from app.security.dependencies import require_permission
 from app.security.models import AuthenticatedPrincipal, Permission
 
 router = APIRouter(prefix="/api/v1/outlook", tags=["outlook"])
+logger = logging.getLogger(__name__)
 
 
 def _db() -> Session:
@@ -168,7 +170,11 @@ def outlook_attention(
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.EXECUTIVE_READ)),
     session: Session = Depends(_db),
 ) -> dict[str, Any]:
-    return {"count": 0, "items": []} if not _mailbox_address(principal.organization_id) else {"count": len(_attention_items(session, principal.organization_id, limit=limit)), "items": _attention_items(session, principal.organization_id, limit=limit)}
+    if not _mailbox_address(principal.organization_id):
+        return {"count": 0, "items": []}
+    items = _attention_items(session, principal.organization_id, limit=limit)
+    _log_attention_filter_trace(session, principal.organization_id)
+    return {"count": len(items), "items": items}
 
 
 @router.get("/sync-history")
@@ -276,15 +282,13 @@ def _attention_items(session: Session, organization_id: str, *, limit: int) -> l
     )
     items: list[dict[str, Any]] = []
     for row in rows:
-        sender = str((row.sender or {}).get("address") or "").casefold()
-        if sender == mailbox:
-            continue
-        if _has_later_outbound_response(session, organization_id, mailbox, row):
+        reason = _attention_filter_reason(session, organization_id, mailbox, threshold, row)
+        if reason:
+            _log_attention_decision(organization_id, row, included=False, reason=reason)
             continue
         classifications = [item for item in row.classifications if item.category != "unclassified"]
-        if not classifications and row.importance != "high":
-            continue
         category = classifications[0].category if classifications else "High Importance"
+        _log_attention_decision(organization_id, row, included=True, reason="included")
         items.append(
             {
                 "message_id": row.id,
@@ -300,6 +304,64 @@ def _attention_items(session: Session, organization_id: str, *, limit: int) -> l
         if len(items) >= limit:
             break
     return items
+
+
+def _attention_filter_reason(session: Session, organization_id: str, mailbox: str, threshold: datetime, row: OutlookMessage) -> str | None:
+    if row.removed_at is not None:
+        return "removed"
+    if row.is_draft is True:
+        return "draft"
+    if row.received_at is None:
+        return "missing_received_at"
+    if row.received_at > threshold:
+        return "too_recent_for_followup_threshold"
+    sender = str((row.sender or {}).get("address") or "").casefold()
+    if sender == mailbox:
+        return "sender_is_connected_mailbox"
+    if _has_later_outbound_response(session, organization_id, mailbox, row):
+        return "later_outbound_response_in_conversation"
+    classifications = [item for item in row.classifications if item.category != "unclassified"]
+    if not classifications and row.importance != "high":
+        return "unclassified_normal_importance"
+    return None
+
+
+def _log_attention_filter_trace(session: Session, organization_id: str) -> None:
+    mailbox = _mailbox_address(organization_id)
+    if not mailbox:
+        return
+    threshold = datetime.now(timezone.utc) - timedelta(hours=_followup_threshold_hours())
+    rows = (
+        _message_query(session, organization_id)
+        .order_by(desc(OutlookMessage.received_at), desc(OutlookMessage.synced_at))
+        .limit(200)
+        .all()
+    )
+    for row in rows:
+        reason = _attention_filter_reason(session, organization_id, mailbox, threshold, row)
+        _log_attention_decision(organization_id, row, included=reason is None, reason=reason or "included")
+
+
+def _log_attention_decision(organization_id: str, row: OutlookMessage, *, included: bool, reason: str) -> None:
+    logger.info(
+        "Outlook attention filter decision",
+        extra={
+            "organization_id": organization_id,
+            "outlook_message_table": "outlook_messages",
+            "outlook_message_row_id": row.id,
+            "outlook_provider_message_id": row.provider_message_id,
+            "outlook_message_subject": row.subject,
+            "outlook_conversation_id": row.conversation_id,
+            "outlook_received_at": row.received_at.isoformat() if row.received_at else None,
+            "outlook_sent_at": row.sent_at.isoformat() if row.sent_at else None,
+            "outlook_sender": (row.sender or {}).get("address") if isinstance(row.sender, dict) else None,
+            "outlook_importance": row.importance,
+            "outlook_is_draft": row.is_draft,
+            "outlook_attention_included": included,
+            "outlook_attention_filter_reason": reason,
+            "outlook_classifications": [item.category for item in row.classifications],
+        },
+    )
 
 
 def _has_later_outbound_response(session: Session, organization_id: str, mailbox: str, row: OutlookMessage) -> bool:
