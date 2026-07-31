@@ -98,7 +98,7 @@ test("sends authenticated delete requests", async () => {
   assert.equal(captured.options.headers["X-Polaris-Organization"], "org-1");
 });
 
-test("refreshes once on 401 before retrying protected request", async () => {
+test("refreshes once on 401 before retrying protected request with the new bearer token", async () => {
   reset();
   api.setAuthSession({ accessToken: "expired", refreshToken: "refresh-1", organizationId: "org-1" });
   const calls = [];
@@ -116,8 +116,61 @@ test("refreshes once on 401 before retrying protected request", async () => {
   await api.apiClient.get("/protected");
 
   assert.equal(calls.length, 3);
+  assert.equal(calls[0].options.headers.Authorization, "Bearer expired");
+  assert.equal(calls[2].options.headers.Authorization, "Bearer access-2");
+  assert.equal(calls[2].options.headers["X-Polaris-Organization"], "org-1");
   assert.equal(api.getAuthSession().accessToken, "access-2");
   assert.equal(api.getAuthSession().refreshToken, "refresh-2");
+});
+
+test("retries QBO incremental sync with refreshed auth while preserving request details", async () => {
+  reset();
+  api.setAuthSession({ accessToken: "expired", refreshToken: "refresh-1", organizationId: "org-mor-logistics" });
+  const calls = [];
+  const body = JSON.stringify({ dry_run: false });
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith("/api/v1/auth/refresh")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "rotated-access", refresh_token: "rotated-refresh", organization_id: "org-mor-logistics" }),
+      };
+    }
+    if (calls.length === 1) {
+      return { ok: false, status: 401, json: async () => ({ detail: "credential expired" }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ status: "synced" }) };
+  };
+
+  const result = await api.apiRequest("/api/v1/qbo/sync?mode=incremental", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer expired",
+      "X-Polaris-Organization": "stale-org",
+    },
+    body,
+  });
+
+  assert.deepEqual(result, { status: "synced" });
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0].url.endsWith("/api/v1/qbo/sync?mode=incremental"), true);
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.body, body);
+  assert.equal(calls[0].options.headers["Content-Type"], "application/json");
+  assert.equal(calls[0].options.headers.Authorization, "Bearer expired");
+  assert.equal(calls[0].options.headers["X-Polaris-Organization"], "org-mor-logistics");
+
+  assert.equal(calls[1].url.endsWith("/api/v1/auth/refresh"), true);
+  assert.equal(calls[1].options.method, "POST");
+
+  assert.equal(calls[2].url.endsWith("/api/v1/qbo/sync?mode=incremental"), true);
+  assert.equal(calls[2].options.method, "POST");
+  assert.equal(calls[2].options.body, body);
+  assert.equal(calls[2].options.headers["Content-Type"], "application/json");
+  assert.equal(calls[2].options.headers.Authorization, "Bearer rotated-access");
+  assert.equal(calls[2].options.headers["X-Polaris-Organization"], "org-mor-logistics");
 });
 
 test("clears session and emits auth change on 401", async () => {
