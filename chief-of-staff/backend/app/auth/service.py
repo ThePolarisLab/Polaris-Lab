@@ -271,6 +271,7 @@ class ProductionAuthService:
             credential.algorithm = "bcrypt"
             credential.updated_at = _now()
 
+        self._session.flush()
         self._session.add(
             ProductionAuthBootstrapState(
                 id=BOOTSTRAP_ID,
