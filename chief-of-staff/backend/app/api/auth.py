@@ -4,7 +4,7 @@ from collections.abc import Generator
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.auth.service import (
@@ -51,7 +51,7 @@ class BootstrapResponse(BaseModel):
 
 
 class PasswordLoginRequest(BaseModel):
-    email: EmailStr
+    email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=256)
 
 
@@ -143,7 +143,7 @@ def login(
     try:
         with session.begin():
             tokens = service.login(
-                email=str(payload.email),
+                email=payload.email,
                 password=payload.password,
                 ip_address=_client_ip(request),
                 user_agent=_user_agent(request),
