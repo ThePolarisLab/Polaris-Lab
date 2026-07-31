@@ -66,7 +66,6 @@ class OutlookOAuthState(Base):
     """Single-use Microsoft OAuth state bound to a Polaris principal."""
 
     __tablename__ = "outlook_oauth_states"
-
     state: Mapped[str] = mapped_column(String(255), primary_key=True)
     organization_id: Mapped[str] = mapped_column(String, ForeignKey("organizations.id"), nullable=False, index=True)
     identity_id: Mapped[str] = mapped_column(String, ForeignKey("identities.id"), nullable=False, index=True)
@@ -204,29 +203,29 @@ class OutlookCredentialStore:
             credential.updated_at = datetime.now(timezone.utc)
 
     def metadata(self) -> dict[str, object]:
-        try:
-            credential = self.load_credential()
-        except OutlookCredentialError:
+        with SessionLocal() as session:
+            credential = self._row(session)
+            if credential is None or credential.disconnected_at is not None:
+                return {
+                    "authorized": False,
+                    "connector_health_status": "authorization_required",
+                    "reauthorization_required": True,
+                }
             return {
-                "authorized": False,
-                "connector_health_status": "authorization_required",
-                "reauthorization_required": True,
+                "authorized": True,
+                "organization_id": credential.organization_id,
+                "mailbox_address": credential.mailbox_address,
+                "microsoft_tenant_status": "present" if credential.microsoft_tenant_id else "absent",
+                "granted_scopes": credential.scopes.split(),
+                "connector_health_status": credential.connector_health_status,
+                "reauthorization_required": credential.reauthorization_required,
+                "last_error_summary": credential.last_error_summary,
+                "last_successful_sync_at": credential.last_successful_sync_at.isoformat() if credential.last_successful_sync_at else None,
+                "last_refresh_at": credential.last_refresh_at.isoformat() if credential.last_refresh_at else None,
+                "last_refresh_status": credential.last_refresh_status,
+                "connected_at": credential.connected_at.isoformat() if credential.connected_at else None,
+                "disconnected_at": credential.disconnected_at.isoformat() if credential.disconnected_at else None,
             }
-        return {
-            "authorized": True,
-            "organization_id": credential.organization_id,
-            "mailbox_address": credential.mailbox_address,
-            "microsoft_tenant_status": "present" if credential.microsoft_tenant_id else "absent",
-            "granted_scopes": credential.scopes.split(),
-            "connector_health_status": credential.connector_health_status,
-            "reauthorization_required": credential.reauthorization_required,
-            "last_error_summary": credential.last_error_summary,
-            "last_successful_sync_at": credential.last_successful_sync_at.isoformat() if credential.last_successful_sync_at else None,
-            "last_refresh_at": credential.last_refresh_at.isoformat() if credential.last_refresh_at else None,
-            "last_refresh_status": credential.last_refresh_status,
-            "connected_at": credential.connected_at.isoformat() if credential.connected_at else None,
-            "disconnected_at": credential.disconnected_at.isoformat() if credential.disconnected_at else None,
-        }
 
     def delete(self) -> None:
         with SessionLocal.begin() as session:
