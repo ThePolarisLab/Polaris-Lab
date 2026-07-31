@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from app.api import outlook as outlook_api
 from app.connectors.models import ConnectorStatus
 from app.connectors.outlook import OutlookConnector, OutlookConnectorError
 from app.connectors.outlook_oauth import READ_ONLY_SCOPE, OutlookOAuthError, OutlookOAuthService
-from app.models.outlook import OutlookMessage
-from app.services.outlook_sync import _safe_body, classify_message
+from app.database.database import Base
+from app.models.outlook import OutlookAttachment, OutlookFolder, OutlookFolderCheckpoint, OutlookMessage, OutlookSyncHistory
+from app.organizations.models import Organization
+from app.services import outlook_sync
+from app.services.outlook_sync import OutlookSyncService, _safe_body, classify_message
 
 
 def _message(subject: str, body: str = "", *, importance: str = "normal") -> OutlookMessage:
@@ -27,6 +33,161 @@ def _message(subject: str, body: str = "", *, importance: str = "normal") -> Out
         last_seen_at=datetime.now(timezone.utc),
         synced_at=datetime.now(timezone.utc),
     )
+
+
+class _FakeOutlookStore:
+    def __init__(self) -> None:
+        self.successes = 0
+        self.failures: list[str] = []
+
+    def record_sync_success(self) -> None:
+        self.successes += 1
+
+    def record_sync_failure(self, message: str, *, status: str) -> None:
+        self.failures.append(f"{status}:{message}")
+
+
+class _FakeOutlookConnector:
+    def __init__(self) -> None:
+        self.store = _FakeOutlookStore()
+        self.delta_calls: list[str | None] = []
+        self.initial_message_calls = 0
+
+    @contextmanager
+    def organization_sync_lock(self):
+        yield
+
+    def _store(self) -> _FakeOutlookStore:
+        return self.store
+
+    def authenticate(self) -> None:
+        return None
+
+    def mailbox_identity(self) -> dict[str, str]:
+        return {"mailbox_address": "info@morlogistics.ca"}
+
+    def list_folders(self) -> dict[str, list[dict[str, object]]]:
+        return {
+            "value": [
+                {
+                    "id": "folder-inbox",
+                    "displayName": "Inbox",
+                    "parentFolderId": None,
+                    "childFolderCount": 0,
+                    "totalItemCount": 0,
+                    "unreadItemCount": 0,
+                }
+            ]
+        }
+
+    def list_child_folders(self, folder_id: str, *, url: str | None = None) -> dict[str, list[dict[str, object]]]:
+        return {"value": []}
+
+    def list_messages(self, folder_id: str, *, url: str | None = None, since_iso: str | None = None) -> dict[str, object]:
+        self.initial_message_calls += 1
+        return {"value": [], "@odata.deltaLink": "delta-after-initial"}
+
+    def delta_messages(self, folder_id: str, *, delta_link: str | None = None) -> dict[str, object]:
+        self.delta_calls.append(delta_link)
+        return {"value": [], "@odata.deltaLink": "delta-after-incremental"}
+
+    def list_attachments(self, message_id: str) -> dict[str, list[dict[str, object]]]:
+        return {"value": []}
+
+
+def test_outlook_initial_then_incremental_sync_persists_folders_once(tmp_path, monkeypatch):
+    engine = create_engine(f"sqlite:///{(tmp_path / 'outlook-sync.db').as_posix()}", connect_args={"check_same_thread": False})
+    testing_session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    monkeypatch.setattr(outlook_sync, "SessionLocal", testing_session)
+
+    with testing_session.begin() as session:
+        session.add(
+            Organization(
+                id="org-mor-logistics-sync-test",
+                slug="mor-logistics",
+                display_name="MOR Logistics",
+                legal_name="MOR LOGISTICS MANITOBA LIMITED",
+            )
+        )
+
+    connector = _FakeOutlookConnector()
+    service = OutlookSyncService(connector=connector, organization_id="org-mor-logistics-sync-test")
+
+    initial = service.sync(mode="initial")
+    incremental = service.sync(mode="incremental")
+
+    assert initial.success is True
+    assert incremental.success is True
+    assert connector.store.successes == 2
+    assert connector.store.failures == []
+    assert connector.initial_message_calls == 1
+    assert connector.delta_calls == ["delta-after-initial"]
+
+    with testing_session() as session:
+        folders = session.query(OutlookFolder).filter_by(organization_id="org-mor-logistics-sync-test").all()
+        histories = session.query(OutlookSyncHistory).filter_by(organization_id="org-mor-logistics-sync-test").all()
+        checkpoint = session.query(OutlookFolderCheckpoint).filter_by(
+            organization_id="org-mor-logistics-sync-test",
+            provider_folder_id="folder-inbox",
+        ).one()
+
+    assert len(folders) == 1
+    assert folders[0].organization_slug == "mor-logistics"
+    assert folders[0].provider_folder_id == "folder-inbox"
+    assert folders[0].is_sync_enabled is True
+    assert [history.status for history in histories] == ["success", "success"]
+    assert {history.organization_slug for history in histories} == {"mor-logistics"}
+    assert checkpoint.organization_slug == "mor-logistics"
+    assert checkpoint.delta_link == "delta-after-incremental"
+
+
+def test_outlook_folder_creation_uses_single_organization_slug_source():
+    values = {
+        "organization_slug": "mor-logistics",
+        "display_name": "Inbox",
+        "parent_folder_id": None,
+        "well_known_name": "inbox",
+        "child_folder_count": 0,
+        "total_item_count": 1,
+        "unread_item_count": 0,
+        "is_sync_enabled": True,
+        "synced_at": datetime.now(timezone.utc),
+    }
+
+    row = OutlookFolder(
+        organization_id="org-mor-logistics",
+        provider_folder_id="folder-inbox",
+        **values,
+    )
+
+    assert row.organization_id == "org-mor-logistics"
+    assert row.organization_slug == "mor-logistics"
+    assert row.provider_folder_id == "folder-inbox"
+
+
+def test_outlook_attachment_creation_uses_single_organization_slug_source():
+    values = {
+        "organization_slug": "mor-logistics",
+        "filename": "pod.pdf",
+        "mime_type": "application/pdf",
+        "size": 1234,
+        "is_inline": False,
+        "content_id": None,
+        "attachment_type": "#microsoft.graph.fileAttachment",
+        "synced_at": datetime.now(timezone.utc),
+    }
+
+    row = OutlookAttachment(
+        organization_id="org-mor-logistics",
+        message_id=42,
+        provider_attachment_id="attachment-1",
+        **values,
+    )
+
+    assert row.organization_id == "org-mor-logistics"
+    assert row.organization_slug == "mor-logistics"
+    assert row.provider_attachment_id == "attachment-1"
 
 
 def test_default_outlook_scope_is_read_only():
