@@ -329,7 +329,7 @@ class QuickBooksFinancialSyncService:
     ) -> None:
         organization_slug = self._organization_slug(session)
         self._upsert_accounts(session, accounts, captured_at, organization_slug)
-        self._snapshot(session, "company", company, captured_at, start_date, end_date)
+        self._snapshot(session, "company", company, captured_at, start_date, end_date, "Accrual", organization_slug)
         for resource, rows in resources.items():
             self._snapshot(
                 session,
@@ -338,6 +338,8 @@ class QuickBooksFinancialSyncService:
                 captured_at,
                 start_date,
                 end_date,
+                "Accrual",
+                organization_slug,
             )
         for snapshot_type, payload in reports.items():
             header = payload.get("Header") if isinstance(payload, dict) else {}
@@ -349,6 +351,7 @@ class QuickBooksFinancialSyncService:
                 date.fromisoformat(str((header or {}).get("StartPeriod"))) if (header or {}).get("StartPeriod") else start_date,
                 date.fromisoformat(str((header or {}).get("EndPeriod"))) if (header or {}).get("EndPeriod") else end_date,
                 str((header or {}).get("ReportBasis") or "Accrual"),
+                organization_slug,
             )
 
     def _mark_history_success(
@@ -414,10 +417,14 @@ class QuickBooksFinancialSyncService:
         period_start: date | None,
         period_end: date | None,
         accounting_method: str = "Accrual",
+        organization_slug: str | None = None,
     ) -> None:
+        if organization_slug is None:
+            organization_slug = self._organization_slug(session)
         session.add(
             FinancialSnapshot(
                 organization_id=self.organization_id,
+                organization_slug=organization_slug,
                 snapshot_type=snapshot_type,
                 period_start=period_start.isoformat() if period_start else None,
                 period_end=period_end.isoformat() if period_end else None,

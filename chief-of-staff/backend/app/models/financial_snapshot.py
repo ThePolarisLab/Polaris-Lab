@@ -35,6 +35,7 @@ class FinancialSnapshot(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     organization_id: Mapped[str] = mapped_column(String, ForeignKey("organizations.id"), nullable=False, index=True)
+    organization_slug: Mapped[str] = mapped_column(String, nullable=False, index=True)
     snapshot_type: Mapped[str] = mapped_column(String(50), index=True)
     period_start: Mapped[str | None] = mapped_column(String(10), nullable=True)
     period_end: Mapped[str | None] = mapped_column(String(10), nullable=True)

@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 
 from app.database.database import SessionLocal
-from app.models.financial_snapshot import FinancialSyncHistory
+from app.models.financial_snapshot import FinancialAccount, FinancialSnapshot, FinancialSyncHistory
 from app.organizations.models import Organization
 from app.services.quickbooks_financial_sync import QuickBooksFinancialSyncService, QuickBooksSyncStageError
 
@@ -256,6 +256,44 @@ def test_start_history_rejects_missing_or_blank_organization_slug():
         missing_service._start_history(datetime.now(timezone.utc), "incremental", None)
     with pytest.raises(RuntimeError, match="has no slug"):
         blank_slug_service._start_history(datetime.now(timezone.utc), "incremental", None)
+
+
+def test_successful_sync_persists_accounts_snapshots_and_history_with_organization_slug():
+    """End-to-end regression test: runs a real sync against the real test database,
+    writing to financial_accounts, financial_snapshots, and financial_sync_history.
+
+    This exists because every other test in this file either mocks
+    _write_sync_payload entirely or only exercises FinancialSyncHistory in
+    isolation, so a missing organization_slug mapping on FinancialAccount or
+    FinancialSnapshot was never caught by CI -- it only surfaced against the
+    live production database. This test closes that gap.
+    """
+    organization_id = _seed_organization(slug="mor-logistics-e2e")
+    service = QuickBooksFinancialSyncService(organization_id, connector=FakeConnector())
+    service.store = FakeStore()
+
+    result = service.sync(mode="full")
+
+    assert result["status"] == "success"
+
+    with SessionLocal() as session:
+        history = (
+            session.query(FinancialSyncHistory)
+            .filter_by(organization_id=organization_id)
+            .order_by(FinancialSyncHistory.started_at.desc())
+            .first()
+        )
+        assert history is not None
+        assert history.status == "success"
+        assert history.organization_slug == "mor-logistics-e2e"
+
+        accounts = session.query(FinancialAccount).filter_by(organization_id=organization_id).all()
+        assert len(accounts) >= 1
+        assert all(account.organization_slug == "mor-logistics-e2e" for account in accounts)
+
+        snapshots = session.query(FinancialSnapshot).filter_by(organization_id=organization_id).all()
+        assert len(snapshots) >= 1
+        assert all(snapshot.organization_slug == "mor-logistics-e2e" for snapshot in snapshots)
 
 
 def test_failed_sync_history_preserves_organization_slug(monkeypatch):
