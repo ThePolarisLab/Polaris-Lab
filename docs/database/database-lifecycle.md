@@ -1,6 +1,6 @@
 # Database Lifecycle
 
-Status date: 2026-07-30  
+Status date: 2026-07-31  
 Scope: Phase 2 Database Gate plus Phase 2.1 persistent deployment hardening.
 
 ## Supported Database Targets
@@ -52,6 +52,12 @@ python -m app.database.validate_schema
 ## Tenant Backfill
 
 Legacy tenant-owned rows can be backfilled automatically only when exactly one organization exists. If multiple organizations exist, set `POLARIS_TENANT_BACKFILL_ORGANIZATION_ID` only after the operator confirms all legacy unowned rows belong to that organization. If no organizations exist and tenant-owned rows exist, migration fails safely.
+
+## Schema Drift Audit
+
+Run the production schema drift audit before merging model or migration changes, after any manual production database repair, and before adopting a database that predates Alembic. The audit compares Alembic head, SQLAlchemy models, the adoption inventory in `app.database.validate_schema`, and read-only PostgreSQL introspection.
+
+Required reference: `docs/database/schema-drift-audit.md`.
 
 ## Deployment Order
 

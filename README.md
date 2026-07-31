@@ -31,7 +31,7 @@ python -m alembic upgrade head && python -m uvicorn app.main:app --host 0.0.0.0 
 
 Set `POLARIS_FRONTEND_URL` to the deployed frontend origin, not `localhost`, for hosted environments.
 
-See `docs/database/database-lifecycle.md`, `docs/database/tenant-backfill-plan.md`, `docs/database/rollback-and-recovery.md`, and `docs/deployment/render-persistent-deployment.md` for the full Phase 2/2.1 database lifecycle process.
+See `docs/database/database-lifecycle.md`, `docs/database/tenant-backfill-plan.md`, `docs/database/rollback-and-recovery.md`, `docs/database/schema-drift-audit.md`, and `docs/deployment/render-persistent-deployment.md` for the full Phase 2/2.1 database lifecycle process.
 
 ## Production Authentication Bootstrap
 
@@ -59,6 +59,7 @@ Production prerequisites:
 - `python -m alembic upgrade head` succeeds before API startup;
 - public `/` and `/health` expose only generic status;
 - `POLARIS_FRONTEND_URL` points to the deployed frontend origin;
-- production admin authentication works and `/api/v1/auth/me` confirms the active owner principal.
+- production admin authentication works and `/api/v1/auth/me` confirms the active owner principal;
+- schema drift audit passes after any database incident or model/migration change.
 
 Operator setup and smoke-test steps are documented in `docs/integrations/quickbooks-production-runbook.md`. Runtime ownership and the Python/Hermes boundary are documented in `docs/architecture/ADR-026-quickbooks-runtime-ownership.md`.

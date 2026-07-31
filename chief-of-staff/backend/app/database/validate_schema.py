@@ -29,9 +29,26 @@ EXPECTED_COLUMNS: dict[str, set[str]] = {
     "mission_workflows": {"id", "organization_id", "mission_id", "title", "status", "progress", "position"},
     "mission_tasks": {"id", "organization_id", "workflow_id", "title", "status", "position", "system", "capability", "notes", "completed_at"},
     "team_notes": {"id", "organization_id", "author", "note_type", "status", "title", "details", "target_entity", "assigned_to", "due_at", "created_at", "updated_at", "resolved_at"},
-    "financial_accounts": {"id", "organization_id", "qbo_id", "name", "fully_qualified_name", "account_type", "account_subtype", "active", "current_balance", "payload", "synced_at"},
-    "financial_snapshots": {"id", "organization_id", "snapshot_type", "period_start", "period_end", "accounting_method", "payload", "captured_at"},
-    "financial_sync_history": {"id", "organization_id", "status", "started_at", "completed_at", "duration_ms", "accounts_imported", "company_name", "error_message"},
+    "financial_accounts": {"id", "organization_id", "organization_slug", "qbo_id", "name", "fully_qualified_name", "account_type", "account_subtype", "active", "current_balance", "payload", "synced_at"},
+    "financial_snapshots": {"id", "organization_id", "organization_slug", "snapshot_type", "period_start", "period_end", "accounting_method", "payload", "captured_at"},
+    "financial_sync_history": {
+        "id",
+        "organization_id",
+        "organization_slug",
+        "status",
+        "started_at",
+        "completed_at",
+        "duration_ms",
+        "accounts_imported",
+        "company_name",
+        "error_message",
+        "sync_mode",
+        "resource_counts",
+        "report_availability",
+        "checkpoint_before",
+        "checkpoint_after",
+        "verification_status",
+    },
     "quickbooks_oauth_credentials": {"id", "organization_id", "realm_id", "encrypted_refresh_token", "scopes", "connected_at", "updated_at"},
     "quickbooks_oauth_states": {"state", "organization_id", "identity_id", "created_at", "expires_at", "consumed_at"},
 }
@@ -53,6 +70,19 @@ TENANT_TABLES = {
 }
 
 LEGACY_TENANT_OPTIONAL = {"organization_id"}
+LEGACY_TABLE_OPTIONAL_COLUMNS: dict[str, set[str]] = {
+    "financial_accounts": {"organization_slug"},
+    "financial_snapshots": {"organization_slug"},
+    "financial_sync_history": {
+        "organization_slug",
+        "sync_mode",
+        "resource_counts",
+        "report_availability",
+        "checkpoint_before",
+        "checkpoint_after",
+        "verification_status",
+    },
+}
 SYSTEM_TABLES = {"alembic_version"}
 BASELINE_REVISION = "202607290001"
 HEAD_REVISION = "head"
@@ -114,7 +144,10 @@ def validate_schema() -> ValidationResult:
             )
         if missing:
             current_compatible = False
-            allowed_missing = LEGACY_TENANT_OPTIONAL if table_name in TENANT_TABLES else set()
+            allowed_missing: set[str] = set()
+            if table_name in TENANT_TABLES:
+                allowed_missing.update(LEGACY_TENANT_OPTIONAL)
+            allowed_missing.update(LEGACY_TABLE_OPTIONAL_COLUMNS.get(table_name, set()))
             if not missing.issubset(allowed_missing):
                 legacy_compatible = False
             details.append(f"{table_name} missing {', '.join(sorted(missing))}")
