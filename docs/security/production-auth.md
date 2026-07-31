@@ -1,15 +1,20 @@
 # Production Authentication Requirements
 
-Polaris backend APIs are protected by the provider-neutral security model in `chief-of-staff/backend/app/security`.
+Polaris backend APIs are protected by the provider-neutral security model in `chief-of-staff/backend/app/security`. Phase 3B adds an internal-launch production authentication path without re-enabling the development local token endpoint.
 
-The route inventory for this gate is maintained in `docs/security/route-security-matrix.md`. Tenant ownership rules are maintained in `docs/security/tenant-isolation.md`.
+The route inventory for this gate is maintained in `docs/security/route-security-matrix.md`. Tenant ownership rules are maintained in `docs/security/tenant-isolation.md`. First-admin operator steps are maintained in `docs/security/production-auth-bootstrap.md`.
 
 ## Public endpoints
 
-The following endpoints are intentionally public:
+The following endpoints are intentionally public or public at the bearer-auth layer:
 
 - `GET /`
 - `GET /health`
+- `GET /api/v1/auth/bootstrap/status`
+- `POST /api/v1/auth/bootstrap`
+- `POST /api/v1/auth/login`
+- `POST /api/v1/auth/refresh`
+- `POST /api/v1/auth/logout`
 - `POST /api/v1/auth/local/token` in `development` and `test` only
 - `GET /api/v1/connectors/quickbooks/oauth/callback`
 
@@ -30,25 +35,33 @@ The bearer credential is validated by the configured authentication provider and
 
 ## Authentication flow
 
-1. Development and test clients request `POST /api/v1/auth/local/token` with an `identity_id` and `organization_id`.
+Development and test:
+
+1. Development and test clients may request `POST /api/v1/auth/local/token` with an `identity_id` and `organization_id`.
 2. The backend validates that the environment is `development` or `test`.
 3. The local provider signs a short-lived token with `POLARIS_LOCAL_AUTH_SECRET`.
 4. `SecurityService` authenticates the token subject and verifies active organization membership.
-5. The frontend stores the token and organization context for the current browser session and sends both headers on protected calls.
-6. `401` responses clear the frontend session. `403` responses keep the session but render a forbidden state.
 
-Production must replace local-token login with the approved identity-provider flow before human-user release. The local provider remains a development bootstrap mechanism only.
+Production and staging:
+
+1. An operator configures `POLARIS_BOOTSTRAP_ADMIN_EMAIL`, `POLARIS_BOOTSTRAP_SECRET`, and `POLARIS_SESSION_SECRET` in Render.
+2. `POST /api/v1/auth/bootstrap` creates the fixed Mor Logistics organization and `mor-admin` owner identity after validating the one-time bootstrap secret.
+3. The bootstrap writes a persistent completion marker and rejects all repeat attempts.
+4. The operator removes `POLARIS_BOOTSTRAP_SECRET` from Render after success.
+5. Users sign in with `POST /api/v1/auth/login` using email and password.
+6. Passwords are verified against bcrypt hashes.
+7. The backend issues a short-lived signed access token and a random refresh token stored only as a SHA-256 hash.
+8. `POST /api/v1/auth/refresh` rotates refresh tokens. Reuse of an old refresh token is rejected.
+9. `POST /api/v1/auth/logout` revokes the current server-side session.
+10. `401` responses trigger refresh once in the frontend; if refresh fails, the frontend clears the session. `403` responses keep the session but render a forbidden state.
+
+External identity-provider integration remains a later release phase before broad human-user rollout.
 
 ## Frontend session handling
 
-The frontend API client sends auth context from local storage first, then from runtime fallback values:
+The frontend API client stores session material in browser session storage where available, falling back to local storage only in constrained test/runtime contexts. It sends the access token and active organization on protected calls.
 
-```text
-VITE_POLARIS_ACCESS_TOKEN
-VITE_POLARIS_ORGANIZATION_ID
-```
-
-Runtime fallback values are for local controlled environments. Static bearer tokens must not be embedded in production frontend bundles. Protected workspaces do not render unless both an access token and organization ID are present.
+Static bearer tokens must not be embedded in production frontend bundles. Protected workspaces do not render unless both an access token and organization ID are present.
 
 ## Permission model
 
@@ -66,7 +79,7 @@ Phase 1.1 uses split read/write permissions:
 - `executive.read`: dashboard, memory, missions, reasoning, work context, and team note reads.
 - `executive.write`: memory, mission, and team-note mutations.
 
-The legacy `*.manage` enum names remain compatibility aliases for `*.write`, but route documentation should use the canonical split names.
+The `owner` and `admin` roles receive read and write permissions required for connector and financial verification. The `platform_admin` role remains reserved for platform-wide tenant administration.
 
 ## Tenant isolation
 
@@ -85,19 +98,7 @@ alembic current
 
 The backend refuses to start in `production` or `staging` if the database is unversioned or not at Alembic head. Development and test may explicitly create isolated schemas through `POLARIS_AUTO_CREATE_SCHEMA`; that behavior is not available in managed environments.
 
-Existing legacy adoption with unowned tenant rows may use `POLARIS_TENANT_BACKFILL_ORGANIZATION_ID` only after backup and ownership review. No-organization legacy bootstrap requires all three variables documented in `docs/database/tenant-backfill-plan.md` and must be removed after the migration succeeds.
-
-## QuickBooks OAuth state
-
-QuickBooks authorization initiation requires `connector.write`. The generated OAuth state is:
-
-- signed with `POLARIS_QBO_OAUTH_STATE_SECRET`;
-- stored with the initiating principal identity;
-- stored with the initiating organization ID;
-- valid for 10 minutes;
-- consumed exactly once through an atomic conditional update.
-
-The callback stores tokens only for the organization ID recorded in the consumed state. Phase 3A then verifies CompanyInfo against the configured Mor Logistics company before accepting synchronized financial data. If company verification fails, the stored credential for that organization is deleted.
+Phase 3B migration `202607300002` creates production password/session/bootstrap tables and aligns `organization_memberships.id` with the ORM string ID model without deleting membership rows.
 
 ## Required Environment Variables
 
@@ -106,6 +107,7 @@ Development/test:
 ```text
 POLARIS_ENV=development|test
 POLARIS_LOCAL_AUTH_SECRET=<optional in development, required in test suites when deterministic tokens are needed>
+POLARIS_SESSION_SECRET=<test/dev signing secret when exercising production session routes>
 DATABASE_URL=<optional SQLite URL; defaults to sqlite:///./polaris.db>
 POLARIS_AUTO_CREATE_SCHEMA=<optional explicit dev/test schema bootstrap toggle>
 ```
@@ -116,17 +118,13 @@ Production/staging:
 POLARIS_ENV=production|staging
 DATABASE_URL=<required persistent PostgreSQL database URL>
 POLARIS_AUTO_CREATE_SCHEMA=false
-POLARIS_LOCAL_AUTH_SECRET=<minimum 32 characters; must not be polaris-dev-only>
 POLARIS_CORS_ORIGINS=<allowed frontend origins>
 POLARIS_FRONTEND_URL=<deployed frontend origin>
-```
-
-Existing database adoption:
-
-```text
-POLARIS_TENANT_BACKFILL_ORGANIZATION_ID=<optional existing organization ID for verified legacy single-target backfills>
-POLARIS_TENANT_BACKFILL_ORGANIZATION_SLUG=<optional one-time no-organization legacy bootstrap slug>
-POLARIS_TENANT_BACKFILL_ORGANIZATION_NAME=<optional one-time no-organization legacy bootstrap display name>
+POLARIS_SESSION_SECRET=<minimum 32 characters>
+POLARIS_ACCESS_TOKEN_TTL_SECONDS=900
+POLARIS_REFRESH_TOKEN_TTL_SECONDS=1209600
+POLARIS_BOOTSTRAP_ADMIN_EMAIL=<required until first admin is created>
+POLARIS_BOOTSTRAP_SECRET=<required only until first admin is created; remove after success>
 ```
 
 QuickBooks production adapter:
@@ -153,6 +151,12 @@ A production release must verify:
 
 - every protected route rejects missing bearer credentials;
 - every protected route rejects missing organization context;
+- first bootstrap succeeds only with configured strong secret;
+- second bootstrap is rejected;
+- password hashes are not plaintext;
+- login failures are rate-limited;
+- refresh token rotation rejects replay;
+- logout revokes server session;
 - inactive identities are rejected;
 - inactive or missing organization memberships are rejected;
 - cross-organization requests are denied;
@@ -161,7 +165,7 @@ A production release must verify:
 - QuickBooks OAuth state cannot be reused or raced;
 - QuickBooks production verification exposes no tokens, client secrets, OAuth codes, raw OAuth state, encryption keys, or realm IDs;
 - frontend requests include auth headers;
-- frontend clears expired sessions on `401`;
+- frontend clears expired sessions on failed refresh;
 - frontend displays forbidden state on `403`;
 - local-token issuance is unavailable outside `development` and `test`;
 - the default `polaris-dev-only` secret cannot be used silently in production;
