@@ -18,6 +18,7 @@ from app.connectors.quickbooks import (
 from app.connectors.quickbooks_credentials import QuickBooksCredentialStore
 from app.database.database import SessionLocal
 from app.models.financial_snapshot import FinancialAccount, FinancialSnapshot, FinancialSyncHistory
+from app.organizations.models import Organization
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +71,8 @@ class QuickBooksFinancialSyncService:
         started_at = datetime.now(timezone.utc)
         timer = perf_counter()
         stage = "initialize_sync"
+        history_id: int | None = None
         checkpoint_before = self._last_checkpoint() if mode == "incremental" else None
-        history_id = self._start_history(started_at, mode, checkpoint_before)
 
         def run_stage(name: str, operation: Callable[[], Any]) -> Any:
             nonlocal stage
@@ -84,6 +85,7 @@ class QuickBooksFinancialSyncService:
                 raise self._stage_error(name, mode, exc) from exc
 
         try:
+            history_id = run_stage("start_sync_history", lambda: self._start_history(started_at, mode, checkpoint_before))
             lock_context = run_stage("acquire_sync_lock", lambda: self.connector.organization_sync_lock())
             with lock_context:
                 run_stage("load_stored_oauth_tokens", self.store.load_credential)
@@ -174,7 +176,8 @@ class QuickBooksFinancialSyncService:
                 },
             )
             safe_message = sync_error.message[:1000]
-            self._record_failure(history_id, timer, safe_message, sync_error)
+            if history_id is not None:
+                self._record_failure(history_id, timer, safe_message, sync_error)
             if isinstance(exc, QuickBooksConnectorError):
                 self.store.record_sync_failure(safe_message, status=exc.status.value)
             else:
@@ -258,10 +261,21 @@ class QuickBooksFinancialSyncService:
         except Exception:
             return None
 
+    def _organization_slug(self, session) -> str:
+        organization = session.get(Organization, self.organization_id)
+        if organization is None:
+            raise RuntimeError(f"Organization {self.organization_id} was not found for QuickBooks sync")
+        slug = str(organization.slug or "").strip()
+        if not slug:
+            raise RuntimeError(f"Organization {self.organization_id} has no slug for QuickBooks sync")
+        return slug
+
     def _start_history(self, started_at: datetime, mode: str, checkpoint_before: str | None) -> int:
         with SessionLocal() as session:
+            organization_slug = self._organization_slug(session)
             history = FinancialSyncHistory(
                 organization_id=self.organization_id,
+                organization_slug=organization_slug,
                 status="running",
                 started_at=started_at,
                 sync_mode=mode,
