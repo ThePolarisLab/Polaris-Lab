@@ -63,6 +63,33 @@ def test_cross_tenant_access_is_denied():
     assert first_org["id"] != second_org["id"]
 
 
+def test_qbo_sync_distinguishes_authentication_from_authorization(monkeypatch):
+    member_org, _member_identity, member_headers = seed_principal("member")
+    owner_org, _owner_identity, owner_headers = seed_principal("owner")
+    calls = []
+
+    def fake_sync(self, *, start_date=None, end_date=None, mode="full"):
+        calls.append({"organization_id": self.organization_id, "mode": mode})
+        return {"status": "completed", "mode": mode}
+
+    monkeypatch.setattr("app.services.quickbooks_financial_sync.QuickBooksFinancialSyncService.sync", fake_sync)
+
+    missing = client.post("/api/v1/qbo/sync?mode=incremental", headers={"X-Polaris-Organization": member_org["id"]})
+    invalid = client.post(
+        "/api/v1/qbo/sync?mode=incremental",
+        headers={"Authorization": "Bearer invalid.token", "X-Polaris-Organization": member_org["id"]},
+    )
+    forbidden = client.post("/api/v1/qbo/sync?mode=incremental", headers=member_headers)
+    allowed = client.post("/api/v1/qbo/sync?mode=incremental", headers=owner_headers)
+
+    assert missing.status_code == 401
+    assert invalid.status_code == 401
+    assert forbidden.status_code == 403
+    assert allowed.status_code == 200
+    assert allowed.json()["mode"] == "incremental"
+    assert calls == [{"organization_id": owner_org["id"], "mode": "incremental"}]
+
+
 def test_role_permissions_are_explicit_and_deny_unknown_roles():
     assert Permission.ORGANIZATION_MANAGE in ROLE_PERMISSIONS["owner"]
     assert Permission.ORGANIZATION_MANAGE not in ROLE_PERMISSIONS["viewer"]
