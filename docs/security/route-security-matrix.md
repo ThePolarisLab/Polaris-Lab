@@ -1,6 +1,6 @@
 # FastAPI Route Security Matrix
 
-Baseline branch: `phase3a/quickbooks-production-adapter` rebased on Phase 2.1 deployment-hardened `main`  
+Baseline branch: `phase3b/production-auth-bootstrap` based on current `main` after Phase 3A  
 Scope: Polaris Chief of Staff FastAPI routers mounted from `chief-of-staff/backend/app/main.py`.
 
 ## Classification Legend
@@ -19,6 +19,11 @@ Scope: Polaris Chief of Staff FastAPI routers mounted from `chief-of-staff/backe
 |---|---|---|---|---|
 | GET | `/` | public | none | Generic liveness response only: `{"status":"ok"}`. No environment, organization, version, capability, database, connector, company, or financial metadata. |
 | GET | `/health` | health check | none | External readiness/liveness check. Response is limited to `{"status":"ok"}` or `{"status":"degraded"}` with HTTP status; no runtime metadata. |
+| GET | `/api/v1/auth/bootstrap/status` | public | secret-free availability only | Allows the frontend to decide whether to display the first-admin bootstrap form. Exposes only fixed bootstrap target IDs and availability; no secret or user data. |
+| POST | `/api/v1/auth/bootstrap` | public bootstrap | strong one-time `POLARIS_BOOTSTRAP_SECRET`, configured admin email, password hashing, completion marker | First-admin onboarding only. Creates `org-mor-logistics` and `mor-admin`, records audit event, then permanently rejects repeat bootstrap. |
+| POST | `/api/v1/auth/login` | public auth | email/password, bcrypt hash verification, active identity/membership, rate limiting | Issues short-lived signed access token and hashed refresh-token backed server session. |
+| POST | `/api/v1/auth/refresh` | public auth | valid unrevoked refresh token hash; token rotation | Rotates refresh session and returns a new short-lived access token. Reuse of old refresh token is rejected. |
+| POST | `/api/v1/auth/logout` | public/authenticated hybrid | bearer token when present; idempotent local cleanup otherwise | Revokes the current server-side session when a valid bearer is present. |
 | POST | `/api/v1/auth/local/token` | public in development/test only | local-token secret validation; disabled in production | Local bootstrap for existing development auth model. Must return 404 outside development/test. |
 | GET | `/api/v1/connectors/quickbooks/oauth/callback` | OAuth callback | signed, unexpired, atomic single-use, org-bound and principal-bound OAuth state; post-token company verification | Intuit redirects cannot include Polaris bearer headers; authorization comes from validated state. |
 
@@ -26,7 +31,7 @@ Scope: Polaris Chief of Staff FastAPI routers mounted from `chief-of-staff/backe
 
 | Method | Path | Classification | Permission | Tenant Control |
 |---|---|---|---|
-| GET | `/api/v1/auth/me` | authenticated | active organization membership | Principal resolved from `X-Polaris-Organization`. |
+| GET | `/api/v1/auth/me` | authenticated | active organization membership | Principal resolved from signed session token and `X-Polaris-Organization`. |
 | GET | `/company` | permission-protected | `organization.read` | `Company.organization_id == principal.organization_id`. |
 | GET | `/trucks` | permission-protected | `organization.read` | `Truck.organization_id == principal.organization_id`. |
 | POST | `/trucks` | permission-protected | `organization.write` | Created with principal organization. |
@@ -102,6 +107,10 @@ Scope: Polaris Chief of Staff FastAPI routers mounted from `chief-of-staff/backe
 
 Every query over tenant-owned records must filter by `AuthenticatedPrincipal.organization_id`. See `docs/security/tenant-isolation.md` for the ownership inventory.
 
+## Production Auth Note
+
+Phase 3B keeps `/api/v1/auth/local/token` disabled in production/staging and introduces password-based internal-launch sessions. Bootstrap is a one-time route guarded by a strong Render secret and persistent completion marker. Passwords are bcrypt-hashed; refresh tokens are stored only as hashes and rotate on use.
+
 ## Database Gate Note
 
 Phase 2 and Phase 2.1 make tenant-owned schema enforcement Alembic-managed, block staging/production startup when the database is unversioned or stale, require persistent PostgreSQL for hosted staging/production, and keep detailed runtime status authenticated.
@@ -112,4 +121,4 @@ Phase 3A keeps QuickBooks accounting write actions out of scope. All QuickBooks 
 
 ## Remaining Later-Phase Work
 
-- Continue Motive, Outlook, API versioning, and non-QuickBooks deployment automation outside this phase.
+- Continue Motive, Outlook, API versioning, external identity-provider integration, and non-QuickBooks deployment automation outside this phase.
