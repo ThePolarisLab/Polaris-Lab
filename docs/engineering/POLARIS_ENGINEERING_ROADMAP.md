@@ -10,6 +10,22 @@ This roadmap is the engineering source of truth for Polaris. It records complete
 
 Polaris is being developed as an AI-enabled operating system and Chief of Staff platform with a disciplined, evidence-first engineering process.
 
+Approved operating principle:
+
+> Capture data once, connect everything, and turn information into executive decisions.
+
+Approved connector strategy:
+
+> Connect several priority systems in parallel, validate each independently, preserve source evidence, and integrate them only through governed normalization, canonical enterprise models, and executive read models.
+
+Connector trust principle:
+
+> No connector is developed in isolation, and no connector is integrated before it independently earns trust.
+
+This means connectors may be developed in parallel, but each connector must independently prove security, reliability, provenance, organization isolation, synchronization correctness, idempotency, and observability before its normalized records participate in cross-source executive intelligence. Executive intelligence must not consume raw vendor SDK objects or raw vendor APIs directly.
+
+Each connector must remain independently governed with its own adapter, credentials and permissions, checkpoints, sync history, health state, failure handling, tests, persistence ownership, and production acceptance evidence. Connectors must not write directly into another connector's provider-owned tables.
+
 ## Current Baseline
 
 ### Completed
@@ -27,12 +43,19 @@ Polaris is being developed as an AI-enabled operating system and Chief of Staff 
 - Phase 2 Database Gate
 - Phase 2.1 Persistent Deployment Hardening
 - Phase 3A QuickBooks Production Adapter implementation
+- Phase 3A QuickBooks production OAuth, Mor Logistics company verification, and production synchronization verification
+- GitHub Issue #61 — PGE-009.6A Configure production QuickBooks Online adapter for Mor Logistics
 - Phase 3B Production Authentication Bootstrap core implementation
 
 ### In progress
 
-- Phase 3A follow-through — QuickBooks live operator verification after the QBO sync-history hotfix is merged and deployed.
+- Track 4A — QuickBooks Financial Reconciliation.
 - Phase 3B.1 Production Hardening Cleanup — schema drift audit, adoption inventory guardrail, dead-code cleanup, and v1.0 scope re-baseline.
+
+### Approved to begin
+
+- Track 4B — Outlook Production Activation.
+- Track 4C — Motive Production Activation after Track 4B begins, without waiting for QuickBooks reconciliation to finish.
 
 ### Current engineering capabilities
 
@@ -52,7 +75,8 @@ Polaris can currently:
 - enforce Alembic schema lifecycle for staging and production startup;
 - operate hosted staging/production on persistent PostgreSQL with generic public health responses;
 - authenticate the first Mor Logistics production owner through the hosted frontend;
-- provide a tenant-bound QuickBooks production adapter implementation awaiting final read-only sync evidence.
+- operate the tenant-bound QuickBooks production adapter with production OAuth, Mor Logistics company verification, and successful read-only synchronization;
+- preserve QuickBooks production evidence while financial reconciliation validates dashboard/report mapping for AR, AP, Gross Profit, Net Income, and Cash Position.
 
 ## Product Direction
 
@@ -70,7 +94,7 @@ The platform must remain explainable, reviewable, testable, and safe at every st
 
 ### Phase 3B.1 — Production Hardening Cleanup
 
-Goal: remove small but meaningful production-readiness risks before declaring the QuickBooks path complete.
+Goal: remove small but meaningful production-readiness risks after production authentication and QuickBooks production sync verification.
 
 Planned outcomes:
 
@@ -78,28 +102,65 @@ Planned outcomes:
 - regression test that catches future financial-cache model/adoption-inventory drift;
 - documented production schema drift audit procedure;
 - dead frontend backup file removed from `src`;
-- v1.0 punch list updated with the current 86-89% readiness band and an explicit narrow-vs-broad v1.0 decision.
+- v1.0 punch list updated with the current 86-89% readiness band and the approved multi-connector strategy.
 
 Scope boundaries:
 
-- do not change auth, OAuth, refresh, frontend retry, or QuickBooks permissions;
-- do not implement Motive or Outlook;
-- do not change deployment infrastructure;
-- do not merge the QBO sync-history hotfix without human review.
+- do not change auth, OAuth, refresh, frontend retry, QuickBooks permissions, sync implementation, or financial calculations;
+- do not implement Motive or Outlook in this cleanup PR;
+- do not change deployment infrastructure.
 
-### Phase 3A Follow-through — QuickBooks Live Operator Verification
+### Track 4A — QuickBooks Financial Reconciliation
 
-Goal: connect Polaris safely to the live QuickBooks Online company for Mor Logistics through the merged tenant-bound, read-only adapter after production authentication works and the sync-history hotfix is deployed.
+Status: in progress.
 
-Required outcomes:
+The QuickBooks connector itself is production-connected and synchronizing successfully. Issue #61 is complete. Revenue and total expenses match QuickBooks. Remaining financial discrepancies are reconciliation and mapping issues, not connector failures.
 
-- production admin login works;
-- QuickBooks OAuth is initiated by an authenticated owner with `connector.write`;
-- company identity verifies against `MOR LOGISTICS MANITOBA LIMITED`;
-- read-only resource/report verification completes;
-- full and incremental sync evidence is recorded;
-- no accounting writes occur;
-- Issue #61 checklist is updated only with live operator evidence.
+Scope:
+
+- reconcile Accounts Receivable;
+- reconcile Accounts Payable;
+- validate Gross Profit;
+- validate Net Income;
+- validate Cash Position;
+- compare raw QBO report responses, stored values, and dashboard values;
+- add financial reconciliation regression tests.
+
+### Track 4B — Outlook Production Activation
+
+Status: approved to begin immediately.
+
+Initial boundary:
+
+- read-only Microsoft 365/Outlook connection;
+- tenant-bound authorization;
+- checkpointed email synchronization;
+- provenance-preserving evidence;
+- classification and executive attention views;
+- no automatic send, delete, move, reply, or other material email actions.
+
+### Track 4C — Motive Production Activation
+
+Status: approved to begin after Track 4B work begins, without waiting for QuickBooks reconciliation to finish.
+
+Initial boundary:
+
+- read-only ingestion;
+- vehicles;
+- drivers;
+- locations;
+- mileage;
+- utilization;
+- HOS summaries;
+- fuel/IFTA data where supported;
+- separate persistence and testing;
+- no direct financial-table writes.
+
+### Track 4D — Cross-Connector Correlation
+
+Status: planned.
+
+This track begins only after each participating connector passes its own minimum trust gate. Only trusted normalized records may participate in cross-source executive intelligence.
 
 ### External Identity Decision
 
@@ -107,7 +168,7 @@ Goal: decide whether the internal production auth bootstrap is sufficient for in
 
 Decision options:
 
-- internal v1.0: ship with production bootstrap/password sessions for controlled Mor Logistics use, defer external IdP to v1.1;
+- internal v1.0: ship with production bootstrap/password sessions for controlled Mor Logistics use, defer external IdP to a later governed track;
 - broader v1.0: require external IdP before production-ready approval.
 
 ### PGE-003.3 — Cross-file Dependency Resolution
@@ -189,6 +250,8 @@ Required safeguards:
 
 ### v1.0 — Polaris Chief of Staff Platform
 
+Production readiness must be judged against explicitly approved in-scope exit criteria.
+
 Exit criteria:
 
 - stable engineering, operational, and executive workflows;
@@ -197,7 +260,8 @@ Exit criteria:
 - persistent production database verified across deploy/restart;
 - production authentication bootstrap complete and external IdP decision documented;
 - production QuickBooks read-only verification completed for Issue #61;
-- Motive and Outlook decisions completed or explicitly deferred;
+- QuickBooks financial reconciliation completed or explicitly accepted as a post-connector mapping workstream;
+- Outlook and Motive activation scope approved as parallel governed tracks, with release inclusion decided by stakeholders;
 - release checklist completed;
 - production-readiness review approved;
 - repository visibility reviewed and set to private unless stakeholders explicitly approve public visibility.
