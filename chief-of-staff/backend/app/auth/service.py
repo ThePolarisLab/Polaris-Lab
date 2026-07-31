@@ -242,6 +242,19 @@ class ProductionAuthService:
             )
             self._session.add(identity)
 
+        self._session.flush()
+        if self._session.get(Identity, BOOTSTRAP_IDENTITY_ID) is None:
+            raise RuntimeError("bootstrap identity was not persisted")
+
+        credential = self._session.get(ProductionPasswordCredential, BOOTSTRAP_IDENTITY_ID)
+        if credential is None:
+            credential = ProductionPasswordCredential(identity_id=BOOTSTRAP_IDENTITY_ID, password_hash=password_hash)
+            self._session.add(credential)
+        else:
+            credential.password_hash = password_hash
+            credential.algorithm = "bcrypt"
+            credential.updated_at = _now()
+
         membership = (
             self._session.query(OrganizationMembership)
             .filter(
@@ -261,15 +274,6 @@ class ProductionAuthService:
         else:
             membership.role = BOOTSTRAP_ROLE
             membership.status = MembershipStatus.ACTIVE.value
-
-        credential = self._session.get(ProductionPasswordCredential, BOOTSTRAP_IDENTITY_ID)
-        if credential is None:
-            credential = ProductionPasswordCredential(identity_id=BOOTSTRAP_IDENTITY_ID, password_hash=password_hash)
-            self._session.add(credential)
-        else:
-            credential.password_hash = password_hash
-            credential.algorithm = "bcrypt"
-            credential.updated_at = _now()
 
         self._session.flush()
         self._session.add(
