@@ -1,7 +1,7 @@
 """Outlook production connector persistence.
 
 Revision ID: 202607310001
-Revises: 202607300002
+Revises: 202607300004
 Create Date: 2026-07-31 12:00:00
 """
 
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "202607310001"
-down_revision = "202607300002"
+down_revision = "202607300004"
 branch_labels = None
 depends_on = None
 
