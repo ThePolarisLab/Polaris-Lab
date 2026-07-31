@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
+from app.database.database import SessionLocal
+from app.models.financial_snapshot import FinancialSyncHistory
+from app.organizations.models import Organization
 from app.services.quickbooks_financial_sync import QuickBooksFinancialSyncService, QuickBooksSyncStageError
 
 
@@ -64,7 +69,10 @@ class FakeConnector:
     def verify_company_identity(self) -> dict[str, Any]:
         if self.fail_stage == "verify_company_identity":
             raise RuntimeError("company verification failed")
-        return {"verified_company_name": "MOR LOGISTICS MANITOBA LIMITED"}
+        return {
+            "verified_company_name": "MOR LOGISTICS MANITOBA LIMITED",
+            "identity_verification_status": "healthy",
+        }
 
     def list_all_resource(self, resource: str, *, changed_since: str | None = None) -> list[dict[str, Any]]:
         if self.fail_stage == f"fetch_{resource}":
@@ -94,6 +102,33 @@ class FakeSession:
 
     def close(self) -> None:
         self.close_called = True
+
+
+def _seed_organization(*, slug: str = "mor-logistics") -> str:
+    organization_id = f"org-test-{uuid4().hex}"
+    with SessionLocal.begin() as session:
+        session.add(
+            Organization(
+                id=organization_id,
+                slug=slug,
+                display_name="MOR Logistics",
+                legal_name="MOR LOGISTICS MANITOBA LIMITED",
+            )
+        )
+    return organization_id
+
+
+def _latest_history(organization_id: str) -> FinancialSyncHistory:
+    with SessionLocal() as session:
+        history = (
+            session.query(FinancialSyncHistory)
+            .filter_by(organization_id=organization_id)
+            .order_by(FinancialSyncHistory.started_at.desc())
+            .first()
+        )
+        assert history is not None
+        session.expunge(history)
+        return history
 
 
 @pytest.fixture
@@ -193,3 +228,87 @@ def test_sync_reports_commit_transaction_stage(service_factory, monkeypatch):
     assert db_session.commit_called is True
     assert db_session.rollback_called is True
     assert db_session.close_called is True
+
+
+def test_start_history_populates_organization_slug_from_matching_organization_row():
+    organization_id = _seed_organization(slug="mor-logistics")
+    service = QuickBooksFinancialSyncService(organization_id, connector=FakeConnector())
+
+    history_id = service._start_history(datetime.now(timezone.utc), "incremental", None)
+
+    with SessionLocal() as session:
+        history = session.get(FinancialSyncHistory, history_id)
+        assert history is not None
+        assert history.organization_id == organization_id
+        assert history.organization_slug == "mor-logistics"
+        assert history.status == "running"
+        assert history.sync_mode == "incremental"
+
+
+def test_start_history_rejects_missing_or_blank_organization_slug():
+    missing_service = QuickBooksFinancialSyncService("org-missing", connector=FakeConnector())
+    blank_slug_organization_id = _seed_organization(slug="")
+    blank_slug_service = QuickBooksFinancialSyncService(blank_slug_organization_id, connector=FakeConnector())
+
+    with pytest.raises(RuntimeError, match="was not found"):
+        missing_service._start_history(datetime.now(timezone.utc), "incremental", None)
+    with pytest.raises(RuntimeError, match="has no slug"):
+        blank_slug_service._start_history(datetime.now(timezone.utc), "incremental", None)
+
+
+def test_failed_sync_history_preserves_organization_slug(monkeypatch):
+    organization_id = _seed_organization(slug="mor-logistics")
+    service = QuickBooksFinancialSyncService(organization_id, connector=FakeConnector("fetch_company_info"))
+    service.store = FakeStore()
+    monkeypatch.setattr(service, "_last_checkpoint", lambda: None)
+
+    with pytest.raises(QuickBooksSyncStageError):
+        service.sync(mode="incremental")
+
+    history = _latest_history(organization_id)
+    assert history.organization_slug == "mor-logistics"
+    assert history.status == "failed"
+    assert history.completed_at is not None
+    assert "fetch_company_info" in str(history.error_message)
+
+
+def test_successful_sync_history_preserves_slug_and_updates_last_sync(monkeypatch):
+    organization_id = _seed_organization(slug="mor-logistics")
+    service = QuickBooksFinancialSyncService(organization_id, connector=FakeConnector())
+    service.store = FakeStore()
+    monkeypatch.setattr(service, "_write_sync_payload", lambda *args, **kwargs: None)
+
+    result = service.sync(mode="incremental")
+
+    history = _latest_history(organization_id)
+    assert history.organization_slug == "mor-logistics"
+    assert history.status == "success"
+    assert history.completed_at is not None
+    assert result["last_sync"] == history.completed_at.isoformat()
+    assert result["sync_mode"] == "incremental"
+
+
+def test_sync_history_slug_cannot_be_borrowed_from_another_tenant():
+    first_org = _seed_organization(slug="mor-logistics")
+    second_org = _seed_organization(slug="other-tenant")
+
+    first_history_id = QuickBooksFinancialSyncService(first_org, connector=FakeConnector())._start_history(
+        datetime.now(timezone.utc),
+        "incremental",
+        None,
+    )
+    second_history_id = QuickBooksFinancialSyncService(second_org, connector=FakeConnector())._start_history(
+        datetime.now(timezone.utc),
+        "incremental",
+        None,
+    )
+
+    with SessionLocal() as session:
+        first_history = session.get(FinancialSyncHistory, first_history_id)
+        second_history = session.get(FinancialSyncHistory, second_history_id)
+        assert first_history is not None
+        assert second_history is not None
+        assert first_history.organization_id == first_org
+        assert first_history.organization_slug == "mor-logistics"
+        assert second_history.organization_id == second_org
+        assert second_history.organization_slug == "other-tenant"
