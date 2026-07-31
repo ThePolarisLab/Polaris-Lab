@@ -320,10 +320,10 @@ def _has_later_outbound_response(session: Session, organization_id: str, mailbox
 
 def _mailbox_address(organization_id: str) -> str:
     try:
-        credential = OutlookCredentialStore(organization_id).load_credential()
+        metadata = OutlookCredentialStore(organization_id).metadata()
     except Exception:
         return ""
-    return str(credential.mailbox_address or "").casefold()
+    return str(metadata.get("mailbox_address") or "").casefold()
 
 
 def _followup_threshold_hours() -> int:
