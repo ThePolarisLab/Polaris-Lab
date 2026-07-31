@@ -250,15 +250,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    for table_name in (
-        "outlook_sync_history",
-        "outlook_message_classifications",
-        "outlook_attachments",
-        "outlook_messages",
-        "outlook_folder_checkpoints",
-        "outlook_folders",
-        "outlook_oauth_states",
-        "outlook_oauth_credentials",
-    ):
-        if table_name in _tables():
-            op.drop_table(table_name)
+    raise RuntimeError(
+        "unsafe downgrade: revision 202607310001 would delete Outlook connector credentials, OAuth state, "
+        "folders, checkpoints, messages, attachment metadata, classifications, and sync history. "
+        "Restore from a verified backup instead of downgrading in place."
+    )
