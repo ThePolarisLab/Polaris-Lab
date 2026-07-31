@@ -10,6 +10,7 @@ from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -224,6 +225,7 @@ class OutlookConnector(BaseConnector):
         return self._request_absolute_json(method, f"{self._graph_base_url()}{path}", operation=operation, params=params, prefer_text_body=prefer_text_body)
 
     def _request_absolute_json(self, method: str, url: str, *, operation: str, params: dict[str, str] | None = None, prefer_text_body: bool = False) -> dict[str, Any]:
+        safe_url = self._validated_graph_url(url, operation)
         last_error: OutlookConnectorError | None = None
         for attempt in range(1, self._max_attempts() + 1):
             self.authenticate()
@@ -235,7 +237,7 @@ class OutlookConnector(BaseConnector):
             if prefer_text_body:
                 headers["Prefer"] = 'outlook.body-content-type="text"'
             try:
-                response = self._http().request(method, url, params=params, headers=headers)
+                response = self._http().request(method, safe_url, params=params, headers=headers)
                 if response.status_code == 401 and attempt < self._max_attempts():
                     self._access_token = None
                     self._refresh_access_token()
@@ -257,6 +259,22 @@ class OutlookConnector(BaseConnector):
                     raise last_error from exc
                 self._sleep(self._retry_delay(attempt))
         raise last_error or OutlookConnectorError(f"Outlook {operation} failed")
+
+    def _validated_graph_url(self, url: str, operation: str) -> str:
+        parsed = urlparse(url)
+        base = urlparse(self._graph_base_url())
+        base_path = base.path.rstrip("/")
+        if parsed.scheme != base.scheme or parsed.netloc != base.netloc:
+            raise OutlookConnectorError(
+                f"Outlook {operation} returned an unsafe provider continuation URL",
+                status=ConnectorStatus.DEGRADED,
+            )
+        if base_path and not (parsed.path == base_path or parsed.path.startswith(base_path + "/")):
+            raise OutlookConnectorError(
+                f"Outlook {operation} returned an unsafe provider continuation path",
+                status=ConnectorStatus.DEGRADED,
+            )
+        return url
 
     def _json_response(self, response: httpx.Response, operation: str) -> dict[str, Any]:
         if response.status_code == 429:
