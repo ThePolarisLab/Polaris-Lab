@@ -93,8 +93,16 @@ jobs:
       - name: Verify no live Outlook secrets are committed
         shell: bash
         run: |
-          if grep -RInE "(refresh_token|access_token|client_secret|authorization_code|Bearer )[A-Za-z0-9._~+/=-]{16,}" \
+          set -euo pipefail
+          if find . -type f \( -name ".env" -o -name "*.pem" -o -name "*.pfx" \) \
+            -not -path "./chief-of-staff/backend/.env.example" \
+            -not -path "./chief-of-staff/backend/.env.quickbooks.example" \
+            -print | grep -q .; then
+            echo "Potential secret-bearing environment or key file is tracked."
+            exit 1
+          fi
+          if grep -RInE "(EwB[A-Za-z0-9._-]{40,}|Bearer [A-Za-z0-9._-]{20,}|refresh_token[\"']?[[:space:]]*[:=][[:space:]]*[\"'][A-Za-z0-9._-]{20,}|access_token[\"']?[[:space:]]*[:=][[:space:]]*[\"'][A-Za-z0-9._-]{20,})" \
             chief-of-staff/backend docs .github 2>/dev/null; then
-            echo "Potential committed Outlook secret material found."
+            echo "Potential committed Outlook token material found."
             exit 1
           fi
