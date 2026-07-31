@@ -81,7 +81,7 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
       - name: Run frontend tests
-        run: npm test -- --run
+        run: npm test
       - name: Build frontend
         run: npm run build
 
@@ -94,7 +94,7 @@ jobs:
         shell: bash
         run: |
           if grep -RInE "(refresh_token|access_token|client_secret|authorization_code|Bearer )[A-Za-z0-9._~+/=-]{16,}" \
-            chief-of-staff/backend app docs .github 2>/dev/null; then
+            chief-of-staff/backend docs .github 2>/dev/null; then
             echo "Potential committed Outlook secret material found."
             exit 1
           fi
