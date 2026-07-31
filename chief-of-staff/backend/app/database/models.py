@@ -6,6 +6,10 @@ from app.auth.models import (  # noqa: F401
     ProductionLoginAttempt,
     ProductionPasswordCredential,
 )
+from app.connectors.outlook_credentials import (  # noqa: F401
+    OutlookOAuthCredential,
+    OutlookOAuthState,
+)
 from app.connectors.quickbooks_credentials import (  # noqa: F401
     QuickBooksOAuthCredential,
     QuickBooksOAuthState,
@@ -19,6 +23,14 @@ from app.models.financial_snapshot import (  # noqa: F401
     FinancialSyncHistory,
 )
 from app.models.memory import MemoryEntry  # noqa: F401
+from app.models.outlook import (  # noqa: F401
+    OutlookAttachment,
+    OutlookFolder,
+    OutlookFolderCheckpoint,
+    OutlookMessage,
+    OutlookMessageClassification,
+    OutlookSyncHistory,
+)
 from app.models.relationship import KnowledgeRelationship  # noqa: F401
 from app.models.team_note import TeamNote  # noqa: F401
 from app.models.truck import Truck  # noqa: F401

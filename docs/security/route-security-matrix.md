@@ -1,6 +1,6 @@
 # FastAPI Route Security Matrix
 
-Baseline branch: `phase3b/production-auth-bootstrap` based on current `main` after Phase 3A  
+Baseline branch: `track4b/outlook-production-activation` based on current `main` after Phase 3B and QuickBooks production verification  
 Scope: Polaris Chief of Staff FastAPI routers mounted from `chief-of-staff/backend/app/main.py`.
 
 ## Classification Legend
@@ -26,6 +26,7 @@ Scope: Polaris Chief of Staff FastAPI routers mounted from `chief-of-staff/backe
 | POST | `/api/v1/auth/logout` | public/authenticated hybrid | bearer token when present; idempotent local cleanup otherwise | Revokes the current server-side session when a valid bearer is present. |
 | POST | `/api/v1/auth/local/token` | public in development/test only | local-token secret validation; disabled in production | Local bootstrap for existing development auth model. Must return 404 outside development/test. |
 | GET | `/api/v1/connectors/quickbooks/oauth/callback` | OAuth callback | signed, unexpired, atomic single-use, org-bound and principal-bound OAuth state; post-token company verification | Intuit redirects cannot include Polaris bearer headers; authorization comes from validated state. |
+| GET | `/api/v1/outlook/callback` | OAuth callback | signed, unexpired, atomic single-use, org-bound and principal-bound OAuth state; Microsoft mailbox identity verification | Microsoft redirects cannot include Polaris bearer headers; authorization comes from validated state. No tokens, codes, or raw state values are returned. |
 
 ## Protected Routes
 
@@ -95,6 +96,15 @@ Scope: Polaris Chief of Staff FastAPI routers mounted from `chief-of-staff/backe
 | GET | `/api/v1/qbo/verification` | permission-protected | `connector.read` | Secret-free connector verification status for principal org. |
 | POST | `/api/v1/qbo/verification` | permission-protected | `connector.write` | Active read-only provider verification for principal org. |
 | POST | `/api/v1/qbo/sync` | permission-protected | `financial.write` | Financial cache writes use principal org; performs no QuickBooks writes. |
+| GET | `/api/v1/outlook/status` | permission-protected | `connector.read` | Secret-free Outlook status for principal org only. |
+| GET | `/api/v1/outlook/connect` | permission-protected | `connector.write` | OAuth state bound to principal org and identity; returns Microsoft URL without exposing tokens. |
+| POST | `/api/v1/outlook/sync` | permission-protected | `connector.write` | Read-only Microsoft Graph sync writes only to principal-org Polaris Outlook tables. |
+| POST | `/api/v1/outlook/disconnect` | permission-protected | `connector.write` | Deletes/disconnects principal-org Outlook credential; performs no mailbox mutation. |
+| GET | `/api/v1/outlook/folders` | permission-protected | `connector.read` | `OutlookFolder.organization_id == principal.organization_id`. |
+| GET | `/api/v1/outlook/messages` | permission-protected | `executive.read` | `OutlookMessage.organization_id == principal.organization_id`; supports safe filters and pagination. |
+| GET | `/api/v1/outlook/messages/{message_id}` | permission-protected | `executive.read` | Message ID plus organization filter. |
+| GET | `/api/v1/outlook/attention` | permission-protected | `executive.read` | Derived from principal-org Outlook messages and classifications only. |
+| GET | `/api/v1/outlook/sync-history` | permission-protected | `connector.read` | `OutlookSyncHistory.organization_id == principal.organization_id`. |
 | POST | `/api/v1/organizations` | admin-only | `platform.admin` | Platform-only tenant creation. |
 | GET | `/api/v1/organizations` | admin-only | `organization.read` | Platform admins see all; org users see only their org. |
 | GET | `/api/v1/organizations/{organization_id}` | admin-only | `organization.read` | Same org or platform admin only. |
@@ -119,6 +129,11 @@ Phase 2 and Phase 2.1 make tenant-owned schema enforcement Alembic-managed, bloc
 
 Phase 3A keeps QuickBooks accounting write actions out of scope. All QuickBooks routes either read provider data, run read-only verification, synchronize into Polaris-owned financial cache tables, initiate OAuth, handle OAuth callback state, or disconnect/revoke credentials for the active organization.
 
+## Outlook Production Note
+
+Track 4B keeps Outlook mail mutation actions out of scope. Outlook routes initiate delegated read-only OAuth, validate public callbacks through signed one-use state, synchronize only approved folder/message/attachment metadata into Polaris-owned Outlook tables, and expose safe tenant-scoped executive views.
+
 ## Remaining Later-Phase Work
 
-- Continue Motive, Outlook, API versioning, external identity-provider integration, and non-QuickBooks deployment automation outside this phase.
+- Continue Motive, API versioning, external identity-provider integration, and non-QuickBooks deployment automation outside this phase.
+- Any Outlook write capability requires a separate governed workstream and new permission review.

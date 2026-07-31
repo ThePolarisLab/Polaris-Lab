@@ -21,6 +21,10 @@ EXPECTED_COLUMNS: dict[str, set[str]] = {
     "organizations": {"id", "slug", "display_name", "legal_name", "status", "created_at", "updated_at"},
     "identities": {"id", "email", "display_name", "status", "created_at", "updated_at"},
     "organization_memberships": {"id", "organization_id", "identity_id", "role", "status", "created_at"},
+    "production_password_credentials": {"identity_id", "password_hash", "algorithm", "created_at", "updated_at"},
+    "production_auth_sessions": {"id", "identity_id", "organization_id", "refresh_token_hash", "rotated_from_session_id", "user_agent", "ip_address", "created_at", "last_used_at", "access_expires_at", "refresh_expires_at", "revoked_at", "revoke_reason"},
+    "production_auth_bootstrap_state": {"id", "organization_id", "identity_id", "completed", "completed_at"},
+    "production_login_attempts": {"id", "email", "ip_address", "succeeded", "failure_reason", "created_at"},
     "companies": {"id", "organization_id", "name", "description", "website", "industry", "location", "mission", "created_at", "updated_at"},
     "trucks": {"id", "organization_id", "unit_number", "make", "model", "year", "vin", "license_plate", "status", "notes", "created_at", "updated_at"},
     "memory_entries": {"id", "organization_id", "category", "title", "details", "importance", "source", "created_at"},
@@ -32,28 +36,25 @@ EXPECTED_COLUMNS: dict[str, set[str]] = {
     "financial_accounts": {"id", "organization_id", "organization_slug", "qbo_id", "name", "fully_qualified_name", "account_type", "account_subtype", "active", "current_balance", "payload", "synced_at"},
     "financial_snapshots": {"id", "organization_id", "organization_slug", "snapshot_type", "period_start", "period_end", "accounting_method", "payload", "captured_at"},
     "financial_sync_history": {
-        "id",
-        "organization_id",
-        "organization_slug",
-        "status",
-        "started_at",
-        "completed_at",
-        "duration_ms",
-        "accounts_imported",
-        "company_name",
-        "error_message",
-        "sync_mode",
-        "resource_counts",
-        "report_availability",
-        "checkpoint_before",
-        "checkpoint_after",
-        "verification_status",
+        "id", "organization_id", "organization_slug", "status", "started_at", "completed_at", "duration_ms",
+        "accounts_imported", "company_name", "error_message", "sync_mode", "resource_counts",
+        "report_availability", "checkpoint_before", "checkpoint_after", "verification_status",
     },
-    "quickbooks_oauth_credentials": {"id", "organization_id", "realm_id", "encrypted_refresh_token", "scopes", "connected_at", "updated_at"},
+    "quickbooks_oauth_credentials": {"id", "organization_id", "realm_id", "encrypted_refresh_token", "scopes", "verified_company_name", "company_verified_at", "verification_status", "connector_health_status", "reauthorization_required", "last_error_summary", "last_successful_sync_at", "last_refresh_at", "last_refresh_status", "connected_at", "updated_at"},
     "quickbooks_oauth_states": {"state", "organization_id", "identity_id", "created_at", "expires_at", "consumed_at"},
+    "outlook_oauth_credentials": {"id", "organization_id", "organization_slug", "microsoft_tenant_id", "mailbox_user_id", "mailbox_address", "encrypted_refresh_token", "scopes", "connector_health_status", "reauthorization_required", "last_error_summary", "last_successful_sync_at", "last_refresh_at", "last_refresh_status", "connected_at", "updated_at", "disconnected_at"},
+    "outlook_oauth_states": {"state", "organization_id", "identity_id", "nonce", "created_at", "expires_at", "consumed_at"},
+    "outlook_folders": {"id", "organization_id", "organization_slug", "provider_folder_id", "display_name", "parent_folder_id", "well_known_name", "child_folder_count", "total_item_count", "unread_item_count", "is_sync_enabled", "synced_at"},
+    "outlook_folder_checkpoints": {"id", "organization_id", "organization_slug", "provider_folder_id", "delta_link", "last_successful_sync_at", "checkpoint_status", "updated_at"},
+    "outlook_messages": {"id", "organization_id", "organization_slug", "provider_message_id", "immutable_provider_id", "conversation_id", "internet_message_id", "folder_provider_id", "subject", "sender", "reply_to", "recipients", "cc_recipients", "bcc_recipients", "received_at", "sent_at", "created_at", "modified_at", "importance", "categories", "flag", "is_read", "is_draft", "has_attachments", "body_content_type", "body_text", "body_truncated", "source_web_link", "evidence", "observed_at", "last_seen_at", "removed_at", "last_sync_run_id", "synced_at"},
+    "outlook_attachments": {"id", "organization_id", "organization_slug", "message_id", "provider_attachment_id", "filename", "mime_type", "size", "is_inline", "content_id", "attachment_type", "synced_at"},
+    "outlook_message_classifications": {"id", "organization_id", "organization_slug", "message_id", "category", "confidence", "reason", "rule", "created_at"},
+    "outlook_sync_history": {"id", "organization_id", "organization_slug", "connector", "sync_mode", "status", "run_id", "folders_scanned", "messages_discovered", "messages_inserted", "messages_updated", "messages_unchanged", "messages_removed", "attachments_indexed", "checkpoint_before", "checkpoint_after", "started_at", "completed_at", "duration_ms", "error_category", "error_message"},
 }
 
 TENANT_TABLES = {
+    "production_auth_sessions",
+    "production_auth_bootstrap_state",
     "companies",
     "trucks",
     "memory_entries",
@@ -67,8 +68,30 @@ TENANT_TABLES = {
     "financial_sync_history",
     "quickbooks_oauth_credentials",
     "quickbooks_oauth_states",
+    "outlook_oauth_credentials",
+    "outlook_oauth_states",
+    "outlook_folders",
+    "outlook_folder_checkpoints",
+    "outlook_messages",
+    "outlook_attachments",
+    "outlook_message_classifications",
+    "outlook_sync_history",
 }
 
+LEGACY_OPTIONAL_TABLES = {
+    "production_password_credentials",
+    "production_auth_sessions",
+    "production_auth_bootstrap_state",
+    "production_login_attempts",
+    "outlook_oauth_credentials",
+    "outlook_oauth_states",
+    "outlook_folders",
+    "outlook_folder_checkpoints",
+    "outlook_messages",
+    "outlook_attachments",
+    "outlook_message_classifications",
+    "outlook_sync_history",
+}
 LEGACY_TENANT_OPTIONAL = {"organization_id"}
 LEGACY_TABLE_OPTIONAL_COLUMNS: dict[str, set[str]] = {
     "financial_accounts": {"organization_slug"},
@@ -81,6 +104,17 @@ LEGACY_TABLE_OPTIONAL_COLUMNS: dict[str, set[str]] = {
         "checkpoint_before",
         "checkpoint_after",
         "verification_status",
+    },
+    "quickbooks_oauth_credentials": {
+        "verified_company_name",
+        "company_verified_at",
+        "verification_status",
+        "connector_health_status",
+        "reauthorization_required",
+        "last_error_summary",
+        "last_successful_sync_at",
+        "last_refresh_at",
+        "last_refresh_status",
     },
 }
 SYSTEM_TABLES = {"alembic_version"}
@@ -122,18 +156,23 @@ def validate_schema() -> ValidationResult:
         )
 
     missing_tables = set(EXPECTED_COLUMNS) - user_tables
-    if missing_tables:
+    blocking_missing_tables = missing_tables - LEGACY_OPTIONAL_TABLES
+    if blocking_missing_tables:
         return ValidationResult(
             "partial",
             "Database is missing expected tables and cannot be stamped safely: "
-            + ", ".join(sorted(missing_tables)),
+            + ", ".join(sorted(blocking_missing_tables)),
         )
 
-    current_compatible = True
+    current_compatible = not missing_tables
     legacy_compatible = True
     details: list[str] = []
+    if missing_tables:
+        details.append("missing post-baseline tables: " + ", ".join(sorted(missing_tables)))
 
     for table_name, expected in EXPECTED_COLUMNS.items():
+        if table_name not in user_tables:
+            continue
         actual = _table_columns(inspector, table_name)
         missing = expected - actual
         extra = actual - expected

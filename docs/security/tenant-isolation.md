@@ -1,7 +1,7 @@
 # Tenant Isolation Model
 
-Status date: 2026-07-30  
-Scope: Phase 1.1 Tenant Isolation Hardening, Phase 2 Database Gate lifecycle enforcement, Phase 2.1 persistent deployment hardening, and Phase 3A QuickBooks production adapter.
+Status date: 2026-07-31  
+Scope: Phase 1.1 Tenant Isolation Hardening, Phase 2 Database Gate lifecycle enforcement, Phase 2.1 persistent deployment hardening, Phase 3A QuickBooks production adapter, and Track 4B Outlook production activation.
 
 ## Source of Truth
 
@@ -23,12 +23,20 @@ For authenticated requests, `AuthenticatedPrincipal.organization_id` is the auth
 | QuickBooks OAuth state | `QuickBooksOAuthState` | Organization + principal | `organization_id` and `identity_id` FKs | State is signed, persisted, expiring, single-use, principal-bound, organization-bound, and atomically consumed. |
 | QuickBooks production verification | Credential metadata + sync history | Organization | Derived from active credential organization | Verification status is safe metadata only; no tokens, OAuth codes, raw state, encryption keys, or realm IDs are exposed. |
 | Hermes QuickBooks contract | TypeScript interfaces/evidence model | Contract only in Phase 3A | Evidence envelopes carry organization/tenant scope | Hermes does not own production refresh tokens or realm IDs in Phase 3A. Python owns live tenant credentials. |
+| Outlook credentials | `OutlookOAuthCredential` | Organization | `organization_id` FK, unique, plus organization slug snapshot | Credential store requires explicit principal-derived organization ID; refresh tokens are encrypted and never returned through APIs. |
+| Outlook OAuth state | `OutlookOAuthState` | Organization + principal | `organization_id` and `identity_id` FKs | State is signed, persisted, expiring, single-use, principal-bound, organization-bound, and atomically consumed before token exchange. |
+| Outlook folders | `OutlookFolder` | Organization | `organization_id` FK and provider folder ID unique per org | Folder discovery and folder reads filter by principal organization; only approved folders are sync-enabled. |
+| Outlook checkpoints | `OutlookFolderCheckpoint` | Organization | `organization_id` FK and provider folder ID unique per org | Delta/checkpoint state is saved only after successful sync units for the active organization. |
+| Outlook messages | `OutlookMessage` | Organization | `organization_id` FK and provider message ID unique per org | Message APIs filter by principal organization; source evidence identifies connector, provider, folder, message, observed time, and sync run. |
+| Outlook attachments | `OutlookAttachment` | Organization | `organization_id` FK and message FK | Metadata-only attachment rows are tied to principal-org message rows; binary attachment content is not downloaded in Track 4B. |
+| Outlook classifications | `OutlookMessageClassification` | Organization | `organization_id` FK and message FK | Deterministic categories are replaced per message inside principal-org sync writes. |
+| Outlook sync history | `OutlookSyncHistory` | Organization | `organization_id` FK and organization slug snapshot | Running, success, and failure rows are created for the active organization with safe error summaries only. |
 | Identities | `Identity` | Platform identity directory | Global identity, visible through membership | Reads require a membership in the caller's organization unless future platform identity APIs are added. |
 | Memberships | `OrganizationMembership` | Organization | `organization_id` FK | Membership routes require path org to match principal org and identity permissions. |
 | Organizations | `Organization` | Platform tenant registry | Tenant root | Normal users list only their org; platform admins can create/list/read all orgs. |
 | Events | In-process `EventBus` | Organization when event is tenant data | Envelope `organization_id` / `tenant_id` | Recent event API returns only events matching the principal org. |
 | Connector registry | In-process registry | Platform runtime | Stateless; tenant state must be separate | Tenant-sensitive connector operations instantiate tenant-bound stores from principal org. |
-| Future connector storage | Connector-specific persistence | Organization | Required `organization_id` FK | New connector records must follow the QuickBooks credential/state pattern and ship with Alembic migrations. |
+| Future connector storage | Connector-specific persistence | Organization | Required `organization_id` FK | New connector records must follow the QuickBooks/Outlook credential/state pattern and ship with Alembic migrations. |
 
 ## Query Rule
 
@@ -46,16 +54,22 @@ Tenant-owned database columns are part of the Alembic-managed schema lifecycle. 
 
 If a legacy database contains tenant-owned rows but no organizations, the migration fails unless the operator supplies all three one-time bootstrap variables documented in `docs/database/tenant-backfill-plan.md`. That path is a verified legacy adoption flow, not a clean-install default and not an ownership guess.
 
-Hosted staging and production must use persistent PostgreSQL. Temporary SQLite paths such as `sqlite:////tmp/polaris.db` are allowed only for disposable local, test, or preview scenarios and must not hold QuickBooks credentials or financial evidence.
+Hosted staging and production must use persistent PostgreSQL. Temporary SQLite paths such as `sqlite:////tmp/polaris.db` are allowed only for disposable local, test, or preview scenarios and must not hold connector credentials, financial evidence, or email evidence.
 
-## Public Callback Exception
+## Public Callback Exceptions
 
 `GET /api/v1/connectors/quickbooks/oauth/callback` remains public at the HTTP authentication layer because Intuit cannot send Polaris bearer headers. The callback is protected by the OAuth state record, which is signed, expiring, single-use, principal-bound, and organization-bound. Phase 3A also verifies the resulting CompanyInfo against the configured Mor Logistics company before accepting synchronized financial data.
+
+`GET /api/v1/outlook/callback` remains public at the HTTP authentication layer because Microsoft cannot send Polaris bearer headers. The callback is protected by the Outlook OAuth state record, which is signed, expiring, single-use, principal-bound, and organization-bound. The callback verifies mailbox identity through Microsoft Graph before storing encrypted tenant credentials.
 
 ## QuickBooks Read-Only Boundary
 
 QuickBooks routes may read Intuit data, refresh/rotate OAuth tokens, verify company identity, cache read-only financial snapshots in Polaris, or disconnect/revoke credentials. They must not create, update, void, delete, or post QuickBooks transactions in Phase 3A.
 
+## Outlook Read-Only Boundary
+
+Outlook routes may initiate delegated OAuth, refresh/rotate OAuth tokens, discover folders, read approved folder messages, read attachment metadata, cache sanitized message evidence in Polaris, classify messages deterministically, expose executive attention views, or disconnect Polaris credentials. They must not send, reply, forward, delete, move, mark read/unread, flag, edit categories, create drafts, create rules, access calendar/contacts/Teams, or perform any Microsoft mailbox mutation in Track 4B.
+
 ## Out of Scope
 
-Motive persistence, Outlook persistence, API versioning, and broad deployment automation remain later phases. New tenant-owned persistence must not be added without an Alembic migration and explicit tenant ownership documentation.
+Motive persistence, API versioning, and broad deployment automation remain later phases. New tenant-owned persistence must not be added without an Alembic migration and explicit tenant ownership documentation.
