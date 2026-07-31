@@ -50,11 +50,11 @@ Each connector must remain independently governed with its own adapter, credenti
 ### In progress
 
 - Track 4A — QuickBooks Financial Reconciliation.
+- Track 4B — Outlook Production Activation implementation.
 - Phase 3B.1 Production Hardening Cleanup — schema drift audit, adoption inventory guardrail, dead-code cleanup, and v1.0 scope re-baseline.
 
 ### Approved to begin
 
-- Track 4B — Outlook Production Activation.
 - Track 4C — Motive Production Activation after Track 4B begins, without waiting for QuickBooks reconciliation to finish.
 
 ### Current engineering capabilities
@@ -76,7 +76,8 @@ Polaris can currently:
 - operate hosted staging/production on persistent PostgreSQL with generic public health responses;
 - authenticate the first Mor Logistics production owner through the hosted frontend;
 - operate the tenant-bound QuickBooks production adapter with production OAuth, Mor Logistics company verification, and successful read-only synchronization;
-- preserve QuickBooks production evidence while financial reconciliation validates dashboard/report mapping for AR, AP, Gross Profit, Net Income, and Cash Position.
+- preserve QuickBooks production evidence while financial reconciliation validates dashboard/report mapping for AR, AP, Gross Profit, Net Income, and Cash Position;
+- implement Outlook as a tenant-bound, read-only Microsoft Graph connector in Track 4B pending production operator verification.
 
 ## Product Direction
 
@@ -128,7 +129,7 @@ Scope:
 
 ### Track 4B — Outlook Production Activation
 
-Status: approved to begin immediately.
+Status: implementation in progress in draft PR #107; production operator verification pending.
 
 Initial boundary:
 
@@ -138,6 +139,20 @@ Initial boundary:
 - provenance-preserving evidence;
 - classification and executive attention views;
 - no automatic send, delete, move, reply, or other material email actions.
+
+Implementation scope:
+
+- delegated Microsoft OAuth authorization-code flow;
+- encrypted, organization-owned refresh-token persistence;
+- Microsoft Graph read-only folder, message, attachment metadata, and delta/checkpoint synchronization;
+- provider-owned Outlook persistence tables;
+- immutable provenance fields on synchronized communications;
+- deterministic classification rules;
+- conservative executive attention read model;
+- authenticated API and dashboard views;
+- runbook, permissions documentation, and CI coverage without live mailbox secrets.
+
+Track 4B is not production verified until an operator completes Microsoft Entra setup, OAuth connection, initial sync, incremental sync, idempotency verification, and evidence review for the approved Mor Logistics mailbox.
 
 ### Track 4C — Motive Production Activation
 
