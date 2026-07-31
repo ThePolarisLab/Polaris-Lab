@@ -105,6 +105,17 @@ LEGACY_TABLE_OPTIONAL_COLUMNS: dict[str, set[str]] = {
         "checkpoint_after",
         "verification_status",
     },
+    "quickbooks_oauth_credentials": {
+        "verified_company_name",
+        "company_verified_at",
+        "verification_status",
+        "connector_health_status",
+        "reauthorization_required",
+        "last_error_summary",
+        "last_successful_sync_at",
+        "last_refresh_at",
+        "last_refresh_status",
+    },
 }
 SYSTEM_TABLES = {"alembic_version"}
 BASELINE_REVISION = "202607290001"
