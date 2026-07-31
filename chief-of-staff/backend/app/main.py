@@ -20,6 +20,7 @@ from app.api.memory import router as memory_router
 from app.api.memory_search import router as memory_search_router
 from app.api.missions import router as missions_router
 from app.api.organizations import router as organizations_router
+from app.api.outlook import router as outlook_router
 from app.api.quickbooks_financials import router as quickbooks_financials_router
 from app.api.quickbooks_oauth import router as quickbooks_oauth_router
 from app.api.reasoning import router as reasoning_router
@@ -30,12 +31,14 @@ from app.api.team_notes import router as team_notes_router
 from app.api.truck import router as truck_router
 from app.api.work_context import router as work_context_router
 from app.connectors.github import GitHubConnector
+from app.connectors.outlook import OutlookConnector
 from app.connectors.quickbooks import QuickBooksConnector
 from app.connectors.registry import connector_registry
 
 prepare_database_for_runtime()
 connector_registry.register(GitHubConnector(), replace=True)
 connector_registry.register(QuickBooksConnector(), replace=True)
+connector_registry.register(OutlookConnector(), replace=True)
 
 app = FastAPI(title=settings.service_name, version=settings.version)
 app.add_middleware(
@@ -65,6 +68,7 @@ app.include_router(refactoring_router, dependencies=[Depends(require_permission(
 app.include_router(work_context_router, dependencies=executive_read)
 app.include_router(system_router)
 app.include_router(connectors_router)
+app.include_router(outlook_router)
 app.include_router(quickbooks_oauth_router)
 app.include_router(quickbooks_financials_router)
 app.include_router(events_router, dependencies=organization_read)
