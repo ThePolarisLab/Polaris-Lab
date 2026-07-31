@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from decimal import Decimal, InvalidOperation
 from datetime import date
 from typing import Any, Literal
@@ -14,9 +15,10 @@ from app.database.database import SessionLocal
 from app.models.financial_snapshot import FinancialSnapshot
 from app.security.dependencies import require_permission
 from app.security.models import AuthenticatedPrincipal, Permission
-from app.services.quickbooks_financial_sync import QuickBooksFinancialSyncService
+from app.services.quickbooks_financial_sync import QuickBooksFinancialSyncService, QuickBooksSyncStageError
 
 router = APIRouter(prefix="/api/v1/qbo", tags=["quickbooks-financials"])
+logger = logging.getLogger(__name__)
 
 
 def _connector(organization_id: str) -> QuickBooksConnector:
@@ -30,6 +32,8 @@ def _safe_call(operation):
         message = str(exc)
         status_code = 503 if exc.status.value in {"not_configured", "authorization_required", "reauthorization_required"} else 502
         raise HTTPException(status_code=status_code, detail=message) from exc
+    except QuickBooksSyncStageError as exc:
+        raise HTTPException(status_code=500, detail=exc.payload()) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail="QuickBooks operation failed") from exc
 
@@ -47,7 +51,7 @@ def get_accounts(principal: AuthenticatedPrincipal = Depends(require_permission(
 
 @router.get("/resources/{resource}")
 def get_resource(
-    resource: Literal["customers", "vendors", "accounts", "invoices", "payments", "bills", "purchases", "journal_entries"],
+    resource: Literal["customers", "vendors", "accounts", "items", "invoices", "payments", "bills", "purchases", "journal_entries"],
     changed_since: str | None = Query(default=None),
     cursor: int | None = Query(default=None, ge=1),
     limit: int = Query(default=100, ge=1, le=1000),
@@ -127,7 +131,22 @@ def synchronize_financials(
 ) -> dict[str, Any]:
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=422, detail="start_date must not exceed end_date")
-    return _safe_call(lambda: QuickBooksFinancialSyncService(principal.organization_id).sync(start_date=start_date, end_date=end_date, mode=mode))
+    try:
+        return QuickBooksFinancialSyncService(principal.organization_id).sync(start_date=start_date, end_date=end_date, mode=mode)
+    except QuickBooksSyncStageError as exc:
+        logger.exception(
+            "QuickBooks sync endpoint failed",
+            extra={
+                "organization_id": principal.organization_id,
+                "identity_id": principal.identity_id,
+                "company_id": exc.company_id,
+                "sync_mode": mode,
+                "sync_stage": exc.stage,
+            },
+        )
+        detail = exc.payload()
+        detail["identity_id"] = principal.identity_id
+        raise HTTPException(status_code=500, detail=detail) from exc
 
 
 @router.get("/sync/status")
