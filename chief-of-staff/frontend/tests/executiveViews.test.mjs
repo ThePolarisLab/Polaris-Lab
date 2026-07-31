@@ -28,11 +28,23 @@ test("observer and evidence governance remain visible", () => {
   assert.match(views, /explicit authority/);
 });
 
-test("Motive connector remains identified as planned work", () => {
-  assert.match(views, /Issue #62/);
+test("Motive connector remains identified as separately governed planned work", () => {
+  assert.match(views, /Track 4C/);
+  assert.match(views, /separately governed/);
 });
 
 test("QuickBooks connector reflects live status rather than a placeholder", () => {
   assert.doesNotMatch(views, /Issue #61/);
   assert.match(views, /oauth\/authorize/);
+});
+
+test("Outlook connector exposes only read-oriented controls", () => {
+  assert.match(views, /\/api\/v1\/outlook\/connect/);
+  assert.match(views, /\/api\/v1\/outlook\/sync\?mode=incremental/);
+  assert.match(views, /\/api\/v1\/outlook\/disconnect/);
+  assert.match(views, /Executive attention/);
+  assert.doesNotMatch(views, /Reply/);
+  assert.doesNotMatch(views, /Forward/);
+  assert.doesNotMatch(views, /Delete email/);
+  assert.doesNotMatch(views, /Mark read/);
 });
