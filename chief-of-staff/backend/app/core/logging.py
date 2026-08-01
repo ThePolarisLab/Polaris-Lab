@@ -59,19 +59,27 @@ class OutlookDiagnosticFilter(logging.Filter):
 
 
 def configure_application_logging() -> None:
-    """Route app loggers through Uvicorn's configured visible handlers."""
+    """Make app logs visible in Uvicorn without hiding them from test capture."""
     uvicorn_logger = logging.getLogger("uvicorn.error")
     root_logger = logging.getLogger()
-    target_handlers = uvicorn_logger.handlers or root_logger.handlers
-    diagnostic_filter = OutlookDiagnosticFilter()
-    for handler in target_handlers:
-        if not any(isinstance(existing, OutlookDiagnosticFilter) for existing in handler.filters):
-            handler.addFilter(diagnostic_filter)
-
     app_logger = logging.getLogger("app")
+    diagnostic_filter = OutlookDiagnosticFilter()
+
+    for handler in (*uvicorn_logger.handlers, *root_logger.handlers, *app_logger.handlers):
+        _add_filter_once(handler, diagnostic_filter)
+
+    for handler in uvicorn_logger.handlers:
+        if handler not in app_logger.handlers:
+            app_logger.addHandler(handler)
+            _add_filter_once(handler, diagnostic_filter)
+
     app_logger.setLevel(logging.INFO)
-    app_logger.propagate = False
-    app_logger.handlers = list(target_handlers)
+    app_logger.propagate = True
+
+
+def _add_filter_once(handler: logging.Handler, diagnostic_filter: OutlookDiagnosticFilter) -> None:
+    if not any(isinstance(existing, OutlookDiagnosticFilter) for existing in handler.filters):
+        handler.addFilter(diagnostic_filter)
 
 
 def _safe_extra_fields(record: logging.LogRecord) -> dict[str, Any]:
