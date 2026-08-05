@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from datetime import date
 from typing import Any, Literal
@@ -19,6 +20,13 @@ from app.services.quickbooks_financial_sync import QuickBooksFinancialSyncServic
 
 router = APIRouter(prefix="/api/v1/qbo", tags=["quickbooks-financials"])
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ReportMetric:
+    label: str
+    normalized_label: str
+    value: str
 
 
 def _connector(organization_id: str) -> QuickBooksConnector:
@@ -181,12 +189,18 @@ def executive_summary(principal: AuthenticatedPrincipal = Depends(require_permis
         return {**status, "currency": "CAD", "period": None, "metrics": None}
 
     pl_values = _report_values(profit_loss.payload)
+    pl_metrics = _report_metrics(profit_loss.payload)
     bs_values = _report_values(balance_sheet.payload)
+    bs_metrics = _report_metrics(balance_sheet.payload)
     header = profit_loss.payload.get("Header", {})
     revenue = _first(pl_values, "total income", "total revenue", "income")
     gross_profit = _first(pl_values, "gross profit")
     expenses = _first(pl_values, "total expenses", "expenses")
     net_income = _first(pl_values, "net income", "net operating income")
+    cash = _first(bs_values, "total bank accounts", "cash and cash equivalents", "bank accounts")
+    cash_metric = _first_report_metric(bs_metrics, "total bank accounts", "cash and cash equivalents", "bank accounts")
+    accounts_receivable_metric = get_balance_sheet_metric(balance_sheet.payload, "Accounts Receivable")
+    accounts_payable_metric = get_balance_sheet_metric(balance_sheet.payload, "Accounts Payable")
     return {
         **status,
         "currency": str(header.get("Currency") or "CAD"),
@@ -200,9 +214,18 @@ def executive_summary(principal: AuthenticatedPrincipal = Depends(require_permis
             "expenses": expenses,
             "gross_profit": gross_profit,
             "net_income": net_income,
-            "cash": _first(bs_values, "total bank accounts", "cash and cash equivalents", "bank accounts"),
-            "accounts_receivable": _first(bs_values, "accounts receivable (a/r)", "accounts receivable"),
-            "accounts_payable": _first(bs_values, "accounts payable (a/p)", "accounts payable"),
+            "cash": cash,
+            "accounts_receivable": _metric_value(accounts_receivable_metric),
+            "accounts_payable": _metric_value(accounts_payable_metric),
+        },
+        "metrics_metadata": {
+            "revenue": _metric_metadata(_first_report_metric(pl_metrics, "total income", "total revenue", "income"), profit_loss, "ProfitAndLoss"),
+            "expenses": _metric_metadata(_first_report_metric(pl_metrics, "total expenses", "expenses"), profit_loss, "ProfitAndLoss"),
+            "gross_profit": _metric_metadata(_first_report_metric(pl_metrics, "gross profit"), profit_loss, "ProfitAndLoss"),
+            "net_income": _metric_metadata(_first_report_metric(pl_metrics, "net income", "net operating income"), profit_loss, "ProfitAndLoss"),
+            "cash": _metric_metadata(cash_metric, balance_sheet, "BalanceSheet", value_override=cash),
+            "accounts_receivable": _metric_metadata(accounts_receivable_metric, balance_sheet, "BalanceSheet"),
+            "accounts_payable": _metric_metadata(accounts_payable_metric, balance_sheet, "BalanceSheet"),
         },
     }
 
@@ -211,18 +234,35 @@ def _latest_snapshot(session, organization_id: str, snapshot_type: str) -> Finan
     return session.query(FinancialSnapshot).filter_by(organization_id=organization_id, snapshot_type=snapshot_type).order_by(FinancialSnapshot.captured_at.desc()).first()
 
 
+def get_balance_sheet_metric(report_payload: dict[str, Any], label: str) -> ReportMetric | None:
+    """Return the QuickBooks consolidated Balance Sheet total for a metric label."""
+    target = _metric_total_key(label)
+    for metric in reversed(_report_metrics(report_payload)):
+        if _metric_total_key(metric.label) == target and metric.normalized_label.startswith("total "):
+            return metric
+    return None
+
+
 def _report_values(payload: dict[str, Any]) -> dict[str, str]:
     values: dict[str, str] = {}
+    for metric in _report_metrics(payload):
+        values[metric.normalized_label] = metric.value
+    return values
+
+
+def _report_metrics(payload: dict[str, Any]) -> list[ReportMetric]:
+    metrics: list[ReportMetric] = []
 
     def visit(node: Any) -> None:
         if isinstance(node, dict):
             columns = node.get("ColData") or (node.get("Summary") or {}).get("ColData")
             if isinstance(columns, list) and columns:
-                label = str((columns[0] or {}).get("value") or "").strip().lower()
+                raw_label = str((columns[0] or {}).get("value") or "").strip()
+                label = raw_label.lower()
                 for column in reversed(columns[1:]):
                     amount = _decimal_text((column or {}).get("value"))
                     if amount is not None:
-                        values[label] = amount
+                        metrics.append(ReportMetric(label=raw_label, normalized_label=label, value=amount))
                         break
             for value in node.values():
                 visit(value)
@@ -231,7 +271,7 @@ def _report_values(payload: dict[str, Any]) -> dict[str, str]:
                 visit(item)
 
     visit(payload.get("Rows", {}))
-    return values
+    return metrics
 
 
 def _first(values: dict[str, str], *names: str) -> str | None:
@@ -239,6 +279,48 @@ def _first(values: dict[str, str], *names: str) -> str | None:
         if name in values:
             return values[name]
     return None
+
+
+def _first_report_metric(metrics: list[ReportMetric], *names: str) -> ReportMetric | None:
+    for name in names:
+        for metric in reversed(metrics):
+            if metric.normalized_label == name:
+                return metric
+    return None
+
+
+def _metric_value(metric: ReportMetric | None) -> str | None:
+    return metric.value if metric is not None else None
+
+
+def _metric_metadata(
+    metric: ReportMetric | None,
+    snapshot: FinancialSnapshot,
+    report_name: str,
+    *,
+    value_override: str | None = None,
+) -> dict[str, Any]:
+    header = snapshot.payload.get("Header", {}) if isinstance(snapshot.payload, dict) else {}
+    captured_at = snapshot.captured_at.isoformat() if snapshot.captured_at else None
+    return {
+        "value": value_override if value_override is not None else _metric_value(metric),
+        "report_name": report_name,
+        "report_label": metric.label if metric is not None else None,
+        "snapshot_id": snapshot.id,
+        "captured_at": captured_at,
+        "period_end": header.get("EndPeriod") or snapshot.period_end,
+        "accounting_basis": header.get("ReportBasis") or snapshot.accounting_method,
+        "currency": header.get("Currency") or "CAD",
+        "organization_slug": snapshot.organization_slug,
+    }
+
+
+def _metric_total_key(label: str) -> str:
+    normalized = " ".join(str(label).strip().lower().split())
+    if normalized.startswith("total "):
+        normalized = normalized[6:]
+    normalized = normalized.replace("(a/r)", "").replace("(a/p)", "")
+    return "total " + " ".join(normalized.split())
 
 
 def _decimal_text(value: Any) -> str | None:

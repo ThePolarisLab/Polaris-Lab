@@ -69,8 +69,8 @@ export function DailyBriefView() {
   const cards = [
     ["Revenue", metrics?.revenue], ["Total expenses", metrics?.expenses],
     ["Gross profit", metrics?.gross_profit], ["Net income", metrics?.net_income],
-    ["Cash position", metrics?.cash], ["Accounts receivable", metrics?.accounts_receivable],
-    ["Accounts payable", metrics?.accounts_payable],
+    ["Cash position", metrics?.cash], ["Total accounts receivable", metrics?.accounts_receivable],
+    ["Total accounts payable", metrics?.accounts_payable],
   ];
 
   return (

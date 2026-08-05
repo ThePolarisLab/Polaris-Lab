@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: Polaris Lab
-Last updated: 2026-07-31
+Last updated: 2026-08-05
 
 ## Purpose
 
@@ -25,6 +25,10 @@ Connector trust principle:
 This means connectors may be developed in parallel, but each connector must independently prove security, reliability, provenance, organization isolation, synchronization correctness, idempotency, and observability before its normalized records participate in cross-source executive intelligence. Executive intelligence must not consume raw vendor SDK objects or raw vendor APIs directly.
 
 Each connector must remain independently governed with its own adapter, credentials and permissions, checkpoints, sync history, health state, failure handling, tests, persistence ownership, and production acceptance evidence. Connectors must not write directly into another connector's provider-owned tables.
+
+Executive financial KPI standard:
+
+> QuickBooks owns accounting; Polaris owns executive intelligence. Balance Sheet executive KPIs display QuickBooks consolidated Balance Sheet totals exactly as reported. Polaris does not calculate exchange rates, aggregate currencies, or derive accounting totals.
 
 ## Current Baseline
 
@@ -49,7 +53,7 @@ Each connector must remain independently governed with its own adapter, credenti
 
 ### In progress
 
-- Track 4A — QuickBooks Financial Reconciliation.
+- Track 4A — QuickBooks Financial Reconciliation, including PES-001 executive financial KPI standardization for Balance Sheet AR/AP totals.
 - Track 4B — Outlook Production Activation implementation.
 - Phase 3B.1 Production Hardening Cleanup — schema drift audit, adoption inventory guardrail, dead-code cleanup, and v1.0 scope re-baseline.
 
@@ -77,6 +81,7 @@ Polaris can currently:
 - authenticate the first Mor Logistics production owner through the hosted frontend;
 - operate the tenant-bound QuickBooks production adapter with production OAuth, Mor Logistics company verification, and successful read-only synchronization;
 - preserve QuickBooks production evidence while financial reconciliation validates dashboard/report mapping for AR, AP, Gross Profit, Net Income, and Cash Position;
+- apply ADR-028/PES-001 so executive Balance Sheet KPIs use QuickBooks consolidated total rows without Polaris-side currency aggregation;
 - implement Outlook as a tenant-bound, read-only Microsoft Graph connector in Track 4B pending production operator verification.
 
 ## Product Direction
@@ -113,19 +118,20 @@ Scope boundaries:
 
 ### Track 4A — QuickBooks Financial Reconciliation
 
-Status: in progress.
+Status: in progress. PES-001 / ADR-028 is the approved executive KPI standard for Balance Sheet financial KPIs.
 
 The QuickBooks connector itself is production-connected and synchronizing successfully. Issue #61 is complete. Revenue and total expenses match QuickBooks. Remaining financial discrepancies are reconciliation and mapping issues, not connector failures.
 
 Scope:
 
-- reconcile Accounts Receivable;
-- reconcile Accounts Payable;
+- reconcile Accounts Receivable against the QuickBooks Balance Sheet `Total Accounts Receivable ...` row;
+- reconcile Accounts Payable against the QuickBooks Balance Sheet `Total Accounts Payable ...` row;
 - validate Gross Profit;
 - validate Net Income;
 - validate Cash Position;
 - compare raw QBO report responses, stored values, and dashboard values;
-- add financial reconciliation regression tests.
+- add financial reconciliation regression tests;
+- preserve QuickBooks as the Financial System of Record and avoid Polaris-side exchange-rate or currency aggregation logic.
 
 ### Track 4B — Outlook Production Activation
 
@@ -276,6 +282,7 @@ Exit criteria:
 - production authentication bootstrap complete and external IdP decision documented;
 - production QuickBooks read-only verification completed for Issue #61;
 - QuickBooks financial reconciliation completed or explicitly accepted as a post-connector mapping workstream;
+- ADR-028/PES-001 adopted for executive Balance Sheet KPIs so QuickBooks consolidated totals remain authoritative;
 - Outlook and Motive activation scope approved as parallel governed tracks, with release inclusion decided by stakeholders;
 - release checklist completed;
 - production-readiness review approved;
