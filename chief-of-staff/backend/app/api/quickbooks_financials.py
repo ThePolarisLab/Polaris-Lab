@@ -196,9 +196,9 @@ def executive_summary(principal: AuthenticatedPrincipal = Depends(require_permis
     revenue = _first(pl_values, "total income", "total revenue", "income")
     gross_profit = _first(pl_values, "gross profit")
     expenses = _first(pl_values, "total expenses", "expenses")
-    net_income = _first(pl_values, "net income", "net operating income")
-    cash = _first(bs_values, "total bank accounts", "cash and cash equivalents", "bank accounts")
-    cash_metric = _first_report_metric(bs_metrics, "total bank accounts", "cash and cash equivalents", "bank accounts")
+    net_income = _first(pl_values, "net income", "net operating income", "profit")
+    cash = _first(bs_values, "total bank accounts", "total cash and cash equivalent", "cash and cash equivalents", "bank accounts")
+    cash_metric = _first_report_metric(bs_metrics, "total bank accounts", "total cash and cash equivalent", "cash and cash equivalents", "bank accounts")
     accounts_receivable_metric = get_balance_sheet_metric(balance_sheet.payload, "Accounts Receivable")
     accounts_payable_metric = get_balance_sheet_metric(balance_sheet.payload, "Accounts Payable")
     return {
@@ -222,7 +222,7 @@ def executive_summary(principal: AuthenticatedPrincipal = Depends(require_permis
             "revenue": _metric_metadata(_first_report_metric(pl_metrics, "total income", "total revenue", "income"), profit_loss, "ProfitAndLoss"),
             "expenses": _metric_metadata(_first_report_metric(pl_metrics, "total expenses", "expenses"), profit_loss, "ProfitAndLoss"),
             "gross_profit": _metric_metadata(_first_report_metric(pl_metrics, "gross profit"), profit_loss, "ProfitAndLoss"),
-            "net_income": _metric_metadata(_first_report_metric(pl_metrics, "net income", "net operating income"), profit_loss, "ProfitAndLoss"),
+            "net_income": _metric_metadata(_first_report_metric(pl_metrics, "net income", "net operating income", "profit"), profit_loss, "ProfitAndLoss"),
             "cash": _metric_metadata(cash_metric, balance_sheet, "BalanceSheet", value_override=cash),
             "accounts_receivable": _metric_metadata(accounts_receivable_metric, balance_sheet, "BalanceSheet"),
             "accounts_payable": _metric_metadata(accounts_payable_metric, balance_sheet, "BalanceSheet"),
