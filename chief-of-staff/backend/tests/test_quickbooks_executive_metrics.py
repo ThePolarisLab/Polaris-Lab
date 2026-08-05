@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.api.quickbooks_financials import get_balance_sheet_metric
+from app.api.quickbooks_financials import _first, _first_report_metric, _report_metrics, _report_values, get_balance_sheet_metric
 
 
 def _col(label: str, value: str = "") -> list[dict[str, str]]:
@@ -28,6 +28,62 @@ def _payload(rows: list[dict]) -> dict:
         },
         "Rows": {"Row": rows},
     }
+
+
+def test_profit_loss_net_income_accepts_quickbooks_profit_footer_label():
+    payload = _payload(
+        [
+            _row("Total Income", "3643863.42"),
+            _row("Total Expenses", "3173824.00"),
+            _row("Profit", "86284.11"),
+        ]
+    )
+    values = _report_values(payload)
+    metrics = _report_metrics(payload)
+
+    assert _first(values, "net income", "net operating income", "profit") == "86284.11"
+    metric = _first_report_metric(metrics, "net income", "net operating income", "profit")
+    assert metric is not None
+    assert metric.label == "Profit"
+    assert metric.value == "86284.11"
+
+
+def test_profit_loss_net_income_fails_closed_when_profit_label_is_absent():
+    values = _report_values(_payload([_row("Total Income", "3643863.42")]))
+
+    assert _first(values, "net income", "net operating income", "profit") is None
+
+
+def test_balance_sheet_cash_position_accepts_quickbooks_total_cash_equivalent_label():
+    payload = _payload(
+        [
+            _row(
+                "Cash and Cash Equivalent",
+                children=[
+                    _row("BANK CAD", children=[_row("CIBC CAD", "5668.63")], summary="6150.83"),
+                    _row("BANK USD", children=[_row("CIBC USD", "12303.41")], summary="12304.91"),
+                    _row("Cash", "8761.04"),
+                    _row("Petty Cash", "878.69"),
+                    _row("Undeposited Funds", "2418.30"),
+                ],
+                summary="30513.77",
+            )
+        ]
+    )
+    values = _report_values(payload)
+    metrics = _report_metrics(payload)
+
+    assert _first(values, "total bank accounts", "total cash and cash equivalent", "cash and cash equivalents", "bank accounts") == "30513.77"
+    metric = _first_report_metric(metrics, "total bank accounts", "total cash and cash equivalent", "cash and cash equivalents", "bank accounts")
+    assert metric is not None
+    assert metric.label == "Total Cash and Cash Equivalent"
+    assert metric.value == "30513.77"
+
+
+def test_balance_sheet_cash_position_fails_closed_when_total_cash_label_is_absent():
+    values = _report_values(_payload([_row("Cash and Cash Equivalent")]))
+
+    assert _first(values, "total bank accounts", "total cash and cash equivalent", "cash and cash equivalents", "bank accounts") is None
 
 
 def test_balance_sheet_metric_uses_total_row_for_single_currency():
