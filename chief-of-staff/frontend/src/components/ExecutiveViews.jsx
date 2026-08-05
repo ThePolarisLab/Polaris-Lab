@@ -14,6 +14,7 @@ import {
   Unplug,
 } from "lucide-react";
 import { apiClient } from "../apiClient";
+import { money } from "../formatters";
 import "./ExecutiveViews.css";
 
 function ViewHeader({ kicker, title, description, action }) {
@@ -23,13 +24,6 @@ function ViewHeader({ kicker, title, description, action }) {
 function StateBanner({ children }) {
   return <div className="governance-banner"><ShieldCheck size={19} aria-hidden="true" /><span>{children}</span></div>;
 }
-
-const money = (value, currency = "CAD") => {
-  const numeric = Number(value);
-  return Number.isFinite(numeric)
-    ? new Intl.NumberFormat("en-CA", { style: "currency", currency, maximumFractionDigits: 0 }).format(numeric)
-    : "Not available";
-};
 
 const dateText = (value) => value ? new Date(value).toLocaleString("en-CA") : "Never";
 
