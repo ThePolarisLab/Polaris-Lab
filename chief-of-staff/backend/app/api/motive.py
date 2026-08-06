@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote, urlparse
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -39,8 +40,18 @@ def _connector(organization_id: str) -> MotiveConnector:
     return MotiveConnector(credential_store=MotiveCredentialStore(organization_id))
 
 
-def _frontend_url() -> str:
-    return os.getenv("POLARIS_FRONTEND_URL", "http://localhost:5173").rstrip("/")
+def _frontend_base_url() -> str:
+    base_url = os.getenv("POLARIS_FRONTEND_URL")
+    if not base_url:
+        raise MotiveConnectorError("Motive frontend return URL is not configured", status=ConnectorStatus.NOT_CONFIGURED, code="frontend_url_missing")  # type: ignore[name-defined]
+    parsed = urlparse(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or base_url != base_url.strip():
+        raise MotiveConnectorError("Motive frontend return URL is invalid", status=ConnectorStatus.NOT_CONFIGURED, code="frontend_url_invalid")  # type: ignore[name-defined]
+    return base_url.rstrip("/")
+
+
+def _frontend_return_url(result: str) -> str:
+    return f"{_frontend_base_url()}/#executive/connectors?motive={quote(result, safe='')}"
 
 
 @router.get("/status")
@@ -57,6 +68,7 @@ def motive_connect(
     """Return a Motive authorization URL after Polaris auth and org checks pass."""
     organization = _organization(session, principal.organization_id)
     try:
+        _frontend_base_url()
         return MotiveOAuthService().create_authorization_url(
             organization_id=principal.organization_id,
             identity_id=principal.identity_id,
@@ -66,7 +78,7 @@ def motive_connect(
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail={"error_code": exc.code, "message": str(exc)}) from exc
 
 
-@router.get("/callback")
+@router.get("/oauth/callback")
 def motive_callback(
     code: str | None = Query(default=None),
     state: str | None = Query(default=None),
@@ -74,14 +86,14 @@ def motive_callback(
 ) -> RedirectResponse:
     """Public Motive callback protected by one-use organization-scoped OAuth state."""
     if error:
-        return RedirectResponse(f"{_frontend_url()}/executive/connectors?motive=denied", status_code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(_frontend_return_url("denied"), status_code=status.HTTP_303_SEE_OTHER)
     if not code or not state:
-        return RedirectResponse(f"{_frontend_url()}/executive/connectors?motive=error", status_code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(_frontend_return_url("error"), status_code=status.HTTP_303_SEE_OTHER)
     try:
         MotiveOAuthService().complete_authorization(code=code, state=state)
     except MotiveConnectorError:
-        return RedirectResponse(f"{_frontend_url()}/executive/connectors?motive=error", status_code=status.HTTP_303_SEE_OTHER)
-    return RedirectResponse(f"{_frontend_url()}/executive/connectors?motive=connected_unverified", status_code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(_frontend_return_url("error"), status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(_frontend_return_url("connected_unverified"), status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/verify")
@@ -151,6 +163,8 @@ def motive_verification_contract(principal: AuthenticatedPrincipal = Depends(req
         "authorization_endpoint": MOTIVE_AUTHORIZATION_URL,
         "token_endpoint": MOTIVE_TOKEN_URL,
         "redirect_uri_environment_variable": "MOTIVE_REDIRECT_URI",
+        "frontend_url_environment_variable": "POLARIS_FRONTEND_URL",
+        "callback_route": "/api/v1/motive/oauth/callback",
         "requested_scopes": list(MOTIVE_OAUTH_SCOPES),
         "verification_endpoint": MOTIVE_VERIFICATION_ENDPOINT,
         "verification_request": {"method": "GET", "path": MOTIVE_VERIFICATION_ENDPOINT, "params": {}, "authorization": "Bearer access token"},
