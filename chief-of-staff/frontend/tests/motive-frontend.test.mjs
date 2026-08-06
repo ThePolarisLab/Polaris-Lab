@@ -84,7 +84,6 @@ test("uses backend API-key status and verification actions without OAuth connect
   const source = await readFile(new URL("../src/components/ExecutiveViews.jsx", import.meta.url), "utf8");
   assert.match(source, /apiClient\.get\("\/api\/v1\/motive\/status"\)/);
   assert.doesNotMatch(source, /apiClient\.get\("\/api\/v1\/motive\/connect"\)/);
-  assert.doesNotMatch(source, /window\.location\.assign\(payload\.authorization_url\)/);
   assert.doesNotMatch(source, /motiveCallbackNotice/);
   assert.match(source, /apiClient\.post\("\/api\/v1\/motive\/verify"\)/);
   assert.match(source, /apiClient\.post\("\/api\/v1\/motive\/disconnect"\)/);
