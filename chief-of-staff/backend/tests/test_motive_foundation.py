@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 
 import httpx
 import pytest
@@ -63,8 +64,9 @@ def test_api_key_status_reports_configured_unverified_when_key_exists(monkeypatc
     assert FAKE_API_KEY not in str(status)
 
 
-def test_successful_vehicle_verification_uses_x_api_key_and_does_not_expose_secret(monkeypatch):
+def test_successful_vehicle_verification_uses_x_api_key_and_does_not_expose_secret(monkeypatch, caplog):
     monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
+    caplog.set_level(logging.INFO, logger="app.connectors.motive")
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -86,6 +88,11 @@ def test_successful_vehicle_verification_uses_x_api_key_and_does_not_expose_secr
     assert captured["url"] == "https://api.gomotive.com/v1/vehicles?per_page=1&page_no=1"
     assert captured["headers"]["x-api-key"] == FAKE_API_KEY
     assert FAKE_API_KEY not in str(result)
+    rendered_logs = "\n".join(record.getMessage() for record in caplog.records)
+    assert "MOTIVE API KEY VERIFY SUCCESS" in rendered_logs
+    assert FAKE_API_KEY not in rendered_logs
+    assert "X-API-Key" not in rendered_logs
+    assert "x-api-key" not in rendered_logs
 
 
 @pytest.mark.parametrize(
