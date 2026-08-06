@@ -2,18 +2,21 @@
 
 ## v1 Foundation
 
-- API-key credential storage is encrypted and organization-scoped.
+- OAuth 2.0 is the selected production authentication architecture.
+- OAuth state is organization-scoped, one-use, and expiration-bound.
+- OAuth access and refresh token storage is encrypted and organization-scoped.
 - Motive status APIs return metadata only and never expose secrets.
-- Limited verification uses `GET /v1/vehicles` with `per_page=1&page_no=1`.
+- Limited verification uses `GET /v1/companies` with a Bearer access token.
+- API-key design was superseded before merge and is not represented in the final migration.
 - No broad sync, KPIs, frontend, webhooks, or production certification claims.
 
 ## v1.1 Candidate Work
 
 - Complete Motive support escalation for rate limits and driver-list contract.
-- Replace temporary Internal test-mode credential with approved production credential through secure configuration.
 - Implement durable resource sync only after provider contract gaps are closed.
 - Add scheduled reconciliation with conservative retry behavior.
 - Add webhook ingestion only after signature/authentication requirements are verified.
+- Add remote token revocation only if Motive official documentation confirms the contract.
 
 ## Deferred
 
