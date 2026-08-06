@@ -3,7 +3,10 @@
 ## v1 Foundation
 
 - OAuth 2.0 is the selected production authentication architecture.
-- OAuth state is organization-scoped, one-use, and expiration-bound.
+- OAuth callback route is `GET /api/v1/motive/oauth/callback` on the backend API host.
+- Canonical production `MOTIVE_REDIRECT_URI` is `https://polaris-executive-api.onrender.com/api/v1/motive/oauth/callback`.
+- Frontend post-callback destination is `https://polaris-executive.onrender.com/#executive/connectors`.
+- OAuth state is organization-scoped, one-use, expiration-bound, and stores the exact redirect URI used for authorization.
 - OAuth access and refresh token storage is encrypted and organization-scoped.
 - Motive status APIs return metadata only and never expose secrets.
 - Limited verification uses `GET /v1/companies` with a Bearer access token.
