@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -10,9 +11,16 @@ from cryptography.fernet import Fernet, InvalidToken
 from app.database.database import SessionLocal
 from app.models.motive import MotiveCredential
 
+logger = logging.getLogger(__name__)
+
 
 class MotiveCredentialError(RuntimeError):
     """Safe Motive credential-store error that never includes OAuth secrets."""
+
+    def __init__(self, message: str, *, failing_step: str | None = None, rollback_executed: bool | None = None) -> None:
+        super().__init__(_sanitize(message))
+        self.failing_step = failing_step
+        self.rollback_executed = rollback_executed
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,12 +61,37 @@ class MotiveCredentialStore:
         provider_company_name: str | None = None,
     ) -> None:
         if not organization_slug:
-            raise MotiveCredentialError("Motive organization slug is required")
+            raise MotiveCredentialError("Motive organization slug is required", failing_step="ORG FOUND")
         if not access_token or not refresh_token:
-            raise MotiveCredentialError("Motive OAuth tokens are required")
+            raise MotiveCredentialError("Motive OAuth tokens are required", failing_step="TOKEN RECEIVED")
+
         now = datetime.now(timezone.utc)
-        with SessionLocal.begin() as session:
+        session = SessionLocal()
+        failing_step = "CREDENTIAL CREATED"
+        rollback_executed = False
+        try:
             credential = self._row(session, for_update=True)
+            credential_created = credential is None
+            _log_callback_step(
+                "CREDENTIAL CREATED",
+                organization_id=self.organization_id,
+                organization_slug=organization_slug,
+                credential_created=credential_created,
+                authentication_method=self.authentication_method,
+            )
+
+            failing_step = "ENCRYPTION COMPLETE"
+            encrypted_access_token = self._encrypt(access_token)
+            encrypted_refresh_token = self._encrypt(refresh_token)
+            _log_callback_step(
+                "ENCRYPTION COMPLETE",
+                organization_id=self.organization_id,
+                token_received=True,
+                access_token_encrypted=True,
+                refresh_token_encrypted=True,
+            )
+
+            failing_step = "DB COMMIT SUCCESS"
             if credential is None:
                 session.add(
                     MotiveCredential(
@@ -66,8 +99,8 @@ class MotiveCredentialStore:
                         organization_slug=organization_slug,
                         provider="motive",
                         authentication_method=self.authentication_method,
-                        encrypted_access_token=self._encrypt(access_token),
-                        encrypted_refresh_token=self._encrypt(refresh_token),
+                        encrypted_access_token=encrypted_access_token,
+                        encrypted_refresh_token=encrypted_refresh_token,
                         expires_at=expires_at,
                         granted_scopes=granted_scopes,
                         token_type=token_type or "Bearer",
@@ -79,21 +112,54 @@ class MotiveCredentialStore:
                         updated_at=now,
                     )
                 )
-                return
-            credential.organization_slug = organization_slug
-            credential.encrypted_access_token = self._encrypt(access_token)
-            credential.encrypted_refresh_token = self._encrypt(refresh_token)
-            credential.expires_at = expires_at
-            credential.granted_scopes = granted_scopes
-            credential.token_type = token_type or "Bearer"
-            credential.provider_company_id = provider_company_id or credential.provider_company_id
-            credential.provider_company_name = provider_company_name or credential.provider_company_name
-            credential.connection_status = "configured_unverified"
-            credential.authorization_required = False
-            credential.last_error_code = None
-            credential.last_error_message_sanitized = None
-            credential.disconnected_at = None
-            credential.updated_at = now
+            else:
+                credential.organization_slug = organization_slug
+                credential.encrypted_access_token = encrypted_access_token
+                credential.encrypted_refresh_token = encrypted_refresh_token
+                credential.expires_at = expires_at
+                credential.granted_scopes = granted_scopes
+                credential.token_type = token_type or "Bearer"
+                credential.provider_company_id = provider_company_id or credential.provider_company_id
+                credential.provider_company_name = provider_company_name or credential.provider_company_name
+                credential.connection_status = "configured_unverified"
+                credential.authorization_required = False
+                credential.last_error_code = None
+                credential.last_error_message_sanitized = None
+                credential.disconnected_at = None
+                credential.updated_at = now
+
+            session.commit()
+            _log_callback_step(
+                "DB COMMIT SUCCESS",
+                organization_id=self.organization_id,
+                organization_slug=organization_slug,
+                credential_created=credential_created,
+                connection_status="configured_unverified",
+                rollback_executed=False,
+            )
+        except Exception as exc:
+            try:
+                session.rollback()
+                rollback_executed = True
+            except Exception:
+                rollback_executed = False
+            _log_callback_exception(
+                exception_class=exc.__class__.__name__,
+                failing_step=failing_step,
+                organization_id=self.organization_id,
+                rollback_executed=rollback_executed,
+            )
+            if isinstance(exc, MotiveCredentialError):
+                exc.failing_step = exc.failing_step or failing_step
+                exc.rollback_executed = rollback_executed
+                raise
+            raise MotiveCredentialError(
+                f"Motive credential persistence failed at {failing_step}",
+                failing_step=failing_step,
+                rollback_executed=rollback_executed,
+            ) from exc
+        finally:
+            session.close()
 
     def load_tokens(self) -> StoredMotiveCredential:
         with SessionLocal() as session:
@@ -266,6 +332,23 @@ class MotiveCredentialStore:
         if for_update:
             query = query.with_for_update()
         return query.one_or_none()
+
+
+def _log_callback_step(step: str, **fields: object) -> None:
+    logger.info("MOTIVE OAUTH CALLBACK %s", step, extra={"motive_oauth_step": step, **fields})
+
+
+def _log_callback_exception(*, exception_class: str, failing_step: str, organization_id: str, rollback_executed: bool) -> None:
+    logger.info(
+        "MOTIVE OAUTH CALLBACK EXCEPTION",
+        extra={
+            "motive_oauth_step": "EXCEPTION",
+            "exception_class": exception_class,
+            "failing_step": failing_step,
+            "organization_id": organization_id,
+            "rollback_executed": rollback_executed,
+        },
+    )
 
 
 def _sanitize(message: str) -> str:

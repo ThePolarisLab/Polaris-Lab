@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -29,6 +30,7 @@ from app.organizations.models import Organization
 from app.security.dependencies import require_permission
 from app.security.models import AuthenticatedPrincipal, Permission
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/motive", tags=["motive"])
 
 
@@ -58,7 +60,18 @@ def _frontend_return_url(result: str) -> str:
 @router.get("/status")
 def motive_status(principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ))) -> dict[str, Any]:
     connector = _connector(principal.organization_id)
-    return {"health": connector.health().model_dump(mode="json"), "status": connector.safe_status()}
+    status_payload = connector.safe_status()
+    logger.info(
+        "MOTIVE OAUTH STATUS READ",
+        extra={
+            "motive_oauth_step": "STATUS READ",
+            "organization_id": principal.organization_id,
+            "credential_row_exists": bool(status_payload.get("token_present")),
+            "connection_status": status_payload.get("connection_status"),
+            "authorization_required": status_payload.get("authorization_required"),
+        },
+    )
+    return {"health": connector.health().model_dump(mode="json"), "status": status_payload}
 
 
 @router.get("/connect")
@@ -86,15 +99,41 @@ def motive_callback(
     error: str | None = None,
 ) -> RedirectResponse:
     """Public Motive callback protected by one-use organization-scoped OAuth state."""
+    logger.info(
+        "MOTIVE OAUTH CALLBACK START",
+        extra={
+            "motive_oauth_step": "CALLBACK START",
+            "code_received": bool(code),
+            "state_received": bool(state),
+            "provider_error_received": bool(error),
+        },
+    )
     if error:
-        return RedirectResponse(_frontend_return_url("denied"), status_code=status.HTTP_303_SEE_OTHER)
+        redirect_url = _frontend_return_url("denied")
+        _log_callback_redirect("denied")
+        return RedirectResponse(redirect_url, status_code=status.HTTP_303_SEE_OTHER)
     if not code or not state:
-        return RedirectResponse(_frontend_return_url("error"), status_code=status.HTTP_303_SEE_OTHER)
+        redirect_url = _frontend_return_url("error")
+        _log_callback_redirect("error")
+        return RedirectResponse(redirect_url, status_code=status.HTTP_303_SEE_OTHER)
     try:
-        MotiveOAuthService().complete_authorization(code=code, state=state)
-    except MotiveConnectorError:
-        return RedirectResponse(_frontend_return_url("error"), status_code=status.HTTP_303_SEE_OTHER)
-    return RedirectResponse(_frontend_return_url("connected_unverified"), status_code=status.HTTP_303_SEE_OTHER)
+        result = MotiveOAuthService().complete_authorization(code=code, state=state)
+    except MotiveConnectorError as exc:
+        logger.info(
+            "MOTIVE OAUTH CALLBACK EXCEPTION",
+            extra={
+                "motive_oauth_step": "EXCEPTION",
+                "exception_class": exc.__class__.__name__,
+                "failing_step": exc.failing_step or exc.code,
+                "rollback_executed": exc.rollback_executed,
+            },
+        )
+        redirect_url = _frontend_return_url("error")
+        _log_callback_redirect("error")
+        return RedirectResponse(redirect_url, status_code=status.HTTP_303_SEE_OTHER)
+    redirect_url = _frontend_return_url("connected_unverified")
+    _log_callback_redirect("connected_unverified", organization_id=result.get("organization_id"), connection_status=result.get("connection_status"))
+    return RedirectResponse(redirect_url, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/verify")
@@ -192,3 +231,7 @@ def _http_status(error: MotiveConnectorError) -> int:
     if error.status.value == "not_configured":
         return status.HTTP_503_SERVICE_UNAVAILABLE
     return status.HTTP_502_BAD_GATEWAY
+
+
+def _log_callback_redirect(result: str, **fields: object) -> None:
+    logger.info("MOTIVE OAUTH CALLBACK REDIRECT", extra={"motive_oauth_step": "REDIRECT", "result": result, **fields})
