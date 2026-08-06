@@ -11,6 +11,13 @@
 - Authorization codes expire after 10 minutes per Motive OAuth documentation.
 - OAuth refresh uses the same token endpoint with `grant_type=refresh_token`.
 
+## Production Hosts
+
+- Frontend: `https://polaris-executive.onrender.com`
+- Backend API: `https://polaris-executive-api.onrender.com`
+
+The OAuth callback is a FastAPI backend route. Do not configure the Motive callback on the frontend host.
+
 ## Runtime Configuration
 
 Use environment variables only:
@@ -18,16 +25,28 @@ Use environment variables only:
 - `MOTIVE_CLIENT_ID`
 - `MOTIVE_CLIENT_SECRET`
 - `MOTIVE_REDIRECT_URI`
+- `POLARIS_FRONTEND_URL`
 
-`MOTIVE_REDIRECT_URI` must exactly match the Motive Developer Portal redirect URI. Production should use:
+Render backend environment values:
 
 ```text
-https://<canonical-api-host>/api/v1/motive/callback
+MOTIVE_REDIRECT_URI=https://polaris-executive-api.onrender.com/api/v1/motive/oauth/callback
+POLARIS_FRONTEND_URL=https://polaris-executive.onrender.com
 ```
+
+## Motive Developer Portal
+
+The Success Redirect URI in the Motive Developer Portal must be exactly:
+
+```text
+https://polaris-executive-api.onrender.com/api/v1/motive/oauth/callback
+```
+
+Exact match is required. Do not add a trailing slash and do not use the frontend host.
 
 ## Required Secret Handling
 
-- Do not place Motive client secret values, authorization codes, access tokens, refresh tokens, or authorization headers in source, tests, fixtures, docs, GitHub Actions, PR text, comments, or logs.
+- Do not place Motive client secret values, authorization codes, access tokens, refresh tokens, OAuth state values, or authorization headers in source, tests, fixtures, docs, GitHub Actions, PR text, comments, or logs.
 - Status reads must not decrypt tokens.
 - Token decryption is allowed only inside connector operations that explicitly require a provider request.
 - Disconnect deletes local encrypted tokens unless Motive revocation is later verified from official documentation.
@@ -44,6 +63,33 @@ https://<canonical-api-host>/api/v1/motive/callback
 | Drivers | full list-users contract unresolved | `users.read` | Internal identity contract only; no endpoint implementation |
 
 Requested scopes in Track 4C.1A are exactly: `companies.read users.read vehicles.read utilization.vehicle_utilization utilization.driver_utilization ifta_reports.summary`.
+
+## Authorization and Callback Flow
+
+```text
+GET https://gomotive.com/oauth/authorize
+  ?client_id=<configured client id>
+  &redirect_uri=https://polaris-executive-api.onrender.com/api/v1/motive/oauth/callback
+  &response_type=code
+  &scope=companies.read users.read vehicles.read utilization.vehicle_utilization utilization.driver_utilization ifta_reports.summary
+  &state=<one-use state>
+```
+
+The token exchange reuses the exact redirect URI stored with the OAuth state:
+
+```text
+POST https://gomotive.com/oauth/token
+grant_type=authorization_code
+redirect_uri=https://polaris-executive-api.onrender.com/api/v1/motive/oauth/callback
+```
+
+After callback processing, users return to:
+
+```text
+https://polaris-executive.onrender.com/#executive/connectors?motive=connected_unverified
+```
+
+Safe error and denied redirects use the same hash route with `motive=error` or `motive=denied`.
 
 ## Verification Request
 
