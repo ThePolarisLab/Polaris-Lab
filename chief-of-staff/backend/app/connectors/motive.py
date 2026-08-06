@@ -9,7 +9,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
 
@@ -79,6 +79,7 @@ class MotiveOAuthService:
 
     def create_authorization_url(self, *, organization_id: str, identity_id: str, organization_slug: str) -> dict[str, Any]:
         self.validate_oauth_configuration()
+        redirect_uri = self.redirect_uri()
         state = secrets.token_urlsafe(32)
         nonce = secrets.token_urlsafe(16)
         now = datetime.now(timezone.utc)
@@ -91,7 +92,7 @@ class MotiveOAuthService:
                     organization_id=organization_id,
                     identity_id=identity_id,
                     nonce=nonce,
-                    redirect_uri=self.redirect_uri(),
+                    redirect_uri=redirect_uri,
                     scopes=scopes,
                     created_at=now,
                     expires_at=expires_at,
@@ -99,7 +100,7 @@ class MotiveOAuthService:
             )
         params = {
             "client_id": self.client_id(),
-            "redirect_uri": self.redirect_uri(),
+            "redirect_uri": redirect_uri,
             "response_type": "code",
             "scope": scopes,
             "state": state,
@@ -299,6 +300,10 @@ class MotiveOAuthService:
         missing = [name for name in ("MOTIVE_CLIENT_ID", "MOTIVE_CLIENT_SECRET", "MOTIVE_REDIRECT_URI") if not os.getenv(name)]
         if missing:
             raise MotiveConnectorError("Motive OAuth configuration is incomplete", status=ConnectorStatus.NOT_CONFIGURED, code="oauth_configuration_missing")
+        redirect_uri = os.environ["MOTIVE_REDIRECT_URI"]
+        parsed = urlparse(redirect_uri)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or redirect_uri != redirect_uri.strip():
+            raise MotiveConnectorError("Motive OAuth redirect URI configuration is invalid", status=ConnectorStatus.NOT_CONFIGURED, code="oauth_redirect_uri_invalid")
         if not os.getenv("POLARIS_MOTIVE_TOKEN_ENCRYPTION_KEY") and not os.getenv("POLARIS_QBO_TOKEN_ENCRYPTION_KEY"):
             raise MotiveConnectorError("Motive token encryption is not configured", status=ConnectorStatus.NOT_CONFIGURED, code="encryption_not_configured")
 
