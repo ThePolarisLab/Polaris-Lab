@@ -16,7 +16,6 @@ import {
 import { apiClient } from "../apiClient";
 import { money } from "../formatters";
 import {
-  motiveCallbackNotice,
   motiveConnectorPresentation,
   motiveEvidenceStatus,
   motiveSystemHealth,
@@ -34,7 +33,6 @@ function StateBanner({ children }) {
 
 const dateText = (value) => value ? new Date(value).toLocaleString("en-CA") : "Never";
 const boolText = (value) => value ? "true" : "false";
-const scopesText = (value) => Array.isArray(value) ? value.join(", ") : value || "Not returned";
 
 export function DailyBriefView() {
   const [summary, setSummary] = useState(null);
@@ -147,7 +145,7 @@ function ConnectorCard({ name, status, detail, children }) {
 export function ConnectorsView() {
   const [quickBooks, setQuickBooks] = useState({ status: "loading", message: "Checking the hosted QuickBooks connection...", details: {} });
   const [outlook, setOutlook] = useState({ health: { status: "loading", message: "Checking Outlook connection..." }, status: {} });
-  const [motive, setMotive] = useState({ health: { status: "checking", message: "Checking Motive OAuth status." }, status: { connection_status: "checking" } });
+  const [motive, setMotive] = useState({ health: { status: "checking", message: "Checking Motive Company API Key status." }, status: { connection_status: "checking" } });
   const [motiveLoading, setMotiveLoading] = useState(true);
   const [attention, setAttention] = useState([]);
   const [busy, setBusy] = useState("");
@@ -174,14 +172,6 @@ export function ConnectorsView() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
-
-  useEffect(() => {
-    const callbackNotice = motiveCallbackNotice(window.location.hash);
-    if (!callbackNotice) return;
-    setNotice(callbackNotice);
-    if (callbackNotice.status === "connected_unverified") load();
-    window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#executive/connectors`);
-  }, [load]);
 
   async function connectQuickBooks() {
     setBusy("qbo-connect");
@@ -272,16 +262,13 @@ export function ConnectorsView() {
     }
   }
 
-  async function connectMotive() {
-    setBusy("motive-connect");
+  async function refreshMotive() {
+    setBusy("motive-refresh");
     setError("");
     setNotice(null);
     try {
-      const payload = await apiClient.get("/api/v1/motive/connect");
-      if (!payload.authorization_url) throw new Error("Motive authorization URL was not returned.");
-      window.location.assign(payload.authorization_url);
-    } catch (requestError) {
-      setError(requestError.message || "Unable to start Motive authorization.");
+      await load();
+    } finally {
       setBusy("");
     }
   }
@@ -293,9 +280,9 @@ export function ConnectorsView() {
     try {
       await apiClient.post("/api/v1/motive/verify");
       await load();
-      setNotice({ tone: "success", message: "Motive connection verification completed. Broad synchronization remains deferred." });
+      setNotice({ tone: "success", message: "Motive Company API Key verification completed. Broad synchronization remains deferred." });
     } catch (requestError) {
-      const fallback = requestError.status === 401 ? "Motive authorization is required." : requestError.status === 403 ? "You do not have permission to verify Motive." : requestError.status === 429 ? "Motive verification is rate limited; retry timing is not assumed." : "Motive verification failed safely.";
+      const fallback = requestError.status === 401 ? "Motive Company API Key authorization is required." : requestError.status === 403 ? "You do not have permission to verify Motive." : requestError.status === 429 ? "Motive verification is rate limited; Retry-After is honored when present." : "Motive verification failed safely.";
       setError(requestError.message || fallback);
       await load();
     } finally {
@@ -310,7 +297,7 @@ export function ConnectorsView() {
     try {
       await apiClient.post("/api/v1/motive/disconnect");
       await load();
-      setNotice({ tone: "warning", message: "Motive disconnected locally. Remote token revocation may not have occurred because Motive revocation is not yet verified." });
+      setNotice({ tone: "warning", message: "Motive Company API Key is managed by backend environment configuration. Remove MOTIVE_API_KEY in Render to disconnect." });
     } catch (requestError) {
       setError(requestError.message || "Motive disconnect failed.");
     } finally {
@@ -327,7 +314,7 @@ export function ConnectorsView() {
   const motiveDetails = safeMotiveMetadata(motive);
   const canVerifyMotive = ["configured_unverified", "connected", "failed", "rate_limited"].includes(motivePresentation.statusKey);
 
-  return <section className="executive-view"><ViewHeader kicker="MISSION 003 · CONNECTORS" title="Connector center" description="One governed inventory of enterprise data connections." />{notice&&<div className={`connector-notice ${notice.tone}`}><ShieldCheck size={18}/>{notice.message}</div>}{error&&<div className="dashboard-error"><AlertTriangle size={18}/>{error}</div>}<div className="executive-card-grid two-column"><ConnectorCard name="Polaris Runtime" status="Connected" detail="Core runtime contract is available."/><ConnectorCard name="QuickBooks Online" status={qboStatus} detail={qboDetail}><div className="connector-detail-list"><span>Expected: {qboDetails.expected_company_name || "MOR LOGISTICS MANITOBA LIMITED"}</span><span>Verified: {qboDetails.verified_company_name || "Not verified"}</span><span>Last sync: {dateText(qboDetails.last_successful_sync_time)}</span><span>Authorization: {qboDetails.authorization_status || "unknown"}</span></div><div className="connector-action-row"><button className="connector-action" type="button" onClick={connectQuickBooks} disabled={Boolean(busy)}>{busy==="qbo-connect"?"Opening...":"Connect"}<ArrowRight size={15}/></button><button className="connector-action" type="button" onClick={verifyQuickBooks} disabled={Boolean(busy)}>{busy==="qbo-verify"?"Verifying...":"Verify"}</button><button className="connector-action" type="button" onClick={syncQuickBooks} disabled={Boolean(busy)}>{busy==="qbo-sync"?"Syncing...":"Sync"}</button><button className="connector-action" type="button" onClick={disconnectQuickBooks} disabled={Boolean(busy)}><Unplug size={15}/>{busy==="qbo-disconnect"?"Disconnecting...":"Disconnect"}</button></div></ConnectorCard><ConnectorCard name="Outlook" status={outlookStatus} detail={outlookDetail}><div className="connector-detail-list"><span>Mailbox: {outlookDetails.mailbox_address || "Not connected"}</span><span>Microsoft tenant: {outlookDetails.microsoft_tenant_status || "unknown"}</span><span>Scopes: {(outlookDetails.granted_scopes || ["Mail.Read"]).join(", ")}</span><span>Last sync: {dateText(outlookDetails.last_successful_sync_time)}</span><span>Reauthorization: {outlookDetails.reauthorization_required ? "required" : "not required"}</span></div><div className="connector-action-row"><button className="connector-action" type="button" onClick={connectOutlook} disabled={Boolean(busy)}>{busy==="outlook-connect"?"Opening...":"Connect"}<ArrowRight size={15}/></button><button className="connector-action" type="button" onClick={syncOutlook} disabled={Boolean(busy)}>{busy==="outlook-sync"?"Syncing...":"Sync"}</button><button className="connector-action" type="button" onClick={disconnectOutlook} disabled={Boolean(busy)}><Unplug size={15}/>{busy==="outlook-disconnect"?"Disconnecting...":"Disconnect"}</button></div>{attention.length > 0 && <div className="connector-detail-list"><strong><Inbox size={15}/> Executive attention</strong>{attention.map((item)=><span key={item.message_id}>{item.category}: {item.subject || "No subject"}</span>)}</div>}</ConnectorCard><ConnectorCard name="Motive" status={motivePresentation.status} detail={motivePresentation.detail}><div className="connector-detail-list"><span>Track 4C: OAuth foundation and connection verification only</span><span>Authentication: {motiveDetails.authentication_method || "oauth2"}</span><span>Connection status: {motiveDetails.connection_status || motivePresentation.statusKey}</span><span>Last verified: {dateText(motiveDetails.last_verified_at)}</span><span>Granted scopes: {scopesText(motiveDetails.granted_scopes)}</span><span>Provider company: {motiveDetails.provider_company_name || motiveDetails.provider_company_id || "Not returned"}</span><span>Authorization required: {motiveDetails.authorization_required ? "yes" : "no"}</span><span>Broad sync enabled: {boolText(motiveDetails.broad_sync_enabled || motiveDetails.production_sync_enabled)}</span><span>Production certified: {boolText(motiveDetails.production_certified)}</span></div><div className="connector-action-row"><button className="connector-action" type="button" onClick={connectMotive} disabled={Boolean(busy)}>{busy==="motive-connect"?"Opening...":"Connect"}<ArrowRight size={15}/></button><button className="connector-action" type="button" onClick={verifyMotive} disabled={Boolean(busy) || !canVerifyMotive}>{busy==="motive-verify"?"Verifying...":"Verify"}</button><button className="connector-action" type="button" onClick={disconnectMotive} disabled={Boolean(busy)}><Unplug size={15}/>{busy==="motive-disconnect"?"Disconnecting...":"Disconnect"}</button></div></ConnectorCard></div></section>;
+  return <section className="executive-view"><ViewHeader kicker="MISSION 003 · CONNECTORS" title="Connector center" description="One governed inventory of enterprise data connections." />{notice&&<div className={`connector-notice ${notice.tone}`}><ShieldCheck size={18}/>{notice.message}</div>}{error&&<div className="dashboard-error"><AlertTriangle size={18}/>{error}</div>}<div className="executive-card-grid two-column"><ConnectorCard name="Polaris Runtime" status="Connected" detail="Core runtime contract is available."/><ConnectorCard name="QuickBooks Online" status={qboStatus} detail={qboDetail}><div className="connector-detail-list"><span>Expected: {qboDetails.expected_company_name || "MOR LOGISTICS MANITOBA LIMITED"}</span><span>Verified: {qboDetails.verified_company_name || "Not verified"}</span><span>Last sync: {dateText(qboDetails.last_successful_sync_time)}</span><span>Authorization: {qboDetails.authorization_status || "unknown"}</span></div><div className="connector-action-row"><button className="connector-action" type="button" onClick={connectQuickBooks} disabled={Boolean(busy)}>{busy==="qbo-connect"?"Opening...":"Connect"}<ArrowRight size={15}/></button><button className="connector-action" type="button" onClick={verifyQuickBooks} disabled={Boolean(busy)}>{busy==="qbo-verify"?"Verifying...":"Verify"}</button><button className="connector-action" type="button" onClick={syncQuickBooks} disabled={Boolean(busy)}>{busy==="qbo-sync"?"Syncing...":"Sync"}</button><button className="connector-action" type="button" onClick={disconnectQuickBooks} disabled={Boolean(busy)}><Unplug size={15}/>{busy==="qbo-disconnect"?"Disconnecting...":"Disconnect"}</button></div></ConnectorCard><ConnectorCard name="Outlook" status={outlookStatus} detail={outlookDetail}><div className="connector-detail-list"><span>Mailbox: {outlookDetails.mailbox_address || "Not connected"}</span><span>Microsoft tenant: {outlookDetails.microsoft_tenant_status || "unknown"}</span><span>Scopes: {(outlookDetails.granted_scopes || ["Mail.Read"]).join(", ")}</span><span>Last sync: {dateText(outlookDetails.last_successful_sync_time)}</span><span>Reauthorization: {outlookDetails.reauthorization_required ? "required" : "not required"}</span></div><div className="connector-action-row"><button className="connector-action" type="button" onClick={connectOutlook} disabled={Boolean(busy)}>{busy==="outlook-connect"?"Opening...":"Connect"}<ArrowRight size={15}/></button><button className="connector-action" type="button" onClick={syncOutlook} disabled={Boolean(busy)}>{busy==="outlook-sync"?"Syncing...":"Sync"}</button><button className="connector-action" type="button" onClick={disconnectOutlook} disabled={Boolean(busy)}><Unplug size={15}/>{busy==="outlook-disconnect"?"Disconnecting...":"Disconnect"}</button></div>{attention.length > 0 && <div className="connector-detail-list"><strong><Inbox size={15}/> Executive attention</strong>{attention.map((item)=><span key={item.message_id}>{item.category}: {item.subject || "No subject"}</span>)}</div>}</ConnectorCard><ConnectorCard name="Motive" status={motivePresentation.status} detail={motivePresentation.detail}><div className="connector-detail-list"><span>Track 4C: Company API Key verification only</span><span>Configuration: {motiveDetails.configured_by_administrator ? "Configured by administrator" : "Not configured"}</span><span>Authentication: {motiveDetails.authentication_method || "company_api_key"}</span><span>Credential source: {motiveDetails.credential_source || "render_environment"}</span><span>Connection status: {motiveDetails.connection_status || motivePresentation.statusKey}</span><span>Last verified: {dateText(motiveDetails.last_verified_at)}</span><span>Records read during verification: {motiveDetails.records_read || 0}</span><span>Authorization required: {motiveDetails.authorization_required ? "yes" : "no"}</span><span>Broad sync enabled: {boolText(motiveDetails.broad_sync_enabled || motiveDetails.production_sync_enabled)}</span><span>Production certified: {boolText(motiveDetails.production_certified)}</span></div><div className="connector-action-row"><button className="connector-action" type="button" onClick={verifyMotive} disabled={Boolean(busy) || !canVerifyMotive}>{busy==="motive-verify"?"Verifying...":"Verify"}</button><button className="connector-action" type="button" onClick={refreshMotive} disabled={Boolean(busy)}><RefreshCw size={15} className={busy==="motive-refresh" ? "spin" : ""}/>{busy==="motive-refresh"?"Refreshing...":"Refresh"}</button><button className="connector-action" type="button" onClick={disconnectMotive} disabled={Boolean(busy)}><Unplug size={15}/>{busy==="motive-disconnect"?"Checking...":"Disconnect"}</button></div></ConnectorCard></div></section>;
 }
 
 export function SystemHealthView() {
