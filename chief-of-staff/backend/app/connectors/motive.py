@@ -6,6 +6,7 @@ import os
 import secrets
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
@@ -14,7 +15,7 @@ import httpx
 
 from app.connectors.base import BaseConnector
 from app.connectors.models import ConnectorHealth, ConnectorStatus, SyncResult
-from app.connectors.motive_credentials import MotiveCredentialError, MotiveCredentialStore, StoredMotiveCredential
+from app.connectors.motive_credentials import MotiveCredentialError, MotiveCredentialStore
 from app.database.database import SessionLocal
 from app.models.motive import MotiveOAuthState
 from app.organizations.models import Organization
@@ -42,6 +43,14 @@ MOTIVE_RESOURCES = (
 _REAUTH_CODES = {401, 403}
 _AUTHORIZATION_CODE_TTL_MINUTES = 10
 _TOKEN_REFRESH_SKEW_SECONDS = 300
+
+
+@dataclass(frozen=True, slots=True)
+class _OAuthStateMetadata:
+    organization_id: str
+    organization_slug: str
+    redirect_uri: str
+    scopes: str
 
 
 class MotiveConnectorError(RuntimeError):
@@ -73,6 +82,7 @@ class MotiveOAuthService:
         state = secrets.token_urlsafe(32)
         nonce = secrets.token_urlsafe(16)
         now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(minutes=_AUTHORIZATION_CODE_TTL_MINUTES)
         scopes = " ".join(MOTIVE_OAUTH_SCOPES)
         with SessionLocal.begin() as session:
             session.add(
@@ -84,7 +94,7 @@ class MotiveOAuthService:
                     redirect_uri=self.redirect_uri(),
                     scopes=scopes,
                     created_at=now,
-                    expires_at=now + timedelta(minutes=_AUTHORIZATION_CODE_TTL_MINUTES),
+                    expires_at=expires_at,
                 )
             )
         params = {
@@ -96,7 +106,7 @@ class MotiveOAuthService:
         }
         return {
             "authorization_url": f"{MOTIVE_AUTHORIZATION_URL}?{urlencode(params)}",
-            "expires_at": (now + timedelta(minutes=_AUTHORIZATION_CODE_TTL_MINUTES)).isoformat(),
+            "expires_at": expires_at.isoformat(),
             "organization_id": organization_id,
             "organization_slug": organization_slug,
             "requested_scopes": list(MOTIVE_OAUTH_SCOPES),
@@ -104,7 +114,7 @@ class MotiveOAuthService:
         }
 
     def complete_authorization(self, *, state: str, code: str, expected_organization_id: str | None = None) -> dict[str, Any]:
-        oauth_state, organization_slug = self._consume_state(state, expected_organization_id=expected_organization_id)
+        oauth_state = self._consume_state(state, expected_organization_id=expected_organization_id)
         token_payload = self._token_request(
             {
                 "grant_type": "authorization_code",
@@ -115,8 +125,10 @@ class MotiveOAuthService:
             }
         )
         access_token, refresh_token, expires_at, granted_scopes, token_type = self._parse_token_payload(token_payload, fallback_scopes=oauth_state.scopes)
+        if refresh_token is None:
+            raise MotiveConnectorError("Motive token response did not include a refresh credential", status=ConnectorStatus.FAILED, code="malformed_response")
         self._credential_store_factory(oauth_state.organization_id).save_tokens(
-            organization_slug=organization_slug,
+            organization_slug=oauth_state.organization_slug,
             access_token=access_token,
             refresh_token=refresh_token,
             expires_at=expires_at,
@@ -125,7 +137,7 @@ class MotiveOAuthService:
         )
         return {
             "organization_id": oauth_state.organization_id,
-            "organization_slug": organization_slug,
+            "organization_slug": oauth_state.organization_slug,
             "connection_status": "configured_unverified",
             "expires_at": expires_at.isoformat(),
             "granted_scopes": granted_scopes,
@@ -172,7 +184,7 @@ class MotiveOAuthService:
         )
         return access_token
 
-    def _consume_state(self, state: str, *, expected_organization_id: str | None) -> tuple[MotiveOAuthState, str]:
+    def _consume_state(self, state: str, *, expected_organization_id: str | None) -> _OAuthStateMetadata:
         if not state:
             raise MotiveConnectorError("Motive OAuth state is missing", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_missing")
         now = datetime.now(timezone.utc)
@@ -184,13 +196,19 @@ class MotiveOAuthService:
                 raise MotiveConnectorError("Motive OAuth state organization mismatch", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_wrong_organization")
             if oauth_state.consumed_at is not None:
                 raise MotiveConnectorError("Motive OAuth state was already used", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_reused")
-            if oauth_state.expires_at <= now:
+            if _as_utc(oauth_state.expires_at) <= now:
                 raise MotiveConnectorError("Motive OAuth state expired", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_expired")
             organization = session.query(Organization).filter(Organization.id == oauth_state.organization_id).one_or_none()
             if organization is None:
                 raise MotiveConnectorError("Motive OAuth organization is missing", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="organization_missing")
+            metadata = _OAuthStateMetadata(
+                organization_id=oauth_state.organization_id,
+                organization_slug=organization.slug,
+                redirect_uri=oauth_state.redirect_uri,
+                scopes=oauth_state.scopes,
+            )
             oauth_state.consumed_at = now
-            return oauth_state, organization.slug
+            return metadata
 
     def _token_request(self, data: dict[str, str]) -> dict[str, Any]:
         last_error: MotiveConnectorError | None = None
@@ -201,7 +219,7 @@ class MotiveOAuthService:
                     data=data,
                     headers={"Accept": "application/json"},
                 )
-                return self._json_response(response, token_endpoint=True)
+                return self._json_response(response)
             except MotiveConnectorError as exc:
                 last_error = exc
                 if not exc.retryable or attempt == _max_attempts():
@@ -219,7 +237,7 @@ class MotiveOAuthService:
                 self._sleep(_retry_delay(attempt))
         raise last_error or MotiveConnectorError("Motive OAuth token request failed", status=ConnectorStatus.FAILED)
 
-    def _json_response(self, response: httpx.Response, *, token_endpoint: bool = False) -> dict[str, Any]:
+    def _json_response(self, response: httpx.Response) -> dict[str, Any]:
         if response.status_code == 429:
             raise MotiveConnectorError("Motive request was rate limited", status=ConnectorStatus.RATE_LIMITED, retryable=False, code="rate_limited")
         payload: dict[str, Any] = {}
@@ -507,9 +525,13 @@ def _company_metadata(payload: dict[str, Any]) -> dict[str, str]:
 
 
 def _expires_soon(expires_at: datetime) -> bool:
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    return expires_at <= datetime.now(timezone.utc) + timedelta(seconds=_TOKEN_REFRESH_SKEW_SECONDS)
+    return _as_utc(expires_at) <= datetime.now(timezone.utc) + timedelta(seconds=_TOKEN_REFRESH_SKEW_SECONDS)
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _parse_datetime(value: Any) -> datetime | None:
