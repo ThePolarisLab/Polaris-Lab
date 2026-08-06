@@ -56,7 +56,7 @@ def motive_status(
             "authorization_required": status_payload.get("authorization_required"),
         },
     )
-    return {"health": connector.health().model_dump(mode="json"), "status": status_payload}
+    return {"health": connector.health(persisted_status=persisted_status).model_dump(mode="json"), "status": status_payload}
 
 
 @router.get("/connect")
