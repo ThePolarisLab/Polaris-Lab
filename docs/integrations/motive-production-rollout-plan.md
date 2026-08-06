@@ -14,6 +14,38 @@ Implemented scope:
 
 No broad Motive synchronization is enabled.
 
+## Render Environment Configuration
+
+Production hosts:
+
+- Frontend: `https://polaris-executive.onrender.com`
+- Backend API: `https://polaris-executive-api.onrender.com`
+
+Configure these backend environment variables in Render:
+
+```text
+MOTIVE_CLIENT_ID=<Motive OAuth client id>
+MOTIVE_CLIENT_SECRET=<Motive OAuth client secret>
+MOTIVE_REDIRECT_URI=https://polaris-executive-api.onrender.com/api/v1/motive/oauth/callback
+POLARIS_FRONTEND_URL=https://polaris-executive.onrender.com
+```
+
+Do not place real client IDs or client secrets in source, docs, tests, PR text, logs, or GitHub Actions.
+
+## Motive Developer Portal
+
+The Success Redirect URI must exactly match the backend callback route:
+
+```text
+https://polaris-executive-api.onrender.com/api/v1/motive/oauth/callback
+```
+
+Do not use `https://polaris-executive.onrender.com` for the OAuth callback. The frontend host is only the post-callback user destination, using hash routing:
+
+```text
+https://polaris-executive.onrender.com/#executive/connectors
+```
+
 ## Track 4C.1B Prerequisites
 
 Before live sync is implemented, Polaris needs Motive support or documentation confirmation for:
