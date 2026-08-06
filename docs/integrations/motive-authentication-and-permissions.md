@@ -1,106 +1,106 @@
 # Motive Authentication and Permissions
 
-## Confirmed
+## Confirmed Production Decision
 
-- Mor Logistics has a Motive OAuth 2.0 application with Client ID and Client Secret.
-- OAuth 2.0 is the selected Polaris production authentication method.
-- The prior API-key design in Draft PR #115 was superseded before merge.
-- Motive OAuth authorization URL: `https://gomotive.com/oauth/authorize`.
-- Motive OAuth token URL: `https://gomotive.com/oauth/token`.
-- Token responses include Bearer access tokens, refresh tokens, and `expires_in`; official docs identify `7200` seconds for issued access tokens.
-- Authorization codes expire after 10 minutes per Motive OAuth documentation.
-- OAuth refresh uses the same token endpoint with `grant_type=refresh_token`.
+Motive API Support case 11006147 confirmed that Mor Logistics Manitoba Limited has a production Company API Key under the label `Internal OS` and that Company API Key authentication is recommended for this single-company server-to-server integration.
 
-## Production Hosts
-
-- Frontend: `https://polaris-executive.onrender.com`
-- Backend API: `https://polaris-executive-api.onrender.com`
-
-The OAuth callback is a FastAPI backend route. Do not configure the Motive callback on the frontend host.
+OAuth 2.0 is no longer the active Polaris production authentication path for Motive. OAuth remains deferred reference architecture only for a possible future multi-tenant or Motive App Marketplace integration where multiple fleets authorize an application.
 
 ## Runtime Configuration
 
-Use environment variables only:
-
-- `MOTIVE_CLIENT_ID`
-- `MOTIVE_CLIENT_SECRET`
-- `MOTIVE_REDIRECT_URI`
-- `POLARIS_FRONTEND_URL`
-
-Render backend environment values:
+Use the secure backend environment variable:
 
 ```text
-MOTIVE_REDIRECT_URI=https://polaris-executive-api.onrender.com/api/v1/motive/oauth/callback
-POLARIS_FRONTEND_URL=https://polaris-executive.onrender.com
+MOTIVE_API_KEY
 ```
 
-## Motive Developer Portal
+Do not place the real key value in source, tests, fixtures, docs, GitHub Actions, PR text, comments, logs, screenshots, or examples. Do not ask for the key in chat or PR comments.
 
-The Success Redirect URI in the Motive Developer Portal must be exactly:
+For Track 4C.1E, credential precedence is:
+
+1. Secure Render backend environment variable `MOTIVE_API_KEY`.
+2. No database API-key fallback.
+
+Tenant-owned encrypted credential tables may be used in a future multi-company product migration, but this PR does not implement parallel credential sources.
+
+## Request Authentication
+
+Motive Company API Key requests use:
 
 ```text
-https://polaris-executive-api.onrender.com/api/v1/motive/oauth/callback
+X-API-Key: <secret>
 ```
 
-Exact match is required. Do not add a trailing slash and do not use the frontend host.
+The connector constructs this header only at the HTTP boundary. Status APIs, frontend metadata, logs, exceptions, and sync history must never include the key or a full request-header dictionary containing the key.
 
-## Required Secret Handling
+## Safe Status Metadata
 
-- Do not place Motive client secret values, authorization codes, access tokens, refresh tokens, OAuth state values, or authorization headers in source, tests, fixtures, docs, GitHub Actions, PR text, comments, or logs.
-- Status reads must not decrypt tokens.
-- Token decryption is allowed only inside connector operations that explicitly require a provider request.
-- Disconnect deletes local encrypted tokens unless Motive revocation is later verified from official documentation.
+Safe metadata may include:
 
-## Confirmed Endpoint and Scope Surface
+- `authentication_method=company_api_key`
+- `credential_source=render_environment`
+- `configured_by_administrator`
+- `key_present`
+- `connection_status`
+- `last_verified_at`
+- `authorization_required`
+- `records_read`
+- `production_sync_enabled=false`
+- `production_certified=false`
 
-| Resource | Endpoint | Scope | Track 4C.1A Status |
-| --- | --- | --- | --- |
-| Company details | `GET /v1/companies` | `companies.read` | Used for narrow OAuth verification |
-| Vehicles | `GET /v1/vehicles` | `vehicles.read` | Persistence contract only |
-| Vehicle utilization | `GET /v1/vehicle_utilization` | `utilization.vehicle_utilization` | Persistence contract only |
-| Driver utilization | `GET /v2/driver_utilization` | `utilization.driver_utilization` | Persistence contract only |
-| IFTA summary | `GET /v1/ifta/summary` | `ifta_reports.summary` | Persistence contract only |
-| Drivers | full list-users contract unresolved | `users.read` | Internal identity contract only; no endpoint implementation |
+## Confirmed Endpoint Surface
 
-Requested scopes in Track 4C.1A are exactly: `companies.read users.read vehicles.read utilization.vehicle_utilization utilization.driver_utilization ifta_reports.summary`.
+| Resource | Endpoint | Track 4C.1E Status |
+| --- | --- | --- |
+| Vehicles | `GET /v1/vehicles` | Used for narrow verification with `per_page=1&page_no=1` |
+| Users | `GET /v1/users` | Contract confirmed; broad sync deferred |
+| Vehicle utilization | `GET /v1/vehicle_utilization` | Contract confirmed; broad sync deferred |
+| Driver utilization | `GET /v1/driver_utilization` | Contract confirmed; broad sync deferred |
+| IFTA summary | `GET /v1/ifta/summary` | Contract confirmed; broad sync deferred |
 
-## Authorization and Callback Flow
+## Confirmed User Pagination
+
+Motive support confirmed:
 
 ```text
-GET https://gomotive.com/oauth/authorize
-  ?client_id=<configured client id>
-  &redirect_uri=https://polaris-executive-api.onrender.com/api/v1/motive/oauth/callback
-  &response_type=code
-  &scope=companies.read users.read vehicles.read utilization.vehicle_utilization utilization.driver_utilization ifta_reports.summary
-  &state=<one-use state>
+GET /v1/users?per_page=100&page_no=1
 ```
 
-The token exchange reuses the exact redirect URI stored with the OAuth state:
+- `per_page` maximum is 100.
+- `page_no` is one-based.
+- `pagination.total` reports total available records.
+- Pagination should continue until the retrieved count reaches `pagination.total` or an empty page is returned.
 
-```text
-POST https://gomotive.com/oauth/token
-grant_type=authorization_code
-redirect_uri=https://polaris-executive-api.onrender.com/api/v1/motive/oauth/callback
-```
-
-After callback processing, users return to:
-
-```text
-https://polaris-executive.onrender.com/#executive/connectors?motive=connected_unverified
-```
-
-Safe error and denied redirects use the same hash route with `motive=error` or `motive=denied`.
+The endpoint returns all company users, not only drivers. Polaris must define driver filtering only from real provider role fields observed in sanitized production data or official documentation. Do not invent role names.
 
 ## Verification Request
 
 ```text
-GET https://api.gomotive.com/v1/companies
+GET https://api.gomotive.com/v1/vehicles?per_page=1&page_no=1
 Accept: application/json
-Authorization: Bearer <access token>
+X-API-Key: <secret>
 ```
 
-The raw provider response is not exposed through executive APIs and is not persisted as broad sync data.
+The verification request reads at most one vehicle, does not paginate, does not persist broad vehicle data, and records only safe status/history metadata.
 
-## Rate Limits
+## Error and Rate-Limit Handling
 
-Motive's exact production rate-limit contract remains unresolved. Future client work must respect `Retry-After` when present. On undocumented `429`, Polaris must stop the current operation, record `rate_limited`, preserve checkpoints, and avoid guessing retry timing.
+- `200`: `connected`
+- `401`: `authorization_required`
+- `403`: `authorization_required` or `permission_denied`
+- `429`: `rate_limited`
+- timeout: `provider_timeout`
+- provider `5xx`: `provider_unavailable`
+- malformed response: `provider_contract_error`
+
+Rate-limit guidance from Motive support: handle `429`, honor `Retry-After` when present, use bounded exponential backoff with jitter, avoid immediate retry loops, avoid excessive concurrency, and prefer pagination, caching, batching, incremental date ranges, and multi-ID requests where supported. Polaris does not invent Motive numeric quotas or reset windows.
+
+## Deferred
+
+- broad production synchronization
+- recurring polling
+- webhooks
+- OAuth multi-tenant architecture
+- HOS, safety, DVIR, fault codes, trips, maintenance, and fuel purchases
+- executive KPI calculations
+- frontend fleet dashboard
