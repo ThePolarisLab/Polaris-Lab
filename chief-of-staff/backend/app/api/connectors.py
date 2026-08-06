@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.connectors.base import BaseConnector
 from app.connectors.models import ConnectorHealth, SyncResult
+from app.connectors.motive import MotiveConnector
+from app.connectors.motive_credentials import MotiveCredentialStore
 from app.connectors.outlook import OutlookConnector
 from app.connectors.outlook_credentials import OutlookCredentialStore
 from app.connectors.quickbooks import QuickBooksConnector
@@ -20,6 +22,8 @@ def _tenant_connector(connector: BaseConnector, principal: AuthenticatedPrincipa
         return QuickBooksConnector(credential_store=QuickBooksCredentialStore(principal.organization_id))
     if connector.name.lower() == "outlook":
         return OutlookConnector(credential_store=OutlookCredentialStore(principal.organization_id))
+    if connector.name.lower() == "motive":
+        return MotiveConnector(credential_store=MotiveCredentialStore(principal.organization_id))
     return connector
 
 
