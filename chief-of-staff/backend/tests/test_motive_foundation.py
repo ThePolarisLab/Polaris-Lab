@@ -19,6 +19,8 @@ from app.organizations.models import Organization
 FERNET_KEY = "uPlZqC60CQaQGFL-kQo-xUOyEE5uNUAyxKmwbzfdiVo="
 FAKE_ACCESS_TOKEN = "fake-access-token-for-tests-only"
 FAKE_REFRESH_TOKEN = "fake-refresh-token-for-tests-only"
+CANONICAL_REDIRECT_URI = "https://polaris-executive-api.onrender.com/api/v1/motive/oauth/callback"
+FRONTEND_URL = "https://polaris-executive.onrender.com"
 
 
 @pytest.fixture()
@@ -28,7 +30,8 @@ def motive_db(monkeypatch, tmp_path):
     monkeypatch.setenv("POLARIS_MOTIVE_TOKEN_ENCRYPTION_KEY", FERNET_KEY)
     monkeypatch.setenv("MOTIVE_CLIENT_ID", "fake-client-id")
     monkeypatch.setenv("MOTIVE_CLIENT_SECRET", "fake-client-secret")
-    monkeypatch.setenv("MOTIVE_REDIRECT_URI", "https://api.polaris.example.com/api/v1/motive/callback")
+    monkeypatch.setenv("MOTIVE_REDIRECT_URI", CANONICAL_REDIRECT_URI)
+    monkeypatch.setenv("POLARIS_FRONTEND_URL", FRONTEND_URL)
     import app.database.database as database
     import app.connectors.motive as motive
     import app.connectors.motive_credentials as credentials
@@ -58,6 +61,18 @@ def _save_tokens(organization_id: str = "org-a", *, expires_at: datetime | None 
     )
 
 
+def _state_from_authorization_url(url: str) -> str:
+    return parse_qs(urlparse(url).query)["state"][0]
+
+
+def test_callback_route_is_exactly_oauth_callback():
+    from app.api import motive as motive_api
+
+    paths = {route.path for route in motive_api.router.routes}
+    assert "/api/v1/motive/oauth/callback" in paths
+    assert "/api/v1/motive/callback" not in paths
+
+
 def test_authorization_url_creates_secure_state_and_approved_scopes(motive_db):
     result = MotiveOAuthService().create_authorization_url(
         organization_id="org-a",
@@ -71,7 +86,7 @@ def test_authorization_url_creates_secure_state_and_approved_scopes(motive_db):
     assert parsed.netloc == "gomotive.com"
     assert parsed.path == "/oauth/authorize"
     assert params["client_id"] == ["fake-client-id"]
-    assert params["redirect_uri"] == ["https://api.polaris.example.com/api/v1/motive/callback"]
+    assert params["redirect_uri"] == [CANONICAL_REDIRECT_URI]
     assert params["response_type"] == ["code"]
     assert params["scope"] == [" ".join(MOTIVE_OAUTH_SCOPES)]
     assert len(params["state"][0]) >= 32
@@ -80,13 +95,67 @@ def test_authorization_url_creates_secure_state_and_approved_scopes(motive_db):
         row = session.query(MotiveOAuthState).filter_by(state=params["state"][0]).one()
         assert row.organization_id == "org-a"
         assert row.identity_id == "identity-a"
+        assert row.redirect_uri == CANONICAL_REDIRECT_URI
         assert row.scopes == " ".join(MOTIVE_OAUTH_SCOPES)
         assert row.consumed_at is None
 
 
+def test_token_exchange_uses_redirect_uri_stored_with_state(monkeypatch, motive_db):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content.decode()
+        return httpx.Response(200, json={"access_token": FAKE_ACCESS_TOKEN, "refresh_token": FAKE_REFRESH_TOKEN, "expires_in": 7200, "token_type": "Bearer"})
+
+    service = MotiveOAuthService(http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+    state = _state_from_authorization_url(service.create_authorization_url(organization_id="org-a", identity_id="identity-a", organization_slug="org-a")["authorization_url"])
+    monkeypatch.setenv("MOTIVE_REDIRECT_URI", "https://polaris-executive-api.onrender.com/api/v1/motive/oauth/callback/")
+    service.complete_authorization(state=state, code="fake-auth-code")
+
+    form = parse_qs(captured["body"])
+    assert form["redirect_uri"] == [CANONICAL_REDIRECT_URI]
+    assert form["redirect_uri"] != ["https://polaris-executive-api.onrender.com/api/v1/motive/oauth/callback/"]
+
+
+def test_frontend_hash_redirects_for_callback_outcomes(monkeypatch):
+    from app.api import motive as motive_api
+
+    class FakeOAuthService:
+        def complete_authorization(self, *, code: str, state: str):
+            return {"connection_status": "configured_unverified"}
+
+    monkeypatch.setenv("POLARIS_FRONTEND_URL", FRONTEND_URL)
+    monkeypatch.setattr(motive_api, "MotiveOAuthService", lambda: FakeOAuthService())
+
+    success = motive_api.motive_callback(code="fake-code", state="fake-state")
+    denied = motive_api.motive_callback(error="access_denied")
+    missing = motive_api.motive_callback()
+
+    assert success.headers["location"] == f"{FRONTEND_URL}/#executive/connectors?motive=connected_unverified"
+    assert denied.headers["location"] == f"{FRONTEND_URL}/#executive/connectors?motive=denied"
+    assert missing.headers["location"] == f"{FRONTEND_URL}/#executive/connectors?motive=error"
+    assert "/executive/connectors" not in success.headers["location"].replace("/#executive/connectors", "")
+
+
+def test_missing_redirect_or_frontend_configuration_fails_safely(monkeypatch, motive_db):
+    from app.api import motive as motive_api
+
+    monkeypatch.delenv("MOTIVE_REDIRECT_URI", raising=False)
+    with pytest.raises(MotiveConnectorError) as redirect_error:
+        MotiveOAuthService().create_authorization_url(organization_id="org-a", identity_id="identity-a", organization_slug="org-a")
+    assert redirect_error.value.code == "oauth_configuration_missing"
+    assert "fake-client-secret" not in str(redirect_error.value)
+
+    monkeypatch.setenv("MOTIVE_REDIRECT_URI", CANONICAL_REDIRECT_URI)
+    monkeypatch.delenv("POLARIS_FRONTEND_URL", raising=False)
+    with pytest.raises(MotiveConnectorError) as frontend_error:
+        motive_api._frontend_return_url("error")
+    assert frontend_error.value.code == "frontend_url_missing"
+
+
 def test_state_expiry_replay_and_wrong_organization_are_rejected(motive_db):
     service = MotiveOAuthService(http_client=httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={"access_token": "a", "refresh_token": "r", "expires_in": 7200, "token_type": "Bearer"}))))
-    state = service.create_authorization_url(organization_id="org-a", identity_id="identity-a", organization_slug="org-a")["authorization_url"].split("state=")[1]
+    state = _state_from_authorization_url(service.create_authorization_url(organization_id="org-a", identity_id="identity-a", organization_slug="org-a")["authorization_url"])
 
     with pytest.raises(MotiveConnectorError) as wrong_org:
         service.complete_authorization(state=state, code="fake-code", expected_organization_id="org-b")
@@ -97,7 +166,7 @@ def test_state_expiry_replay_and_wrong_organization_are_rejected(motive_db):
         service.complete_authorization(state=state, code="fake-code")
     assert reused.value.code == "state_reused"
 
-    expired = service.create_authorization_url(organization_id="org-a", identity_id="identity-a", organization_slug="org-a")["authorization_url"].split("state=")[1]
+    expired = _state_from_authorization_url(service.create_authorization_url(organization_id="org-a", identity_id="identity-a", organization_slug="org-a")["authorization_url"])
     with motive_db.begin() as session:
         row = session.query(MotiveOAuthState).filter_by(state=expired).one()
         row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
@@ -141,13 +210,16 @@ def test_callback_exchange_stores_oauth_tokens_without_secret_leakage(motive_db)
         return httpx.Response(200, json={"access_token": FAKE_ACCESS_TOKEN, "refresh_token": FAKE_REFRESH_TOKEN, "expires_in": 7200, "token_type": "Bearer", "scope": " ".join(MOTIVE_OAUTH_SCOPES)})
 
     service = MotiveOAuthService(http_client=httpx.Client(transport=httpx.MockTransport(handler)))
-    state = service.create_authorization_url(organization_id="org-a", identity_id="identity-a", organization_slug="org-a")["authorization_url"].split("state=")[1]
+    result_url = service.create_authorization_url(organization_id="org-a", identity_id="identity-a", organization_slug="org-a")["authorization_url"]
+    state = _state_from_authorization_url(result_url)
     result = service.complete_authorization(state=state, code="fake-auth-code")
 
     assert result["connection_status"] == "configured_unverified"
     assert "fake-client-secret" in captured["body"]
     assert FAKE_ACCESS_TOKEN not in str(result)
     assert FAKE_REFRESH_TOKEN not in str(result)
+    assert "fake-auth-code" not in str(result)
+    assert state not in str(result)
     assert MotiveCredentialStore("org-a").metadata()["authentication_method"] == "oauth2"
 
 
