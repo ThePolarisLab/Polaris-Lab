@@ -1,4 +1,4 @@
-"""Tenant-owned Motive persistence for the production foundation gate."""
+"""Tenant-owned Motive persistence for the production OAuth foundation gate."""
 
 from __future__ import annotations
 
@@ -18,17 +18,21 @@ def _now() -> datetime:
 class MotiveCredential(Base):
     __tablename__ = "motive_credentials"
     __table_args__ = (
-        UniqueConstraint("organization_id", "authentication_method", "environment_mode", name="uq_motive_credential_org_method_env"),
+        UniqueConstraint("organization_id", "authentication_method", name="uq_motive_credential_org_method"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     organization_id: Mapped[str] = mapped_column(String, ForeignKey("organizations.id"), nullable=False, index=True)
     organization_slug: Mapped[str] = mapped_column(String, nullable=False, index=True)
     provider: Mapped[str] = mapped_column(String(60), nullable=False, default="motive", index=True)
-    authentication_method: Mapped[str] = mapped_column(String(40), nullable=False, default="api_key", index=True)
-    environment_mode: Mapped[str] = mapped_column(String(40), nullable=False, default="test")
-    encrypted_api_key: Mapped[str] = mapped_column(Text, nullable=False)
-    key_present: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    authentication_method: Mapped[str] = mapped_column(String(40), nullable=False, default="oauth2", index=True)
+    encrypted_access_token: Mapped[str] = mapped_column(Text, nullable=False)
+    encrypted_refresh_token: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    granted_scopes: Mapped[str] = mapped_column(Text, nullable=False)
+    token_type: Mapped[str] = mapped_column(String(40), nullable=False, default="Bearer")
+    provider_company_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    provider_company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     connection_status: Mapped[str] = mapped_column(String(60), nullable=False, default="configured_unverified", index=True)
     authorization_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -40,6 +44,23 @@ class MotiveCredential(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now, nullable=False)
 
     organization = relationship("Organization")
+
+
+class MotiveOAuthState(Base):
+    __tablename__ = "motive_oauth_states"
+
+    state: Mapped[str] = mapped_column(String(255), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String, ForeignKey("organizations.id"), nullable=False, index=True)
+    identity_id: Mapped[str] = mapped_column(String, ForeignKey("identities.id"), nullable=False, index=True)
+    nonce: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    redirect_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    scopes: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+    organization = relationship("Organization")
+    identity = relationship("Identity")
 
 
 class MotiveSyncHistory(Base):
