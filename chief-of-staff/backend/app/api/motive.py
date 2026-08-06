@@ -1,4 +1,4 @@
-"""Authenticated Motive connector APIs for API-key foundation verification."""
+"""Authenticated Motive connector APIs for OAuth foundation verification."""
 
 from __future__ import annotations
 
@@ -7,10 +7,19 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
-from app.connectors.motive import MOTIVE_VERIFICATION_ENDPOINT, MOTIVE_VERIFICATION_PARAMS, MotiveConnector, MotiveConnectorError
+from app.connectors.motive import (
+    MOTIVE_AUTHORIZATION_URL,
+    MOTIVE_OAUTH_SCOPES,
+    MOTIVE_TOKEN_URL,
+    MOTIVE_VERIFICATION_ENDPOINT,
+    MotiveConnector,
+    MotiveConnectorError,
+    MotiveOAuthService,
+)
 from app.connectors.motive_credentials import MotiveCredentialStore
 from app.database.database import SessionLocal
 from app.models.motive import MotiveSyncHistory
@@ -30,30 +39,49 @@ def _connector(organization_id: str) -> MotiveConnector:
     return MotiveConnector(credential_store=MotiveCredentialStore(organization_id))
 
 
+def _frontend_url() -> str:
+    return os.getenv("POLARIS_FRONTEND_URL", "http://localhost:5173").rstrip("/")
+
+
 @router.get("/status")
 def motive_status(principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ))) -> dict[str, Any]:
     connector = _connector(principal.organization_id)
     return {"health": connector.health().model_dump(mode="json"), "status": connector.safe_status()}
 
 
-@router.post("/credentials/from-environment")
-def configure_motive_from_environment(
+@router.get("/connect")
+def motive_connect(
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_WRITE)),
     session: Session = Depends(_db),
 ) -> dict[str, Any]:
-    """Install or rotate the active organization's Motive API key from MOTIVE_API_KEY only."""
-    api_key = os.getenv("MOTIVE_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="MOTIVE_API_KEY is not configured")
+    """Return a Motive authorization URL after Polaris auth and org checks pass."""
     organization = _organization(session, principal.organization_id)
-    environment_mode = os.getenv("POLARIS_MOTIVE_ENVIRONMENT_MODE", "test").strip().lower() or "test"
-    MotiveCredentialStore(principal.organization_id).save_api_key(
-        organization_slug=organization.slug,
-        api_key=api_key,
-        environment_mode=environment_mode,
-    )
-    metadata = MotiveCredentialStore(principal.organization_id).metadata(environment_mode=environment_mode)
-    return {"configured": True, "status": metadata}
+    try:
+        return MotiveOAuthService().create_authorization_url(
+            organization_id=principal.organization_id,
+            identity_id=principal.identity_id,
+            organization_slug=organization.slug,
+        )
+    except MotiveConnectorError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail={"error_code": exc.code, "message": str(exc)}) from exc
+
+
+@router.get("/callback")
+def motive_callback(
+    code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    error: str | None = Query(default=None),
+) -> RedirectResponse:
+    """Public Motive callback protected by one-use organization-scoped OAuth state."""
+    if error:
+        return RedirectResponse(f"{_frontend_url()}/executive/connectors?motive=denied", status_code=status.HTTP_303_SEE_OTHER)
+    if not code or not state:
+        return RedirectResponse(f"{_frontend_url()}/executive/connectors?motive=error", status_code=status.HTTP_303_SEE_OTHER)
+    try:
+        MotiveOAuthService().complete_authorization(code=code, state=state)
+    except MotiveConnectorError:
+        return RedirectResponse(f"{_frontend_url()}/executive/connectors?motive=error", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(f"{_frontend_url()}/executive/connectors?motive=connected_unverified", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/verify")
@@ -61,7 +89,7 @@ def verify_motive_connection(
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_WRITE)),
     session: Session = Depends(_db),
 ) -> dict[str, Any]:
-    """Run one small read-only Motive API-key verification request for the active organization."""
+    """Run one narrow read-only Motive OAuth bearer verification request for the active organization."""
     organization = _organization(session, principal.organization_id)
     started_at = datetime.now(timezone.utc)
     run_id = f"motive-verify-{uuid4()}"
@@ -69,7 +97,7 @@ def verify_motive_connection(
         organization_id=principal.organization_id,
         organization_slug=organization.slug,
         provider="motive",
-        provider_resource="vehicles",
+        provider_resource="companies",
         mode="verification",
         status="running",
         run_id=run_id,
@@ -89,14 +117,15 @@ def verify_motive_connection(
         history.error_message_sanitized = str(exc)
         history.records_read = 0
         history.records_written = 0
-        history.resource_counts = {"vehicles": 0}
+        history.resource_counts = {"companies": 0}
+        history.checkpoint_after = history.checkpoint_before
         session.commit()
         raise HTTPException(status_code=_http_status(exc), detail={"status": exc.status.value, "error_code": exc.code, "message": str(exc)}) from exc
     history.status = "success"
     history.completed_at = datetime.now(timezone.utc)
     history.records_read = int(result.get("records_read") or 0)
     history.records_written = 0
-    history.resource_counts = {"vehicles": history.records_read}
+    history.resource_counts = {"companies": history.records_read}
     history.checkpoint_after = history.checkpoint_before
     session.commit()
     return {**result, "run_id": run_id}
@@ -105,17 +134,26 @@ def verify_motive_connection(
 @router.post("/disconnect")
 def disconnect_motive(principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_WRITE))) -> dict[str, Any]:
     _connector(principal.organization_id).disconnect()
-    return {"disconnected": True, "organization_id": principal.organization_id, "secrets_exposed": False}
+    return {
+        "disconnected": True,
+        "organization_id": principal.organization_id,
+        "remote_revocation_performed": False,
+        "remote_revocation_reason": "Motive token revocation is not implemented because no official revocation contract has been verified for this PR.",
+        "secrets_exposed": False,
+    }
 
 
 @router.get("/verification-contract")
 def motive_verification_contract(principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ))) -> dict[str, Any]:
     return {
         "provider": "motive",
-        "authentication_method": "api_key",
-        "header": "X-API-Key",
-        "endpoint": MOTIVE_VERIFICATION_ENDPOINT,
-        "request": {"method": "GET", "path": MOTIVE_VERIFICATION_ENDPOINT, "params": MOTIVE_VERIFICATION_PARAMS},
+        "authentication_method": "oauth2",
+        "authorization_endpoint": MOTIVE_AUTHORIZATION_URL,
+        "token_endpoint": MOTIVE_TOKEN_URL,
+        "redirect_uri_environment_variable": "MOTIVE_REDIRECT_URI",
+        "requested_scopes": list(MOTIVE_OAUTH_SCOPES),
+        "verification_endpoint": MOTIVE_VERIFICATION_ENDPOINT,
+        "verification_request": {"method": "GET", "path": MOTIVE_VERIFICATION_ENDPOINT, "params": {}, "authorization": "Bearer access token"},
         "broad_sync_enabled": False,
         "production_certified": False,
         "secrets_exposed": False,
@@ -136,4 +174,6 @@ def _http_status(error: MotiveConnectorError) -> int:
         return status.HTTP_429_TOO_MANY_REQUESTS
     if error.code == "timeout":
         return status.HTTP_504_GATEWAY_TIMEOUT
+    if error.status.value == "not_configured":
+        return status.HTTP_503_SERVICE_UNAVAILABLE
     return status.HTTP_502_BAD_GATEWAY
