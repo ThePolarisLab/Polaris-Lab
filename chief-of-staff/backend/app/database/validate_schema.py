@@ -18,7 +18,8 @@ from app.database.database import engine
 from app.database.schema_guard import _alembic_config
 
 MOTIVE_EXPECTED_COLUMNS: dict[str, set[str]] = {
-    "motive_credentials": {"id", "organization_id", "organization_slug", "provider", "authentication_method", "environment_mode", "encrypted_api_key", "key_present", "connection_status", "authorization_required", "last_verified_at", "last_successful_sync_at", "last_error_code", "last_error_message_sanitized", "disconnected_at", "created_at", "updated_at"},
+    "motive_credentials": {"id", "organization_id", "organization_slug", "provider", "authentication_method", "encrypted_access_token", "encrypted_refresh_token", "expires_at", "granted_scopes", "token_type", "provider_company_id", "provider_company_name", "connection_status", "authorization_required", "last_verified_at", "last_successful_sync_at", "last_error_code", "last_error_message_sanitized", "disconnected_at", "created_at", "updated_at"},
+    "motive_oauth_states": {"state", "organization_id", "identity_id", "nonce", "redirect_uri", "scopes", "created_at", "expires_at", "consumed_at"},
     "motive_sync_history": {"id", "organization_id", "organization_slug", "provider", "provider_resource", "mode", "status", "run_id", "started_at", "completed_at", "records_read", "records_written", "error_code", "error_message_sanitized", "checkpoint_before", "checkpoint_after", "resource_counts", "created_at", "updated_at"},
     "motive_sync_checkpoints": {"id", "organization_id", "organization_slug", "provider", "provider_resource", "cursor", "page_number", "updated_after_watermark", "last_successful_position", "checkpoint_status", "last_successful_sync_at", "created_at", "updated_at"},
     "motive_vehicles": {"id", "organization_id", "organization_slug", "provider", "provider_vehicle_id", "source_endpoint", "unit_number", "vin", "make", "model", "year", "license_plate", "status", "observed_at", "provider_payload_metadata", "created_at", "updated_at"},
