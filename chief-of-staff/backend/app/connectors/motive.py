@@ -46,6 +46,7 @@ MOTIVE_RESOURCES = (
 _REAUTH_CODES = {401, 403}
 _AUTHORIZATION_CODE_TTL_MINUTES = 10
 _TOKEN_REFRESH_SKEW_SECONDS = 300
+_SECRET_RESPONSE_KEY_MARKERS = ("token", "secret", "authorization", "code", "state", "password")
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,9 +154,11 @@ class MotiveOAuthService:
             _log_callback_step(
                 "TOKEN RECEIVED",
                 organization_id=oauth_state.organization_id,
-                token_received=bool(token_payload.get("access_token")),
+                access_token_received=bool(token_payload.get("access_token")),
                 refresh_token_received=bool(token_payload.get("refresh_token")),
-                expires_in_present="expires_in" in token_payload,
+                token_type=str(token_payload.get("token_type") or ""),
+                expires_in=token_payload.get("expires_in"),
+                response_keys=_safe_response_key_names(token_payload),
             )
 
             access_token, refresh_token, expires_at, granted_scopes, token_type = self._parse_token_payload(token_payload, fallback_scopes=oauth_state.scopes)
@@ -665,8 +668,16 @@ def _retry_delay(attempt: int) -> float:
     return float(os.getenv("POLARIS_MOTIVE_RETRY_BASE_SECONDS", "0.25")) * attempt
 
 
+def _safe_response_key_names(payload: dict[str, Any]) -> list[str]:
+    return sorted(
+        str(key)
+        for key in payload.keys()
+        if not any(marker in str(key).casefold() for marker in _SECRET_RESPONSE_KEY_MARKERS)
+    )
+
+
 def _log_callback_step(step: str, **fields: object) -> None:
-    logger.info("MOTIVE OAUTH CALLBACK %s", step, extra={"motive_oauth_step": step, **fields})
+    logger.info("MOTIVE OAUTH CALLBACK", extra={"motive_oauth_step": step, **fields})
 
 
 def _log_callback_exception(
@@ -677,7 +688,7 @@ def _log_callback_exception(
     rollback_executed: bool | None,
 ) -> None:
     logger.info(
-        "MOTIVE OAUTH CALLBACK EXCEPTION",
+        "MOTIVE OAUTH CALLBACK",
         extra={
             "motive_oauth_step": "EXCEPTION",
             "exception_class": exception_class,
