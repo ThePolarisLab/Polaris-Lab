@@ -87,8 +87,8 @@ class MotiveConnector(BaseConnector):
     def authenticate(self) -> None:
         self.validate_configuration()
 
-    def health(self) -> ConnectorHealth:
-        details = self.safe_status()
+    def health(self, *, persisted_status: dict[str, Any] | None = None) -> ConnectorHealth:
+        details = self.safe_status(persisted_status=persisted_status)
         status_value = str(details.get("connection_status") or "not_configured")
         status = _connector_status(status_value)
         message = _status_message(status_value)
