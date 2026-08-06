@@ -40,8 +40,9 @@ const EXECUTIVE_ROUTES = Object.freeze([
 
 function parseHash() {
   const rawHash = window.location.hash.replace(/^#\/?/, "");
-  if (rawHash === "builder" || rawHash.startsWith("builder/")) return { workspace: "builder", page: "console" };
-  const page = rawHash.startsWith("executive/") ? rawHash.replace("executive/", "") : "dashboard";
+  const [hashPath] = rawHash.split("?");
+  if (hashPath === "builder" || hashPath.startsWith("builder/")) return { workspace: "builder", page: "console" };
+  const page = hashPath.startsWith("executive/") ? hashPath.replace("executive/", "") : "dashboard";
   return { workspace: "executive", page: EXECUTIVE_ROUTES.some((route) => route.key === page) ? page : "dashboard" };
 }
 
