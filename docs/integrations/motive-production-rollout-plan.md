@@ -46,6 +46,29 @@ Do not use `https://polaris-executive.onrender.com` for the OAuth callback. The 
 https://polaris-executive.onrender.com/#executive/connectors
 ```
 
+## Callback Diagnostic Verification
+
+After deploying the Motive OAuth logging visibility fix, run one new Motive authorization attempt and capture only sanitized Motive diagnostic lines from Render logs.
+
+Search for these exact phrases:
+
+```text
+MOTIVE OAUTH CALLBACK
+step=CALLBACK_START
+step=TOKEN_RECEIVED
+step=EXCEPTION
+failing_step=
+step=DB_COMMIT_SUCCESS
+```
+
+The Uvicorn access log for `GET /api/v1/motive/oauth/callback` must not show raw OAuth query values. The callback request target should either omit the query string or show sensitive values redacted, for example:
+
+```text
+/api/v1/motive/oauth/callback?code=[REDACTED]&state=[REDACTED]
+```
+
+Never paste authorization codes, OAuth state values, access tokens, refresh tokens, client secrets, or authorization headers into tickets, PR comments, docs, or chat.
+
 ## Track 4C.1B Prerequisites
 
 Before live sync is implemented, Polaris needs Motive support or documentation confirmation for:
