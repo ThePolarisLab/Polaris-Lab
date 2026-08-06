@@ -142,8 +142,10 @@ def _append_logfmt_diagnostic_fields(record: logging.LogRecord, base_message: st
     fields = _safe_extra_fields(record)
     if "motive_oauth_step" in fields:
         fields["step"] = _normalize_step(fields.pop("motive_oauth_step"))
+    if "failing_step" in fields:
+        fields["failing_step"] = _normalize_step(fields["failing_step"])
     if fields and " step=" not in base_message:
-        rendered_fields = " ".join(f"{key}={_logfmt_value(value)}" for key, value in sorted(fields.items()))
+        rendered_fields = " ".join(f"{key}={_logfmt_value(fields[key])}" for key in _ordered_logfmt_keys(fields))
         record.msg = f"{base_message} {rendered_fields}"
         record.args = ()
 
@@ -170,6 +172,15 @@ def _coerce_safe_value(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _coerce_safe_value(item) for key, item in value.items()}
     return str(value)
+
+
+def _ordered_logfmt_keys(fields: dict[str, Any]) -> list[str]:
+    ordered = []
+    for key in ("step", "failing_step"):
+        if key in fields:
+            ordered.append(key)
+    ordered.extend(sorted(key for key in fields if key not in ordered))
+    return ordered
 
 
 def _logfmt_value(value: Any) -> str:
