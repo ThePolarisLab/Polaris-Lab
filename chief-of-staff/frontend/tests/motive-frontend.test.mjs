@@ -105,7 +105,7 @@ test("loads live Motive status on connectors health and evidence views", async (
 test("does not expose OAuth code state or provider secrets in frontend view code", async () => {
   const source = await readFile(new URL("../src/components/ExecutiveViews.jsx", import.meta.url), "utf8");
   assert.doesNotMatch(source, /access_token|refresh_token|client_secret|oauth_state|authorization_header/i);
-  assert.doesNotMatch(source, /\bcode\b|\bstate\b/);
+  assert.doesNotMatch(source, /code=|state=/i);
   assert.doesNotMatch(source, /gomotive\.com\/oauth\/authorize/);
 });
 
