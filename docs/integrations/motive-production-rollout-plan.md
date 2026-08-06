@@ -1,14 +1,15 @@
 # Motive Production Rollout Plan
 
-## Track 4C.1A: Foundation
+## Track 4C.1A: OAuth Foundation
 
 Implemented scope:
 
 - Python Motive connector shell in `chief-of-staff/`
-- encrypted organization-scoped API-key credential storage
+- OAuth 2.0 authorization URL and callback foundation
+- encrypted organization-scoped access and refresh token storage
 - tenant-owned Motive persistence tables
 - normalized internal contracts
-- limited read-only verification using `GET /v1/vehicles?per_page=1&page_no=1`
+- limited read-only verification using `GET /v1/companies`
 - safe status and diagnostics
 
 No broad Motive synchronization is enabled.
@@ -17,11 +18,11 @@ No broad Motive synchronization is enabled.
 
 Before live sync is implemented, Polaris needs Motive support or documentation confirmation for:
 
-- production API approval and final production credential
 - exact rate-limit behavior, including headers and retry guidance
 - complete driver-list endpoint contract
 - expected pagination behavior for each enabled resource
 - production-safe handling for `429` without documented retry windows
+- token revocation endpoint availability, if remote revocation is required
 
 ## Deferred Resource List
 
