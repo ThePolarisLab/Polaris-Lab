@@ -99,7 +99,7 @@ export function safeMotiveMetadata(payload) {
   ];
   const result = {};
   for (const key of safeKeys) {
-    if (SECRET_KEY_PATTERN.test(key)) continue;
+    if (key !== "authorization_required" && SECRET_KEY_PATTERN.test(key)) continue;
     if (Object.prototype.hasOwnProperty.call(details, key)) result[key] = details[key];
   }
   result.production_sync_enabled = Boolean(result.production_sync_enabled);
