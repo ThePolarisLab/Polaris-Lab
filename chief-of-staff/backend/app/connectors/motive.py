@@ -405,8 +405,8 @@ class MotiveConnector(BaseConnector):
 
     def verify_connection(self) -> dict[str, Any]:
         try:
-            access_token = self._oauth_service.access_token_for_request(self._store().organization_id)
-            payload = self._request_company_details(access_token)
+            bearer_credential = self._oauth_service.access_token_for_request(self._store().organization_id)
+            payload = self._request_company_details(bearer_credential)
             company = _company_metadata(payload)
             verified_at = datetime.now(timezone.utc)
             self._store().record_verification_success(
