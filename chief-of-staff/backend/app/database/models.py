@@ -23,6 +23,16 @@ from app.models.financial_snapshot import (  # noqa: F401
     FinancialSyncHistory,
 )
 from app.models.memory import MemoryEntry  # noqa: F401
+from app.models.motive import (  # noqa: F401
+    MotiveCredential,
+    MotiveDriverRecord,
+    MotiveDriverUtilizationRecord,
+    MotiveIftaSummaryRecord,
+    MotiveSyncCheckpoint,
+    MotiveSyncHistory,
+    MotiveVehicleRecord,
+    MotiveVehicleUtilizationRecord,
+)
 from app.models.outlook import (  # noqa: F401
     OutlookAttachment,
     OutlookFolder,
