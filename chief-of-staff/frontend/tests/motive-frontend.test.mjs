@@ -93,6 +93,22 @@ test("uses backend-provided Motive authorization URL and actions", async () => {
   assert.doesNotMatch(source, /gomotive\.com\/oauth\/authorize/);
 });
 
+test("loads live Motive status on connectors health and evidence views", async () => {
+  const source = await readFile(new URL("../src/components/ExecutiveViews.jsx", import.meta.url), "utf8");
+  const statusCalls = source.match(/apiClient\.get\("\/api\/v1\/motive\/status"\)/g) || [];
+  assert.equal(statusCalls.length, 3);
+  assert.match(source, /motiveConnectorPresentation\(motive, motiveLoading\)/);
+  assert.match(source, /motiveSystemHealth\(motive, motiveLoading\)/);
+  assert.match(source, /motiveEvidenceStatus\(motive, motiveLoading\)/);
+});
+
+test("does not expose OAuth code state or provider secrets in frontend view code", async () => {
+  const source = await readFile(new URL("../src/components/ExecutiveViews.jsx", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /access_token|refresh_token|client_secret|oauth_state|authorization_header/i);
+  assert.doesNotMatch(source, /\bcode\b|\bstate\b/);
+  assert.doesNotMatch(source, /gomotive\.com\/oauth\/authorize/);
+});
+
 test("keeps QuickBooks and Outlook connector consumers unchanged", async () => {
   const source = await readFile(new URL("../src/components/ExecutiveViews.jsx", import.meta.url), "utf8");
   assert.match(source, /apiClient\.get\("\/api\/v1\/connectors\/quickbooks"\)/);
