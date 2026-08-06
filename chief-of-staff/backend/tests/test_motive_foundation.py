@@ -68,9 +68,10 @@ def _state_from_authorization_url(url: str) -> str:
 def test_callback_route_is_exactly_oauth_callback():
     from app.api import motive as motive_api
 
+    prefix = "/api/v1/motive"
     paths = {route.path for route in motive_api.router.routes}
-    assert "/api/v1/motive/oauth/callback" in paths
-    assert "/api/v1/motive/callback" not in paths
+    assert f"{prefix}/oauth/callback" in paths
+    assert f"{prefix}/callback" not in paths
 
 
 def test_authorization_url_creates_secure_state_and_approved_scopes(motive_db):
