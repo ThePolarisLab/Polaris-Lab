@@ -17,6 +17,18 @@ from sqlalchemy import inspect
 from app.database.database import engine
 from app.database.schema_guard import _alembic_config
 
+MOTIVE_EXPECTED_COLUMNS: dict[str, set[str]] = {
+    "motive_credentials": {"id", "organization_id", "organization_slug", "provider", "authentication_method", "encrypted_access_token", "encrypted_refresh_token", "expires_at", "granted_scopes", "token_type", "provider_company_id", "provider_company_name", "connection_status", "authorization_required", "last_verified_at", "last_successful_sync_at", "last_error_code", "last_error_message_sanitized", "disconnected_at", "created_at", "updated_at"},
+    "motive_oauth_states": {"state", "organization_id", "identity_id", "nonce", "redirect_uri", "scopes", "created_at", "expires_at", "consumed_at"},
+    "motive_sync_history": {"id", "organization_id", "organization_slug", "provider", "provider_resource", "mode", "status", "run_id", "started_at", "completed_at", "records_read", "records_written", "error_code", "error_message_sanitized", "checkpoint_before", "checkpoint_after", "resource_counts", "created_at", "updated_at"},
+    "motive_sync_checkpoints": {"id", "organization_id", "organization_slug", "provider", "provider_resource", "cursor", "page_number", "updated_after_watermark", "last_successful_position", "checkpoint_status", "last_successful_sync_at", "created_at", "updated_at"},
+    "motive_vehicles": {"id", "organization_id", "organization_slug", "provider", "provider_vehicle_id", "source_endpoint", "unit_number", "vin", "make", "model", "year", "license_plate", "status", "observed_at", "provider_payload_metadata", "created_at", "updated_at"},
+    "motive_drivers": {"id", "organization_id", "organization_slug", "provider", "provider_driver_id", "source_endpoint", "name", "email", "status", "observed_at", "provider_payload_metadata", "created_at", "updated_at"},
+    "motive_vehicle_utilization": {"id", "organization_id", "organization_slug", "provider", "provider_vehicle_id", "source_endpoint", "reporting_period_start", "reporting_period_end", "utilization_percent", "distance", "engine_hours", "observed_at", "provider_payload_metadata", "created_at", "updated_at"},
+    "motive_driver_utilization": {"id", "organization_id", "organization_slug", "provider", "provider_driver_id", "source_endpoint", "reporting_period_start", "reporting_period_end", "utilization_percent", "distance", "driving_time_seconds", "observed_at", "provider_payload_metadata", "created_at", "updated_at"},
+    "motive_ifta_summaries": {"id", "organization_id", "organization_slug", "provider", "provider_vehicle_id", "jurisdiction", "source_endpoint", "reporting_period_start", "reporting_period_end", "distance", "fuel_volume", "observed_at", "provider_payload_metadata", "created_at", "updated_at"},
+}
+
 EXPECTED_COLUMNS: dict[str, set[str]] = {
     "organizations": {"id", "slug", "display_name", "legal_name", "status", "created_at", "updated_at"},
     "identities": {"id", "email", "display_name", "status", "created_at", "updated_at"},
@@ -35,11 +47,7 @@ EXPECTED_COLUMNS: dict[str, set[str]] = {
     "team_notes": {"id", "organization_id", "author", "note_type", "status", "title", "details", "target_entity", "assigned_to", "due_at", "created_at", "updated_at", "resolved_at"},
     "financial_accounts": {"id", "organization_id", "organization_slug", "qbo_id", "name", "fully_qualified_name", "account_type", "account_subtype", "active", "current_balance", "payload", "synced_at"},
     "financial_snapshots": {"id", "organization_id", "organization_slug", "snapshot_type", "period_start", "period_end", "accounting_method", "payload", "captured_at"},
-    "financial_sync_history": {
-        "id", "organization_id", "organization_slug", "status", "started_at", "completed_at", "duration_ms",
-        "accounts_imported", "company_name", "error_message", "sync_mode", "resource_counts",
-        "report_availability", "checkpoint_before", "checkpoint_after", "verification_status",
-    },
+    "financial_sync_history": {"id", "organization_id", "organization_slug", "status", "started_at", "completed_at", "duration_ms", "accounts_imported", "company_name", "error_message", "sync_mode", "resource_counts", "report_availability", "checkpoint_before", "checkpoint_after", "verification_status"},
     "quickbooks_oauth_credentials": {"id", "organization_id", "realm_id", "encrypted_refresh_token", "scopes", "verified_company_name", "company_verified_at", "verification_status", "connector_health_status", "reauthorization_required", "last_error_summary", "last_successful_sync_at", "last_refresh_at", "last_refresh_status", "connected_at", "updated_at"},
     "quickbooks_oauth_states": {"state", "organization_id", "identity_id", "created_at", "expires_at", "consumed_at"},
     "outlook_oauth_credentials": {"id", "organization_id", "organization_slug", "microsoft_tenant_id", "mailbox_user_id", "mailbox_address", "encrypted_refresh_token", "scopes", "connector_health_status", "reauthorization_required", "last_error_summary", "last_successful_sync_at", "last_refresh_at", "last_refresh_status", "connected_at", "updated_at", "disconnected_at"},
@@ -50,7 +58,10 @@ EXPECTED_COLUMNS: dict[str, set[str]] = {
     "outlook_attachments": {"id", "organization_id", "organization_slug", "message_id", "provider_attachment_id", "filename", "mime_type", "size", "is_inline", "content_id", "attachment_type", "synced_at"},
     "outlook_message_classifications": {"id", "organization_id", "organization_slug", "message_id", "category", "confidence", "reason", "rule", "created_at"},
     "outlook_sync_history": {"id", "organization_id", "organization_slug", "connector", "sync_mode", "status", "run_id", "folders_scanned", "messages_discovered", "messages_inserted", "messages_updated", "messages_unchanged", "messages_removed", "attachments_indexed", "checkpoint_before", "checkpoint_after", "started_at", "completed_at", "duration_ms", "error_category", "error_message"},
+    **MOTIVE_EXPECTED_COLUMNS,
 }
+
+MOTIVE_TENANT_TABLES = set(MOTIVE_EXPECTED_COLUMNS)
 
 TENANT_TABLES = {
     "production_auth_sessions",
@@ -76,7 +87,7 @@ TENANT_TABLES = {
     "outlook_attachments",
     "outlook_message_classifications",
     "outlook_sync_history",
-}
+} | MOTIVE_TENANT_TABLES
 
 LEGACY_OPTIONAL_TABLES = {
     "production_password_credentials",
@@ -91,31 +102,13 @@ LEGACY_OPTIONAL_TABLES = {
     "outlook_attachments",
     "outlook_message_classifications",
     "outlook_sync_history",
-}
+} | MOTIVE_TENANT_TABLES
 LEGACY_TENANT_OPTIONAL = {"organization_id"}
 LEGACY_TABLE_OPTIONAL_COLUMNS: dict[str, set[str]] = {
     "financial_accounts": {"organization_slug"},
     "financial_snapshots": {"organization_slug"},
-    "financial_sync_history": {
-        "organization_slug",
-        "sync_mode",
-        "resource_counts",
-        "report_availability",
-        "checkpoint_before",
-        "checkpoint_after",
-        "verification_status",
-    },
-    "quickbooks_oauth_credentials": {
-        "verified_company_name",
-        "company_verified_at",
-        "verification_status",
-        "connector_health_status",
-        "reauthorization_required",
-        "last_error_summary",
-        "last_successful_sync_at",
-        "last_refresh_at",
-        "last_refresh_status",
-    },
+    "financial_sync_history": {"organization_slug", "sync_mode", "resource_counts", "report_availability", "checkpoint_before", "checkpoint_after", "verification_status"},
+    "quickbooks_oauth_credentials": {"verified_company_name", "company_verified_at", "verification_status", "connector_health_status", "reauthorization_required", "last_error_summary", "last_successful_sync_at", "last_refresh_at", "last_refresh_status"},
 }
 SYSTEM_TABLES = {"alembic_version"}
 BASELINE_REVISION = "202607290001"
@@ -142,27 +135,16 @@ def validate_schema() -> ValidationResult:
     user_tables = tables - SYSTEM_TABLES
 
     if not user_tables:
-        return ValidationResult(
-            "empty",
-            "Database has no Polaris tables. Run `alembic upgrade head` for a clean install.",
-        )
+        return ValidationResult("empty", "Database has no Polaris tables. Run `alembic upgrade head` for a clean install.")
 
     unknown_tables = user_tables - set(EXPECTED_COLUMNS)
     if unknown_tables:
-        return ValidationResult(
-            "unknown",
-            "Database contains unknown tables and cannot be adopted automatically: "
-            + ", ".join(sorted(unknown_tables)),
-        )
+        return ValidationResult("unknown", "Database contains unknown tables and cannot be adopted automatically: " + ", ".join(sorted(unknown_tables)))
 
     missing_tables = set(EXPECTED_COLUMNS) - user_tables
     blocking_missing_tables = missing_tables - LEGACY_OPTIONAL_TABLES
     if blocking_missing_tables:
-        return ValidationResult(
-            "partial",
-            "Database is missing expected tables and cannot be stamped safely: "
-            + ", ".join(sorted(blocking_missing_tables)),
-        )
+        return ValidationResult("partial", "Database is missing expected tables and cannot be stamped safely: " + ", ".join(sorted(blocking_missing_tables)))
 
     current_compatible = not missing_tables
     legacy_compatible = True
@@ -177,10 +159,7 @@ def validate_schema() -> ValidationResult:
         missing = expected - actual
         extra = actual - expected
         if extra:
-            return ValidationResult(
-                "unknown",
-                f"Table {table_name} contains unexpected columns: " + ", ".join(sorted(extra)),
-            )
+            return ValidationResult("unknown", f"Table {table_name} contains unexpected columns: " + ", ".join(sorted(extra)))
         if missing:
             current_compatible = False
             allowed_missing: set[str] = set()
@@ -192,34 +171,18 @@ def validate_schema() -> ValidationResult:
             details.append(f"{table_name} missing {', '.join(sorted(missing))}")
 
     if current_compatible:
-        return ValidationResult(
-            "current-compatible",
-            "Schema matches the current Polaris model inventory. Stamping head is permitted if alembic_version is absent.",
-            HEAD_REVISION,
-        )
-
+        return ValidationResult("current-compatible", "Schema matches the current Polaris model inventory. Stamping head is permitted if alembic_version is absent.", HEAD_REVISION)
     if legacy_compatible:
-        return ValidationResult(
-            "legacy-pre-tenant-compatible",
-            "Schema matches the pre-tenant legacy shape. Stamp the baseline revision, then run `alembic upgrade head`. Details: "
-            + "; ".join(details),
-            BASELINE_REVISION,
-        )
-
-    return ValidationResult(
-        "partial",
-        "Schema is neither current nor compatible legacy: " + "; ".join(details),
-    )
+        return ValidationResult("legacy-pre-tenant-compatible", "Schema matches the pre-tenant legacy shape. Stamp the baseline revision, then run `alembic upgrade head`. Details: " + "; ".join(details), BASELINE_REVISION)
+    return ValidationResult("partial", "Schema is neither current nor compatible legacy: " + "; ".join(details))
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Polaris database schema adoption safety")
     parser.add_argument("--stamp-if-safe", action="store_true", help="Stamp a current-compatible schema at head or legacy-compatible schema at the baseline revision")
     args = parser.parse_args()
-
     result = validate_schema()
     print(result.to_json())
-
     if args.stamp_if_safe:
         if result.stamp_revision is None:
             return 2
