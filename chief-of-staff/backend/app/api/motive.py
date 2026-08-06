@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import quote, urlparse
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -81,9 +81,9 @@ def motive_connect(
 
 @router.get("/oauth/callback")
 def motive_callback(
-    code: str | None = Query(default=None),
-    state: str | None = Query(default=None),
-    error: str | None = Query(default=None),
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
 ) -> RedirectResponse:
     """Public Motive callback protected by one-use organization-scoped OAuth state."""
     if error:
