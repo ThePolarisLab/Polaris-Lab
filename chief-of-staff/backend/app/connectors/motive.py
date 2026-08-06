@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 import time
@@ -19,6 +20,8 @@ from app.connectors.motive_credentials import MotiveCredentialError, MotiveCrede
 from app.database.database import SessionLocal
 from app.models.motive import MotiveOAuthState
 from app.organizations.models import Organization
+
+logger = logging.getLogger(__name__)
 
 MOTIVE_AUTHORIZATION_URL = "https://gomotive.com/oauth/authorize"
 MOTIVE_TOKEN_URL = "https://gomotive.com/oauth/token"
@@ -56,11 +59,22 @@ class _OAuthStateMetadata:
 class MotiveConnectorError(RuntimeError):
     """Safe connector error that never includes Motive credentials or raw provider payloads."""
 
-    def __init__(self, message: str, *, status: ConnectorStatus = ConnectorStatus.DEGRADED, retryable: bool = False, code: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: ConnectorStatus = ConnectorStatus.DEGRADED,
+        retryable: bool = False,
+        code: str | None = None,
+        failing_step: str | None = None,
+        rollback_executed: bool | None = None,
+    ) -> None:
         super().__init__(_sanitize(message))
         self.status = status
         self.retryable = retryable
         self.code = code or status.value
+        self.failing_step = failing_step
+        self.rollback_executed = rollback_executed
 
 
 class MotiveOAuthService:
@@ -115,35 +129,123 @@ class MotiveOAuthService:
         }
 
     def complete_authorization(self, *, state: str, code: str, expected_organization_id: str | None = None) -> dict[str, Any]:
-        oauth_state = self._consume_state(state, expected_organization_id=expected_organization_id)
-        token_payload = self._token_request(
-            {
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": oauth_state.redirect_uri,
-                "client_id": self.client_id(),
-                "client_secret": self.client_secret(),
+        failing_step = "STATE FOUND"
+        try:
+            oauth_state = self._consume_state(state, expected_organization_id=expected_organization_id)
+            _log_callback_step(
+                "STATE FOUND",
+                organization_id=oauth_state.organization_id,
+                organization_slug=oauth_state.organization_slug,
+                redirect_uri_present=bool(oauth_state.redirect_uri),
+            )
+            _log_callback_step("ORG FOUND", organization_id=oauth_state.organization_id, organization_slug=oauth_state.organization_slug)
+
+            failing_step = "TOKEN RECEIVED"
+            token_payload = self._token_request(
+                {
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": oauth_state.redirect_uri,
+                    "client_id": self.client_id(),
+                    "client_secret": self.client_secret(),
+                }
+            )
+            _log_callback_step(
+                "TOKEN RECEIVED",
+                organization_id=oauth_state.organization_id,
+                token_received=bool(token_payload.get("access_token")),
+                refresh_token_received=bool(token_payload.get("refresh_token")),
+                expires_in_present="expires_in" in token_payload,
+            )
+
+            access_token, refresh_token, expires_at, granted_scopes, token_type = self._parse_token_payload(token_payload, fallback_scopes=oauth_state.scopes)
+            if refresh_token is None:
+                raise MotiveConnectorError(
+                    "Motive token response did not include a refresh credential",
+                    status=ConnectorStatus.FAILED,
+                    code="malformed_response",
+                    failing_step="TOKEN RECEIVED",
+                    rollback_executed=False,
+                )
+
+            failing_step = "DB COMMIT SUCCESS"
+            store = self._credential_store_factory(oauth_state.organization_id)
+            store.save_tokens(
+                organization_slug=oauth_state.organization_slug,
+                access_token=access_token,
+                refresh_token=refresh_token,
+                expires_at=expires_at,
+                granted_scopes=granted_scopes,
+                token_type=token_type,
+            )
+
+            failing_step = "VERIFY SUCCESS"
+            metadata = store.metadata()
+            credential_visible = bool(metadata.get("token_present"))
+            organization_matches = metadata.get("organization_id") == oauth_state.organization_id
+            status_visible = credential_visible and organization_matches and metadata.get("connection_status") == "configured_unverified"
+            _log_callback_step(
+                "VERIFY SUCCESS",
+                organization_id=oauth_state.organization_id,
+                organization_slug=oauth_state.organization_slug,
+                credential_row_exists=credential_visible,
+                organization_matches=organization_matches,
+                status_endpoint_reads_same_row=status_visible,
+                connection_status=metadata.get("connection_status"),
+            )
+            if not status_visible:
+                raise MotiveConnectorError(
+                    "Motive OAuth credential was not visible after persistence",
+                    status=ConnectorStatus.FAILED,
+                    code="credential_persistence_failed",
+                    failing_step="VERIFY SUCCESS",
+                    rollback_executed=False,
+                )
+
+            return {
+                "organization_id": oauth_state.organization_id,
+                "organization_slug": oauth_state.organization_slug,
+                "connection_status": "configured_unverified",
+                "expires_at": expires_at.isoformat(),
+                "granted_scopes": granted_scopes,
+                "secrets_exposed": False,
             }
-        )
-        access_token, refresh_token, expires_at, granted_scopes, token_type = self._parse_token_payload(token_payload, fallback_scopes=oauth_state.scopes)
-        if refresh_token is None:
-            raise MotiveConnectorError("Motive token response did not include a refresh credential", status=ConnectorStatus.FAILED, code="malformed_response")
-        self._credential_store_factory(oauth_state.organization_id).save_tokens(
-            organization_slug=oauth_state.organization_slug,
-            access_token=access_token,
-            refresh_token=refresh_token,
-            expires_at=expires_at,
-            granted_scopes=granted_scopes,
-            token_type=token_type,
-        )
-        return {
-            "organization_id": oauth_state.organization_id,
-            "organization_slug": oauth_state.organization_slug,
-            "connection_status": "configured_unverified",
-            "expires_at": expires_at.isoformat(),
-            "granted_scopes": granted_scopes,
-            "secrets_exposed": False,
-        }
+        except MotiveCredentialError as exc:
+            _log_callback_exception(
+                exception_class=exc.__class__.__name__,
+                failing_step=exc.failing_step or failing_step,
+                organization_id=locals().get("oauth_state", _OAuthStateMetadata("unknown", "unknown", "", "")).organization_id,
+                rollback_executed=exc.rollback_executed,
+            )
+            raise MotiveConnectorError(
+                str(exc),
+                status=ConnectorStatus.FAILED,
+                code="credential_persistence_failed",
+                failing_step=exc.failing_step or failing_step,
+                rollback_executed=exc.rollback_executed,
+            ) from exc
+        except MotiveConnectorError as exc:
+            _log_callback_exception(
+                exception_class=exc.__class__.__name__,
+                failing_step=exc.failing_step or failing_step,
+                organization_id=locals().get("oauth_state", _OAuthStateMetadata("unknown", "unknown", "", "")).organization_id,
+                rollback_executed=exc.rollback_executed,
+            )
+            raise
+        except Exception as exc:
+            _log_callback_exception(
+                exception_class=exc.__class__.__name__,
+                failing_step=failing_step,
+                organization_id=locals().get("oauth_state", _OAuthStateMetadata("unknown", "unknown", "", "")).organization_id,
+                rollback_executed=None,
+            )
+            raise MotiveConnectorError(
+                "Motive OAuth callback failed before credential persistence completed",
+                status=ConnectorStatus.FAILED,
+                code="callback_persistence_failed",
+                failing_step=failing_step,
+                rollback_executed=None,
+            ) from exc
 
     def access_token_for_request(self, organization_id: str) -> str:
         credential = self._credential_store_factory(organization_id).load_tokens()
@@ -187,21 +289,21 @@ class MotiveOAuthService:
 
     def _consume_state(self, state: str, *, expected_organization_id: str | None) -> _OAuthStateMetadata:
         if not state:
-            raise MotiveConnectorError("Motive OAuth state is missing", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_missing")
+            raise MotiveConnectorError("Motive OAuth state is missing", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_missing", failing_step="STATE FOUND")
         now = datetime.now(timezone.utc)
         with SessionLocal.begin() as session:
             oauth_state = session.query(MotiveOAuthState).filter_by(state=state).with_for_update().one_or_none()
             if oauth_state is None:
-                raise MotiveConnectorError("Motive OAuth state is invalid", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_missing")
+                raise MotiveConnectorError("Motive OAuth state is invalid", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_missing", failing_step="STATE FOUND")
             if expected_organization_id and oauth_state.organization_id != expected_organization_id:
-                raise MotiveConnectorError("Motive OAuth state organization mismatch", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_wrong_organization")
+                raise MotiveConnectorError("Motive OAuth state organization mismatch", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_wrong_organization", failing_step="STATE FOUND")
             if oauth_state.consumed_at is not None:
-                raise MotiveConnectorError("Motive OAuth state was already used", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_reused")
+                raise MotiveConnectorError("Motive OAuth state was already used", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_reused", failing_step="STATE FOUND")
             if _as_utc(oauth_state.expires_at) <= now:
-                raise MotiveConnectorError("Motive OAuth state expired", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_expired")
+                raise MotiveConnectorError("Motive OAuth state expired", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_expired", failing_step="STATE FOUND")
             organization = session.query(Organization).filter(Organization.id == oauth_state.organization_id).one_or_none()
             if organization is None:
-                raise MotiveConnectorError("Motive OAuth organization is missing", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="organization_missing")
+                raise MotiveConnectorError("Motive OAuth organization is missing", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="organization_missing", failing_step="ORG FOUND")
             metadata = _OAuthStateMetadata(
                 organization_id=oauth_state.organization_id,
                 organization_slug=organization.slug,
@@ -227,20 +329,20 @@ class MotiveOAuthService:
                     raise
                 self._sleep(_retry_delay(attempt))
             except httpx.TimeoutException as exc:
-                last_error = MotiveConnectorError("Motive OAuth token request timed out", status=ConnectorStatus.FAILED, retryable=True, code="timeout")
+                last_error = MotiveConnectorError("Motive OAuth token request timed out", status=ConnectorStatus.FAILED, retryable=True, code="timeout", failing_step="TOKEN RECEIVED")
                 if attempt == _max_attempts():
                     raise last_error from exc
                 self._sleep(_retry_delay(attempt))
             except httpx.HTTPError as exc:
-                last_error = MotiveConnectorError("Motive OAuth token request failed due to a network error", status=ConnectorStatus.FAILED, retryable=True, code="network_failure")
+                last_error = MotiveConnectorError("Motive OAuth token request failed due to a network error", status=ConnectorStatus.FAILED, retryable=True, code="network_failure", failing_step="TOKEN RECEIVED")
                 if attempt == _max_attempts():
                     raise last_error from exc
                 self._sleep(_retry_delay(attempt))
-        raise last_error or MotiveConnectorError("Motive OAuth token request failed", status=ConnectorStatus.FAILED)
+        raise last_error or MotiveConnectorError("Motive OAuth token request failed", status=ConnectorStatus.FAILED, failing_step="TOKEN RECEIVED")
 
     def _json_response(self, response: httpx.Response) -> dict[str, Any]:
         if response.status_code == 429:
-            raise MotiveConnectorError("Motive request was rate limited", status=ConnectorStatus.RATE_LIMITED, retryable=False, code="rate_limited")
+            raise MotiveConnectorError("Motive request was rate limited", status=ConnectorStatus.RATE_LIMITED, retryable=False, code="rate_limited", failing_step="TOKEN RECEIVED")
         payload: dict[str, Any] = {}
         if response.content:
             try:
@@ -249,16 +351,17 @@ class MotiveOAuthService:
                     payload = decoded
             except ValueError:
                 if response.status_code < 400:
-                    raise MotiveConnectorError("Motive returned invalid JSON", status=ConnectorStatus.FAILED, code="malformed_response")
+                    raise MotiveConnectorError("Motive returned invalid JSON", status=ConnectorStatus.FAILED, code="malformed_response", failing_step="TOKEN RECEIVED")
         provider_error = str(payload.get("error") or "")
         if provider_error == "invalid_grant":
-            raise MotiveConnectorError("Motive OAuth grant is invalid", status=ConnectorStatus.AUTHORIZATION_REQUIRED, retryable=False, code="invalid_grant")
+            raise MotiveConnectorError("Motive OAuth grant is invalid", status=ConnectorStatus.AUTHORIZATION_REQUIRED, retryable=False, code="invalid_grant", failing_step="TOKEN RECEIVED")
         if response.status_code in _REAUTH_CODES:
             raise MotiveConnectorError(
                 f"Motive authorization failed with HTTP {response.status_code}",
                 status=ConnectorStatus.AUTHORIZATION_REQUIRED,
                 retryable=False,
                 code=f"http_{response.status_code}",
+                failing_step="TOKEN RECEIVED",
             )
         if response.status_code >= 500:
             raise MotiveConnectorError(
@@ -266,6 +369,7 @@ class MotiveOAuthService:
                 status=ConnectorStatus.FAILED,
                 retryable=True,
                 code=f"http_{response.status_code}",
+                failing_step="TOKEN RECEIVED",
             )
         if response.status_code >= 400:
             raise MotiveConnectorError(
@@ -273,16 +377,17 @@ class MotiveOAuthService:
                 status=ConnectorStatus.FAILED,
                 retryable=False,
                 code=f"http_{response.status_code}",
+                failing_step="TOKEN RECEIVED",
             )
         if not payload:
-            raise MotiveConnectorError("Motive returned an empty response", status=ConnectorStatus.FAILED, code="malformed_response")
+            raise MotiveConnectorError("Motive returned an empty response", status=ConnectorStatus.FAILED, code="malformed_response", failing_step="TOKEN RECEIVED")
         return payload
 
     def _parse_token_payload(self, payload: dict[str, Any], *, fallback_scopes: str) -> tuple[str, str | None, datetime, str, str]:
         access_token = payload.get("access_token")
         refresh_token = payload.get("refresh_token")
         if not isinstance(access_token, str) or not access_token:
-            raise MotiveConnectorError("Motive token response did not include an access credential", status=ConnectorStatus.FAILED, code="malformed_response")
+            raise MotiveConnectorError("Motive token response did not include an access credential", status=ConnectorStatus.FAILED, code="malformed_response", failing_step="TOKEN RECEIVED")
         expires_in = int(payload.get("expires_in") or 7200)
         scopes = payload.get("scope") or payload.get("scopes") or fallback_scopes
         if isinstance(scopes, list):
@@ -558,6 +663,29 @@ def _max_attempts() -> int:
 
 def _retry_delay(attempt: int) -> float:
     return float(os.getenv("POLARIS_MOTIVE_RETRY_BASE_SECONDS", "0.25")) * attempt
+
+
+def _log_callback_step(step: str, **fields: object) -> None:
+    logger.info("MOTIVE OAUTH CALLBACK %s", step, extra={"motive_oauth_step": step, **fields})
+
+
+def _log_callback_exception(
+    *,
+    exception_class: str,
+    failing_step: str,
+    organization_id: str,
+    rollback_executed: bool | None,
+) -> None:
+    logger.info(
+        "MOTIVE OAUTH CALLBACK EXCEPTION",
+        extra={
+            "motive_oauth_step": "EXCEPTION",
+            "exception_class": exception_class,
+            "failing_step": failing_step,
+            "organization_id": organization_id,
+            "rollback_executed": rollback_executed,
+        },
+    )
 
 
 def _sanitize(message: str) -> str:
