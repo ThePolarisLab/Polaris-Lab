@@ -1,23 +1,36 @@
-"""Motive API-key connector shell for limited read-only verification."""
+"""Motive OAuth connector shell for limited read-only verification."""
 
 from __future__ import annotations
 
-import logging
 import os
+import secrets
 import time
 from collections.abc import Callable, Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 
 from app.connectors.base import BaseConnector
 from app.connectors.models import ConnectorHealth, ConnectorStatus, SyncResult
-from app.connectors.motive_credentials import MotiveCredentialError, MotiveCredentialStore
+from app.connectors.motive_credentials import MotiveCredentialError, MotiveCredentialStore, StoredMotiveCredential
+from app.database.database import SessionLocal
+from app.models.motive import MotiveOAuthState
+from app.organizations.models import Organization
 
+MOTIVE_AUTHORIZATION_URL = "https://gomotive.com/oauth/authorize"
+MOTIVE_TOKEN_URL = "https://gomotive.com/oauth/token"
 MOTIVE_API_BASE_URL = "https://api.gomotive.com"
-MOTIVE_VERIFICATION_ENDPOINT = "/v1/vehicles"
-MOTIVE_VERIFICATION_PARAMS = {"per_page": "1", "page_no": "1"}
+MOTIVE_VERIFICATION_ENDPOINT = "/v1/companies"
+MOTIVE_OAUTH_SCOPES = (
+    "companies.read",
+    "users.read",
+    "vehicles.read",
+    "utilization.vehicle_utilization",
+    "utilization.driver_utilization",
+    "ifta_reports.summary",
+)
 MOTIVE_RESOURCES = (
     "connection_verification",
     "vehicles",
@@ -27,7 +40,8 @@ MOTIVE_RESOURCES = (
     "ifta_summary",
 )
 _REAUTH_CODES = {401, 403}
-logger = logging.getLogger(__name__)
+_AUTHORIZATION_CODE_TTL_MINUTES = 10
+_TOKEN_REFRESH_SKEW_SECONDS = 300
 
 
 class MotiveConnectorError(RuntimeError):
@@ -40,38 +54,278 @@ class MotiveConnectorError(RuntimeError):
         self.code = code or status.value
 
 
+class MotiveOAuthService:
+    """Organization-scoped Motive OAuth orchestration."""
+
+    def __init__(
+        self,
+        *,
+        http_client: httpx.Client | None = None,
+        credential_store_factory: Callable[[str], MotiveCredentialStore] = MotiveCredentialStore,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self._client = http_client
+        self._credential_store_factory = credential_store_factory
+        self._sleep = sleep
+
+    def create_authorization_url(self, *, organization_id: str, identity_id: str, organization_slug: str) -> dict[str, Any]:
+        self.validate_oauth_configuration()
+        state = secrets.token_urlsafe(32)
+        nonce = secrets.token_urlsafe(16)
+        now = datetime.now(timezone.utc)
+        scopes = " ".join(MOTIVE_OAUTH_SCOPES)
+        with SessionLocal.begin() as session:
+            session.add(
+                MotiveOAuthState(
+                    state=state,
+                    organization_id=organization_id,
+                    identity_id=identity_id,
+                    nonce=nonce,
+                    redirect_uri=self.redirect_uri(),
+                    scopes=scopes,
+                    created_at=now,
+                    expires_at=now + timedelta(minutes=_AUTHORIZATION_CODE_TTL_MINUTES),
+                )
+            )
+        params = {
+            "client_id": self.client_id(),
+            "redirect_uri": self.redirect_uri(),
+            "response_type": "code",
+            "scope": scopes,
+            "state": state,
+        }
+        return {
+            "authorization_url": f"{MOTIVE_AUTHORIZATION_URL}?{urlencode(params)}",
+            "expires_at": (now + timedelta(minutes=_AUTHORIZATION_CODE_TTL_MINUTES)).isoformat(),
+            "organization_id": organization_id,
+            "organization_slug": organization_slug,
+            "requested_scopes": list(MOTIVE_OAUTH_SCOPES),
+            "secrets_exposed": False,
+        }
+
+    def complete_authorization(self, *, state: str, code: str, expected_organization_id: str | None = None) -> dict[str, Any]:
+        oauth_state, organization_slug = self._consume_state(state, expected_organization_id=expected_organization_id)
+        token_payload = self._token_request(
+            {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": oauth_state.redirect_uri,
+                "client_id": self.client_id(),
+                "client_secret": self.client_secret(),
+            }
+        )
+        access_token, refresh_token, expires_at, granted_scopes, token_type = self._parse_token_payload(token_payload, fallback_scopes=oauth_state.scopes)
+        self._credential_store_factory(oauth_state.organization_id).save_tokens(
+            organization_slug=organization_slug,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_at=expires_at,
+            granted_scopes=granted_scopes,
+            token_type=token_type,
+        )
+        return {
+            "organization_id": oauth_state.organization_id,
+            "organization_slug": organization_slug,
+            "connection_status": "configured_unverified",
+            "expires_at": expires_at.isoformat(),
+            "granted_scopes": granted_scopes,
+            "secrets_exposed": False,
+        }
+
+    def access_token_for_request(self, organization_id: str) -> str:
+        credential = self._credential_store_factory(organization_id).load_tokens()
+        if not _expires_soon(credential.expires_at):
+            return credential.access_token
+        return self.refresh_access_token(organization_id)
+
+    def refresh_access_token(self, organization_id: str) -> str:
+        store = self._credential_store_factory(organization_id)
+        credential = store.load_tokens()
+        try:
+            token_payload = self._token_request(
+                {
+                    "grant_type": "refresh_token",
+                    "refresh_token": credential.refresh_token,
+                    "client_id": self.client_id(),
+                    "client_secret": self.client_secret(),
+                }
+            )
+        except MotiveConnectorError as exc:
+            if exc.code == "invalid_grant" or exc.status == ConnectorStatus.AUTHORIZATION_REQUIRED:
+                store.record_failure(
+                    status="authorization_required",
+                    error_code=exc.code,
+                    error_message_sanitized=str(exc),
+                    authorization_required=True,
+                )
+            raise
+        access_token, refresh_token, expires_at, granted_scopes, token_type = self._parse_token_payload(
+            token_payload,
+            fallback_scopes=credential.granted_scopes,
+        )
+        store.rotate_tokens(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_at=expires_at,
+            granted_scopes=granted_scopes,
+            token_type=token_type,
+        )
+        return access_token
+
+    def _consume_state(self, state: str, *, expected_organization_id: str | None) -> tuple[MotiveOAuthState, str]:
+        if not state:
+            raise MotiveConnectorError("Motive OAuth state is missing", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_missing")
+        now = datetime.now(timezone.utc)
+        with SessionLocal.begin() as session:
+            oauth_state = session.query(MotiveOAuthState).filter_by(state=state).with_for_update().one_or_none()
+            if oauth_state is None:
+                raise MotiveConnectorError("Motive OAuth state is invalid", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_missing")
+            if expected_organization_id and oauth_state.organization_id != expected_organization_id:
+                raise MotiveConnectorError("Motive OAuth state organization mismatch", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_wrong_organization")
+            if oauth_state.consumed_at is not None:
+                raise MotiveConnectorError("Motive OAuth state was already used", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_reused")
+            if oauth_state.expires_at <= now:
+                raise MotiveConnectorError("Motive OAuth state expired", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="state_expired")
+            organization = session.query(Organization).filter(Organization.id == oauth_state.organization_id).one_or_none()
+            if organization is None:
+                raise MotiveConnectorError("Motive OAuth organization is missing", status=ConnectorStatus.AUTHORIZATION_REQUIRED, code="organization_missing")
+            oauth_state.consumed_at = now
+            return oauth_state, organization.slug
+
+    def _token_request(self, data: dict[str, str]) -> dict[str, Any]:
+        last_error: MotiveConnectorError | None = None
+        for attempt in range(1, _max_attempts() + 1):
+            try:
+                response = self._http().post(
+                    MOTIVE_TOKEN_URL,
+                    data=data,
+                    headers={"Accept": "application/json"},
+                )
+                return self._json_response(response, token_endpoint=True)
+            except MotiveConnectorError as exc:
+                last_error = exc
+                if not exc.retryable or attempt == _max_attempts():
+                    raise
+                self._sleep(_retry_delay(attempt))
+            except httpx.TimeoutException as exc:
+                last_error = MotiveConnectorError("Motive OAuth token request timed out", status=ConnectorStatus.FAILED, retryable=True, code="timeout")
+                if attempt == _max_attempts():
+                    raise last_error from exc
+                self._sleep(_retry_delay(attempt))
+            except httpx.HTTPError as exc:
+                last_error = MotiveConnectorError("Motive OAuth token request failed due to a network error", status=ConnectorStatus.FAILED, retryable=True, code="network_failure")
+                if attempt == _max_attempts():
+                    raise last_error from exc
+                self._sleep(_retry_delay(attempt))
+        raise last_error or MotiveConnectorError("Motive OAuth token request failed", status=ConnectorStatus.FAILED)
+
+    def _json_response(self, response: httpx.Response, *, token_endpoint: bool = False) -> dict[str, Any]:
+        if response.status_code == 429:
+            raise MotiveConnectorError("Motive request was rate limited", status=ConnectorStatus.RATE_LIMITED, retryable=False, code="rate_limited")
+        payload: dict[str, Any] = {}
+        if response.content:
+            try:
+                decoded = response.json()
+                if isinstance(decoded, dict):
+                    payload = decoded
+            except ValueError:
+                if response.status_code < 400:
+                    raise MotiveConnectorError("Motive returned invalid JSON", status=ConnectorStatus.FAILED, code="malformed_response")
+        provider_error = str(payload.get("error") or "")
+        if provider_error == "invalid_grant":
+            raise MotiveConnectorError("Motive OAuth grant is invalid", status=ConnectorStatus.AUTHORIZATION_REQUIRED, retryable=False, code="invalid_grant")
+        if response.status_code in _REAUTH_CODES:
+            raise MotiveConnectorError(
+                f"Motive authorization failed with HTTP {response.status_code}",
+                status=ConnectorStatus.AUTHORIZATION_REQUIRED,
+                retryable=False,
+                code=f"http_{response.status_code}",
+            )
+        if response.status_code >= 500:
+            raise MotiveConnectorError(
+                f"Motive provider returned HTTP {response.status_code}",
+                status=ConnectorStatus.FAILED,
+                retryable=True,
+                code=f"http_{response.status_code}",
+            )
+        if response.status_code >= 400:
+            raise MotiveConnectorError(
+                f"Motive request failed with HTTP {response.status_code}",
+                status=ConnectorStatus.FAILED,
+                retryable=False,
+                code=f"http_{response.status_code}",
+            )
+        if not payload:
+            raise MotiveConnectorError("Motive returned an empty response", status=ConnectorStatus.FAILED, code="malformed_response")
+        return payload
+
+    def _parse_token_payload(self, payload: dict[str, Any], *, fallback_scopes: str) -> tuple[str, str | None, datetime, str, str]:
+        access_token = payload.get("access_token")
+        refresh_token = payload.get("refresh_token")
+        if not isinstance(access_token, str) or not access_token:
+            raise MotiveConnectorError("Motive token response did not include an access credential", status=ConnectorStatus.FAILED, code="malformed_response")
+        expires_in = int(payload.get("expires_in") or 7200)
+        scopes = payload.get("scope") or payload.get("scopes") or fallback_scopes
+        if isinstance(scopes, list):
+            scopes = " ".join(str(scope) for scope in scopes)
+        token_type = str(payload.get("token_type") or "Bearer")
+        return access_token, refresh_token if isinstance(refresh_token, str) else None, datetime.now(timezone.utc) + timedelta(seconds=expires_in), str(scopes), token_type
+
+    def _http(self) -> httpx.Client:
+        if self._client is None:
+            self._client = httpx.Client(timeout=_timeout_seconds())
+        return self._client
+
+    @staticmethod
+    def validate_oauth_configuration() -> None:
+        missing = [name for name in ("MOTIVE_CLIENT_ID", "MOTIVE_CLIENT_SECRET", "MOTIVE_REDIRECT_URI") if not os.getenv(name)]
+        if missing:
+            raise MotiveConnectorError("Motive OAuth configuration is incomplete", status=ConnectorStatus.NOT_CONFIGURED, code="oauth_configuration_missing")
+        if not os.getenv("POLARIS_MOTIVE_TOKEN_ENCRYPTION_KEY") and not os.getenv("POLARIS_QBO_TOKEN_ENCRYPTION_KEY"):
+            raise MotiveConnectorError("Motive token encryption is not configured", status=ConnectorStatus.NOT_CONFIGURED, code="encryption_not_configured")
+
+    @staticmethod
+    def client_id() -> str:
+        return os.environ["MOTIVE_CLIENT_ID"]
+
+    @staticmethod
+    def client_secret() -> str:
+        return os.environ["MOTIVE_CLIENT_SECRET"]
+
+    @staticmethod
+    def redirect_uri() -> str:
+        return os.environ["MOTIVE_REDIRECT_URI"]
+
+
 class MotiveConnector(BaseConnector):
-    """Expose safe Motive status and one narrow read-only verification call."""
+    """Expose safe Motive status and one narrow OAuth read-only verification call."""
 
     def __init__(
         self,
         *,
         http_client: httpx.Client | None = None,
         credential_store: MotiveCredentialStore | None = None,
+        oauth_service: MotiveOAuthService | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         super().__init__(name="motive")
         self._client = http_client
         self._credential_store = credential_store
         self._sleep = sleep
+        self._oauth_service = oauth_service or MotiveOAuthService(http_client=http_client, sleep=sleep)
 
     def validate_configuration(self) -> None:
-        if not os.getenv("POLARIS_MOTIVE_TOKEN_ENCRYPTION_KEY") and not os.getenv("POLARIS_QBO_TOKEN_ENCRYPTION_KEY"):
-            raise MotiveConnectorError(
-                "Motive token encryption is not configured",
-                status=ConnectorStatus.NOT_CONFIGURED,
-                code="encryption_not_configured",
-            )
+        MotiveOAuthService.validate_oauth_configuration()
         try:
-            metadata = self._store().metadata(environment_mode=self._environment_mode())
+            metadata = self._store().metadata()
         except MotiveCredentialError as exc:
             raise MotiveConnectorError(str(exc), status=ConnectorStatus.NOT_CONFIGURED) from exc
-        if not metadata.get("key_present"):
-            raise MotiveConnectorError("Motive API-key credential is not configured", status=ConnectorStatus.NOT_CONFIGURED)
+        if not metadata.get("token_present"):
+            raise MotiveConnectorError("Motive OAuth credential is not configured", status=ConnectorStatus.NOT_CONFIGURED)
 
     def authenticate(self) -> None:
         self.validate_configuration()
-        self._store().load_api_key(environment_mode=self._environment_mode())
+        self._oauth_service.access_token_for_request(self._store().organization_id)
 
     def health(self) -> ConnectorHealth:
         details = self.safe_status()
@@ -100,19 +354,19 @@ class MotiveConnector(BaseConnector):
             records_written=0,
             events_published=0,
             success=False,
-            errors=["Motive broad synchronization is deferred; use verification only."],
+            errors=["Motive broad synchronization is deferred; use OAuth verification only."],
         )
 
     def disconnect(self) -> None:
-        self._store().delete(environment_mode=self._environment_mode())
+        self._store().delete()
 
     def safe_status(self) -> dict[str, Any]:
         store = self._store_or_none()
-        metadata = store.metadata(environment_mode=self._environment_mode()) if store else {
+        metadata = store.metadata() if store else {
             "provider": "motive",
-            "authentication_method": "api_key",
+            "authentication_method": "oauth2",
             "connection_status": "not_configured",
-            "key_present": False,
+            "token_present": False,
             "authorization_required": True,
             "secrets_exposed": False,
         }
@@ -121,109 +375,74 @@ class MotiveConnector(BaseConnector):
             "read_only": True,
             "production_sync_enabled": False,
             "verification_endpoint": MOTIVE_VERIFICATION_ENDPOINT,
-            "verified_resources": ["vehicles", "vehicle_utilization", "driver_utilization", "ifta_summary"],
+            "verified_resources": ["companies", "vehicles", "vehicle_utilization", "driver_utilization", "ifta_summary"],
             "deferred_resources": ["driver_list", "hos", "safety", "dvir", "fault_codes", "trips", "maintenance", "fuel_purchases", "webhooks"],
             "secrets_exposed": False,
         }
 
     def verify_connection(self) -> dict[str, Any]:
-        started = datetime.now(timezone.utc)
-        environment_mode = self._environment_mode()
         try:
-            credential = self._store().load_api_key(environment_mode=environment_mode)
-            payload = self._request_verification_page(credential.api_key)
-            records_read = _verification_record_count(payload)
+            access_token = self._oauth_service.access_token_for_request(self._store().organization_id)
+            payload = self._request_company_details(access_token)
+            company = _company_metadata(payload)
             verified_at = datetime.now(timezone.utc)
-            self._store().record_verification_success(environment_mode=environment_mode, verified_at=verified_at)
+            self._store().record_verification_success(
+                verified_at=verified_at,
+                provider_company_id=company.get("provider_company_id"),
+                provider_company_name=company.get("provider_company_name"),
+            )
             return {
                 "connector": self.name,
                 "status": "connected",
                 "verified_at": verified_at.isoformat(),
                 "endpoint": MOTIVE_VERIFICATION_ENDPOINT,
-                "request": {"method": "GET", "path": MOTIVE_VERIFICATION_ENDPOINT, "params": MOTIVE_VERIFICATION_PARAMS},
-                "records_read": records_read,
+                "request": {"method": "GET", "path": MOTIVE_VERIFICATION_ENDPOINT, "params": {}},
+                "records_read": 1 if company else 0,
                 "records_written": 0,
+                "provider_company_id": company.get("provider_company_id"),
+                "provider_company_name": company.get("provider_company_name"),
                 "production_certified": False,
                 "secrets_exposed": False,
             }
         except MotiveConnectorError as exc:
-            self._store_or_none() and self._store().record_verification_failure(
-                environment_mode=environment_mode,
-                status=exc.status.value,
-                error_code=exc.code,
-                error_message_sanitized=str(exc),
-                authorization_required=exc.status in {ConnectorStatus.AUTHORIZATION_REQUIRED, ConnectorStatus.REAUTHORIZATION_REQUIRED},
-            )
+            store = self._store_or_none()
+            if store:
+                store.record_failure(
+                    status=exc.status.value,
+                    error_code=exc.code,
+                    error_message_sanitized=str(exc),
+                    authorization_required=exc.status == ConnectorStatus.AUTHORIZATION_REQUIRED,
+                )
             raise
-        finally:
-            self._record_verification_history(started_at=started)
 
-    def _request_verification_page(self, api_key: str) -> dict[str, Any]:
+    def _request_company_details(self, access_token: str) -> dict[str, Any]:
         last_error: MotiveConnectorError | None = None
-        for attempt in range(1, self._max_attempts() + 1):
+        for attempt in range(1, _max_attempts() + 1):
             try:
                 response = self._http().get(
                     f"{self._base_url()}{MOTIVE_VERIFICATION_ENDPOINT}",
-                    params=MOTIVE_VERIFICATION_PARAMS,
-                    headers={"Accept": "application/json", "X-API-Key": api_key},
+                    headers={"Accept": "application/json", "Authorization": f"Bearer {access_token}"},
                 )
                 return self._json_response(response)
             except MotiveConnectorError as exc:
                 last_error = exc
-                if not exc.retryable or attempt == self._max_attempts():
+                if not exc.retryable or attempt == _max_attempts():
                     raise
-                self._sleep(self._retry_delay(attempt))
+                self._sleep(_retry_delay(attempt))
             except httpx.TimeoutException as exc:
                 last_error = MotiveConnectorError("Motive verification timed out", status=ConnectorStatus.FAILED, retryable=True, code="timeout")
-                if attempt == self._max_attempts():
+                if attempt == _max_attempts():
                     raise last_error from exc
-                self._sleep(self._retry_delay(attempt))
+                self._sleep(_retry_delay(attempt))
             except httpx.HTTPError as exc:
                 last_error = MotiveConnectorError("Motive verification failed due to a network error", status=ConnectorStatus.FAILED, retryable=True, code="network_failure")
-                if attempt == self._max_attempts():
+                if attempt == _max_attempts():
                     raise last_error from exc
-                self._sleep(self._retry_delay(attempt))
+                self._sleep(_retry_delay(attempt))
         raise last_error or MotiveConnectorError("Motive verification failed", status=ConnectorStatus.FAILED)
 
     def _json_response(self, response: httpx.Response) -> dict[str, Any]:
-        if response.status_code == 429:
-            retry_after = response.headers.get("Retry-After")
-            message = "Motive verification was rate limited"
-            if retry_after:
-                message += "; provider returned Retry-After"
-            raise MotiveConnectorError(message, status=ConnectorStatus.RATE_LIMITED, retryable=False, code="rate_limited")
-        if response.status_code in _REAUTH_CODES:
-            raise MotiveConnectorError(
-                f"Motive authorization failed with HTTP {response.status_code}",
-                status=ConnectorStatus.AUTHORIZATION_REQUIRED,
-                retryable=False,
-                code=f"http_{response.status_code}",
-            )
-        if response.status_code >= 500:
-            raise MotiveConnectorError(
-                f"Motive provider returned HTTP {response.status_code}",
-                status=ConnectorStatus.FAILED,
-                retryable=True,
-                code=f"http_{response.status_code}",
-            )
-        if response.status_code >= 400:
-            raise MotiveConnectorError(
-                f"Motive verification failed with HTTP {response.status_code}",
-                status=ConnectorStatus.FAILED,
-                retryable=False,
-                code=f"http_{response.status_code}",
-            )
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise MotiveConnectorError("Motive verification returned invalid JSON", status=ConnectorStatus.FAILED, code="malformed_response") from exc
-        if not isinstance(payload, dict):
-            raise MotiveConnectorError("Motive verification returned an unexpected response", status=ConnectorStatus.FAILED, code="malformed_response")
-        return payload
-
-    def _record_verification_history(self, *, started_at: datetime) -> None:
-        # Verification history persistence is handled by the API service layer once request context is available.
-        return None
+        return MotiveOAuthService(http_client=self._http())._json_response(response)
 
     def _store(self) -> MotiveCredentialStore:
         if self._credential_store is None:
@@ -235,28 +454,12 @@ class MotiveConnector(BaseConnector):
 
     def _http(self) -> httpx.Client:
         if self._client is None:
-            self._client = httpx.Client(timeout=self._timeout_seconds())
+            self._client = httpx.Client(timeout=_timeout_seconds())
         return self._client
 
     @staticmethod
     def _base_url() -> str:
         return os.getenv("POLARIS_MOTIVE_API_BASE_URL", MOTIVE_API_BASE_URL).rstrip("/")
-
-    @staticmethod
-    def _environment_mode() -> str:
-        return os.getenv("POLARIS_MOTIVE_ENVIRONMENT_MODE", "test").strip().lower() or "test"
-
-    @staticmethod
-    def _timeout_seconds() -> float:
-        return float(os.getenv("POLARIS_MOTIVE_REQUEST_TIMEOUT_SECONDS", "10"))
-
-    @staticmethod
-    def _max_attempts() -> int:
-        return min(max(int(os.getenv("POLARIS_MOTIVE_MAX_ATTEMPTS", "2")), 1), 2)
-
-    @staticmethod
-    def _retry_delay(attempt: int) -> float:
-        return float(os.getenv("POLARIS_MOTIVE_RETRY_BASE_SECONDS", "0.25")) * attempt
 
 
 def _connector_status(value: str) -> ConnectorStatus:
@@ -275,11 +478,11 @@ def _connector_status(value: str) -> ConnectorStatus:
 
 def _status_message(value: str) -> str:
     if value == "not_configured":
-        return "Motive API-key credential is not configured."
+        return "Motive OAuth credential is not configured."
     if value == "configured_unverified":
-        return "Motive API-key credential is configured but not verified."
+        return "Motive OAuth credential is configured but not verified."
     if value == "connected":
-        return "Motive API-key credential passed limited read-only verification."
+        return "Motive OAuth credential passed limited read-only verification."
     if value == "rate_limited":
         return "Motive verification is rate limited; retry timing is not assumed."
     if value == "authorization_required":
@@ -287,12 +490,26 @@ def _status_message(value: str) -> str:
     return "Motive connector status is available."
 
 
-def _verification_record_count(payload: dict[str, Any]) -> int:
-    for key in ("vehicles", "data"):
-        value = payload.get(key)
-        if isinstance(value, list):
-            return len(value)
-    return 0
+def _company_metadata(payload: dict[str, Any]) -> dict[str, str]:
+    company: Any = payload.get("company") or payload.get("data") or payload
+    if isinstance(company, list):
+        company = company[0] if company else {}
+    if not isinstance(company, dict):
+        return {}
+    provider_company_id = company.get("id") or company.get("company_id")
+    provider_company_name = company.get("name") or company.get("company_name")
+    result: dict[str, str] = {}
+    if provider_company_id is not None:
+        result["provider_company_id"] = str(provider_company_id)
+    if isinstance(provider_company_name, str) and provider_company_name:
+        result["provider_company_name"] = provider_company_name
+    return result
+
+
+def _expires_soon(expires_at: datetime) -> bool:
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at <= datetime.now(timezone.utc) + timedelta(seconds=_TOKEN_REFRESH_SKEW_SECONDS)
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -304,9 +521,21 @@ def _parse_datetime(value: Any) -> datetime | None:
         return None
 
 
+def _timeout_seconds() -> float:
+    return float(os.getenv("POLARIS_MOTIVE_REQUEST_TIMEOUT_SECONDS", "10"))
+
+
+def _max_attempts() -> int:
+    return min(max(int(os.getenv("POLARIS_MOTIVE_MAX_ATTEMPTS", "2")), 1), 2)
+
+
+def _retry_delay(attempt: int) -> float:
+    return float(os.getenv("POLARIS_MOTIVE_RETRY_BASE_SECONDS", "0.25")) * attempt
+
+
 def _sanitize(message: str) -> str:
     sanitized = " ".join(str(message).split())
-    for marker in ("x-api-key", "api_key", "apikey", "authorization", "token", "secret", "motive_api_key"):
+    for marker in ("access_token", "refresh_token", "authorization", "bearer", "client_secret", "code", "token", "secret"):
         sanitized = sanitized.replace(marker, "credential")
         sanitized = sanitized.replace(marker.upper(), "CREDENTIAL")
     return sanitized[:500]
