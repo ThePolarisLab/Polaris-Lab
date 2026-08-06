@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
+from app.connectors.models import ConnectorStatus
 from app.connectors.motive import (
     MOTIVE_AUTHORIZATION_URL,
     MOTIVE_OAUTH_SCOPES,
@@ -43,10 +44,10 @@ def _connector(organization_id: str) -> MotiveConnector:
 def _frontend_base_url() -> str:
     base_url = os.getenv("POLARIS_FRONTEND_URL")
     if not base_url:
-        raise MotiveConnectorError("Motive frontend return URL is not configured", status=ConnectorStatus.NOT_CONFIGURED, code="frontend_url_missing")  # type: ignore[name-defined]
+        raise MotiveConnectorError("Motive frontend return URL is not configured", status=ConnectorStatus.NOT_CONFIGURED, code="frontend_url_missing")
     parsed = urlparse(base_url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or base_url != base_url.strip():
-        raise MotiveConnectorError("Motive frontend return URL is invalid", status=ConnectorStatus.NOT_CONFIGURED, code="frontend_url_invalid")  # type: ignore[name-defined]
+        raise MotiveConnectorError("Motive frontend return URL is invalid", status=ConnectorStatus.NOT_CONFIGURED, code="frontend_url_invalid")
     return base_url.rstrip("/")
 
 
