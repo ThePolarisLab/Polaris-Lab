@@ -224,6 +224,62 @@ def test_callback_exchange_stores_oauth_tokens_without_secret_leakage(motive_db)
     assert MotiveCredentialStore("org-a").metadata()["authentication_method"] == "oauth2"
 
 
+def test_callback_persistence_logs_steps_and_status_reads_same_row(motive_db, caplog):
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"access_token": FAKE_ACCESS_TOKEN, "refresh_token": FAKE_REFRESH_TOKEN, "expires_in": 7200, "token_type": "Bearer", "scope": " ".join(MOTIVE_OAUTH_SCOPES)})
+
+    service = MotiveOAuthService(http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+    result_url = service.create_authorization_url(organization_id="org-a", identity_id="identity-a", organization_slug="org-a")["authorization_url"]
+    state = _state_from_authorization_url(result_url)
+
+    with caplog.at_level("INFO"):
+        result = service.complete_authorization(state=state, code="fake-auth-code")
+
+    metadata = MotiveCredentialStore("org-a").metadata()
+    assert result["organization_id"] == "org-a"
+    assert metadata["organization_id"] == "org-a"
+    assert metadata["organization_slug"] == "org-a"
+    assert metadata["token_present"] is True
+    assert metadata["connection_status"] == "configured_unverified"
+    with motive_db() as session:
+        row = session.query(MotiveCredential).filter_by(organization_id="org-a", authentication_method="oauth2").one()
+        assert row.organization_id == "org-a"
+        assert row.organization_slug == "org-a"
+        assert row.connection_status == "configured_unverified"
+
+    for step in ("STATE FOUND", "TOKEN RECEIVED", "ORG FOUND", "CREDENTIAL CREATED", "ENCRYPTION COMPLETE", "DB COMMIT SUCCESS", "VERIFY SUCCESS"):
+        assert f"MOTIVE OAUTH CALLBACK {step}" in caplog.text
+    assert FAKE_ACCESS_TOKEN not in caplog.text
+    assert FAKE_REFRESH_TOKEN not in caplog.text
+    assert "fake-client-secret" not in caplog.text
+    assert "fake-auth-code" not in caplog.text
+    assert state not in caplog.text
+
+
+def test_callback_missing_refresh_token_logs_failing_step_without_persisting(motive_db, caplog):
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"access_token": FAKE_ACCESS_TOKEN, "expires_in": 7200, "token_type": "Bearer"})
+
+    service = MotiveOAuthService(http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+    result_url = service.create_authorization_url(organization_id="org-a", identity_id="identity-a", organization_slug="org-a")["authorization_url"]
+    state = _state_from_authorization_url(result_url)
+
+    with caplog.at_level("INFO"):
+        with pytest.raises(MotiveConnectorError) as exc:
+            service.complete_authorization(state=state, code="fake-auth-code")
+
+    assert exc.value.code == "malformed_response"
+    assert exc.value.failing_step == "TOKEN RECEIVED"
+    assert exc.value.rollback_executed is False
+    assert MotiveCredentialStore("org-a").metadata()["token_present"] is False
+    assert "MOTIVE OAUTH CALLBACK TOKEN RECEIVED" in caplog.text
+    assert "MOTIVE OAUTH CALLBACK EXCEPTION" in caplog.text
+    assert FAKE_ACCESS_TOKEN not in caplog.text
+    assert "fake-client-secret" not in caplog.text
+    assert "fake-auth-code" not in caplog.text
+    assert state not in caplog.text
+
+
 def test_refresh_rotation_and_invalid_grant_handling(motive_db):
     _save_tokens(expires_at=datetime.now(timezone.utc) - timedelta(seconds=1))
     calls = []
