@@ -28,6 +28,7 @@ from app.models.motive import (  # noqa: F401
     MotiveDriverRecord,
     MotiveDriverUtilizationRecord,
     MotiveIftaSummaryRecord,
+    MotiveOAuthState,
     MotiveSyncCheckpoint,
     MotiveSyncHistory,
     MotiveVehicleRecord,
