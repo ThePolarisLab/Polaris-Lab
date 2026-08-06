@@ -66,6 +66,7 @@ _SAFE_FIELD_NAMES = {
     "refresh_token_encrypted",
     "refresh_token_received",
     "response_keys",
+    "result",
     "rollback_executed",
     "state_received",
     "status_endpoint_reads_same_row",
@@ -139,6 +140,8 @@ def _append_json_diagnostic_fields(record: logging.LogRecord, base_message: str)
 
 def _append_logfmt_diagnostic_fields(record: logging.LogRecord, base_message: str) -> None:
     fields = _safe_extra_fields(record)
+    if "motive_oauth_step" in fields:
+        fields["step"] = _normalize_step(fields.pop("motive_oauth_step"))
     if fields and " step=" not in base_message:
         rendered_fields = " ".join(f"{key}={_logfmt_value(value)}" for key, value in sorted(fields.items()))
         record.msg = f"{base_message} {rendered_fields}"
@@ -180,6 +183,10 @@ def _logfmt_value(value: Any) -> str:
         return quote(json.dumps(value, sort_keys=True, default=str), safe="[]{}:,_-.\"")
     text = str(value)
     return quote(text, safe="[]{}:,_-./")
+
+
+def _normalize_step(value: Any) -> str:
+    return str(value).strip().upper().replace(" ", "_")
 
 
 def _redact_access_log_record(record: logging.LogRecord) -> None:
