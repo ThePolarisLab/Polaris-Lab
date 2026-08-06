@@ -19,8 +19,38 @@ Runtime configuration uses environment variables only:
 - `MOTIVE_CLIENT_ID`
 - `MOTIVE_CLIENT_SECRET`
 - `MOTIVE_REDIRECT_URI`
+- `POLARIS_FRONTEND_URL`
 
-The Motive client secret, authorization codes, access tokens, refresh tokens, and authorization headers must never be logged, returned, committed, or documented with real values. Access and refresh tokens are encrypted in tenant-owned credential storage.
+The Motive client secret, authorization codes, access tokens, refresh tokens, OAuth state values, and authorization headers must never be logged, returned, committed, or documented with real values. Access and refresh tokens are encrypted in tenant-owned credential storage.
+
+## Production Hosts
+
+- Frontend: `https://polaris-executive.onrender.com`
+- Backend API: `https://polaris-executive-api.onrender.com`
+
+The Motive OAuth callback must reach FastAPI on the backend API host, not the React frontend host.
+
+## Redirect URI
+
+`MOTIVE_REDIRECT_URI` must exactly match the Success Redirect URI configured in the Motive Developer Portal. The canonical production value is:
+
+```text
+https://polaris-executive-api.onrender.com/api/v1/motive/oauth/callback
+```
+
+The FastAPI route is:
+
+```text
+GET /api/v1/motive/oauth/callback
+```
+
+The backend stores the exact redirect URI used to issue the OAuth state and reuses that stored value during token exchange. It does not normalize trailing slashes or substitute a later environment value after state issuance.
+
+After callback processing, the backend redirects the user to the frontend connector page with hash routing:
+
+```text
+https://polaris-executive.onrender.com/#executive/connectors?motive=<status>
+```
 
 ## Verification Boundary
 
@@ -33,14 +63,6 @@ Authorization: Bearer <access token>
 ```
 
 This proves only OAuth token usability and endpoint reachability. It does not certify production data availability, completeness, rate-limit behavior, broad synchronization readiness, or KPI readiness.
-
-## Redirect URI
-
-`MOTIVE_REDIRECT_URI` must exactly match the URI configured in the Motive Developer Portal. Production should use the canonical API host and callback route:
-
-```text
-https://<canonical-api-host>/api/v1/motive/callback
-```
 
 ## Deferred
 
