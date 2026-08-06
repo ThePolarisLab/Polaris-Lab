@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
@@ -11,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.connectors.motive import MOTIVE_OAUTH_SCOPES, MOTIVE_VERIFICATION_ENDPOINT, MotiveConnector, MotiveConnectorError, MotiveOAuthService
 from app.connectors.motive_credentials import MotiveCredentialStore
+from app.core.logging import OutlookDiagnosticFilter
 from app.database.database import Base
 from app.identity.models import Identity
 from app.models.motive import MotiveCredential, MotiveOAuthState, MotiveSyncCheckpoint, MotiveSyncHistory, MotiveVehicleRecord
@@ -48,6 +50,23 @@ def motive_db(monkeypatch, tmp_path):
         session.add(Organization(id="org-b", slug="org-b", display_name="Org B"))
         session.add(Identity(id="identity-a", email="a@example.com", display_name="User A"))
     return TestingSession
+
+
+@pytest.fixture()
+def motive_diagnostic_filter():
+    diagnostic_filter = OutlookDiagnosticFilter()
+    loggers = [
+        logging.getLogger("app.api.motive"),
+        logging.getLogger("app.connectors.motive"),
+        logging.getLogger("app.connectors.motive_credentials"),
+    ]
+    for logger in loggers:
+        logger.addFilter(diagnostic_filter)
+    try:
+        yield
+    finally:
+        for logger in loggers:
+            logger.removeFilter(diagnostic_filter)
 
 
 def _save_tokens(organization_id: str = "org-a", *, expires_at: datetime | None = None) -> None:
@@ -138,6 +157,33 @@ def test_frontend_hash_redirects_for_callback_outcomes(monkeypatch):
     assert "/executive/connectors" not in success.headers["location"].replace("/#executive/connectors", "")
 
 
+def test_callback_start_log_is_render_searchable_and_preserves_internal_code_state(monkeypatch, caplog, motive_diagnostic_filter):
+    from app.api import motive as motive_api
+
+    captured = {}
+
+    class FakeOAuthService:
+        def complete_authorization(self, *, code: str, state: str):
+            captured["code"] = code
+            captured["state"] = state
+            return {"organization_id": "org-a", "connection_status": "configured_unverified"}
+
+    monkeypatch.setenv("POLARIS_FRONTEND_URL", FRONTEND_URL)
+    monkeypatch.setattr(motive_api, "MotiveOAuthService", lambda: FakeOAuthService())
+
+    with caplog.at_level(logging.INFO):
+        motive_api.motive_callback(code="fake-auth-code", state="fake-oauth-state")
+
+    rendered = "\n".join(record.getMessage() for record in caplog.records)
+    assert captured == {"code": "fake-auth-code", "state": "fake-oauth-state"}
+    assert "MOTIVE OAUTH CALLBACK" in rendered
+    assert "step=CALLBACK_START" in rendered
+    assert "code_received=true" in rendered
+    assert "state_received=true" in rendered
+    assert "fake-auth-code" not in rendered
+    assert "fake-oauth-state" not in rendered
+
+
 def test_missing_redirect_or_frontend_configuration_fails_safely(monkeypatch, motive_db):
     from app.api import motive as motive_api
 
@@ -224,7 +270,7 @@ def test_callback_exchange_stores_oauth_tokens_without_secret_leakage(motive_db)
     assert MotiveCredentialStore("org-a").metadata()["authentication_method"] == "oauth2"
 
 
-def test_callback_persistence_logs_steps_and_status_reads_same_row(motive_db, caplog):
+def test_callback_persistence_logs_steps_and_status_reads_same_row(motive_db, caplog, motive_diagnostic_filter):
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"access_token": FAKE_ACCESS_TOKEN, "refresh_token": FAKE_REFRESH_TOKEN, "expires_in": 7200, "token_type": "Bearer", "scope": " ".join(MOTIVE_OAUTH_SCOPES)})
 
@@ -232,7 +278,7 @@ def test_callback_persistence_logs_steps_and_status_reads_same_row(motive_db, ca
     result_url = service.create_authorization_url(organization_id="org-a", identity_id="identity-a", organization_slug="org-a")["authorization_url"]
     state = _state_from_authorization_url(result_url)
 
-    with caplog.at_level("INFO"):
+    with caplog.at_level(logging.INFO):
         result = service.complete_authorization(state=state, code="fake-auth-code")
 
     metadata = MotiveCredentialStore("org-a").metadata()
@@ -247,16 +293,22 @@ def test_callback_persistence_logs_steps_and_status_reads_same_row(motive_db, ca
         assert row.organization_slug == "org-a"
         assert row.connection_status == "configured_unverified"
 
-    for step in ("STATE FOUND", "TOKEN RECEIVED", "ORG FOUND", "CREDENTIAL CREATED", "ENCRYPTION COMPLETE", "DB COMMIT SUCCESS", "VERIFY SUCCESS"):
-        assert f"MOTIVE OAUTH CALLBACK {step}" in caplog.text
-    assert FAKE_ACCESS_TOKEN not in caplog.text
-    assert FAKE_REFRESH_TOKEN not in caplog.text
-    assert "fake-client-secret" not in caplog.text
-    assert "fake-auth-code" not in caplog.text
-    assert state not in caplog.text
+    rendered = "\n".join(record.getMessage() for record in caplog.records)
+    for step in ("STATE_FOUND", "TOKEN_RECEIVED", "ORG_FOUND", "CREDENTIAL_CREATED", "ENCRYPTION_COMPLETE", "DB_COMMIT_SUCCESS", "VERIFY_SUCCESS"):
+        assert f"step={step}" in rendered
+    assert "access_token_received=true" in rendered
+    assert "refresh_token_received=true" in rendered
+    assert "token_type=Bearer" in rendered
+    assert "expires_in=7200" in rendered
+    assert "response_keys=" in rendered
+    assert FAKE_ACCESS_TOKEN not in rendered
+    assert FAKE_REFRESH_TOKEN not in rendered
+    assert "fake-client-secret" not in rendered
+    assert "fake-auth-code" not in rendered
+    assert state not in rendered
 
 
-def test_callback_missing_refresh_token_logs_failing_step_without_persisting(motive_db, caplog):
+def test_callback_missing_refresh_token_logs_failing_step_without_persisting(motive_db, caplog, motive_diagnostic_filter):
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"access_token": FAKE_ACCESS_TOKEN, "expires_in": 7200, "token_type": "Bearer"})
 
@@ -264,7 +316,7 @@ def test_callback_missing_refresh_token_logs_failing_step_without_persisting(mot
     result_url = service.create_authorization_url(organization_id="org-a", identity_id="identity-a", organization_slug="org-a")["authorization_url"]
     state = _state_from_authorization_url(result_url)
 
-    with caplog.at_level("INFO"):
+    with caplog.at_level(logging.INFO):
         with pytest.raises(MotiveConnectorError) as exc:
             service.complete_authorization(state=state, code="fake-auth-code")
 
@@ -272,12 +324,16 @@ def test_callback_missing_refresh_token_logs_failing_step_without_persisting(mot
     assert exc.value.failing_step == "TOKEN RECEIVED"
     assert exc.value.rollback_executed is False
     assert MotiveCredentialStore("org-a").metadata()["token_present"] is False
-    assert "MOTIVE OAUTH CALLBACK TOKEN RECEIVED" in caplog.text
-    assert "MOTIVE OAUTH CALLBACK EXCEPTION" in caplog.text
-    assert FAKE_ACCESS_TOKEN not in caplog.text
-    assert "fake-client-secret" not in caplog.text
-    assert "fake-auth-code" not in caplog.text
-    assert state not in caplog.text
+    rendered = "\n".join(record.getMessage() for record in caplog.records)
+    assert "step=TOKEN_RECEIVED" in rendered
+    assert "step=EXCEPTION" in rendered
+    assert "failing_step=TOKEN_RECEIVED" in rendered
+    assert "access_token_received=true" in rendered
+    assert "refresh_token_received=false" in rendered
+    assert FAKE_ACCESS_TOKEN not in rendered
+    assert "fake-client-secret" not in rendered
+    assert "fake-auth-code" not in rendered
+    assert state not in rendered
 
 
 def test_refresh_rotation_and_invalid_grant_handling(motive_db):
