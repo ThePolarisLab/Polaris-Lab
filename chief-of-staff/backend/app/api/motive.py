@@ -168,16 +168,17 @@ def verify_motive_vehicle_utilization_contract(
             request_date=request_date,
         )
     except MotiveConnectorError as exc:
-        raise HTTPException(
-            status_code=_http_status(exc),
-            detail={
-                "status": exc.status.value,
-                "resource": "vehicle_utilization_contract",
-                "error_code": exc.code,
-                "message": str(exc),
-                "secrets_exposed": False,
-            },
-        ) from exc
+        detail = {
+            "status": exc.status.value,
+            "resource": "vehicle_utilization_contract",
+            "error_code": exc.code,
+            "message": str(exc),
+            "secrets_exposed": False,
+        }
+        provider_diagnostics = getattr(exc, "provider_diagnostics", None)
+        if isinstance(provider_diagnostics, dict):
+            detail.update(provider_diagnostics)
+        raise HTTPException(status_code=_http_status(exc), detail=detail) from exc
     logger.info(
         "MOTIVE VEHICLE UTILIZATION CONTRACT VERIFY",
         extra={
