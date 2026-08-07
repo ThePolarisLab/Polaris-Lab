@@ -8,21 +8,24 @@
 - Motive status APIs return metadata only and never expose the key, request headers, tokens, client secrets, OAuth state, or authorization headers.
 - Frontend connector card shows administrator-managed configuration and never accepts or displays the key.
 - Limited verification uses `GET /v1/vehicles?per_page=1&page_no=1` with at most one record read.
+- Manual vehicle-only ingestion uses `POST /api/v1/motive/sync/vehicles` and `GET /v1/vehicles?per_page=100&page_no=N`.
+- Vehicle upserts are tenant-owned and idempotent through `(organization_id, provider_vehicle_id)`.
+- Vehicle checkpoints advance only after successful durable persistence.
 - System Health is Healthy only after successful API-key verification.
 - Evidence is Available only after successful verification and does not claim broad ingestion.
 - Existing OAuth runtime routes are disabled for active production behavior.
 - OAuth schema is retained unless cleanup receives a separate migration safety review.
-- No broad sync, KPIs, webhooks, or production certification claims.
+- No drivers, utilization, IFTA, HOS, safety, trips, fuel, maintenance, broad sync, KPIs, webhooks, or complete production certification claims.
 
 ## v1.1 Candidate Work
 
-- Complete broad sync design for vehicles, users, vehicle utilization, driver utilization, and IFTA summary.
+- Complete broad sync design for users/drivers, vehicle utilization, driver utilization, and IFTA summary.
 - Define driver filtering only from real provider role fields observed in sanitized production responses or official documentation.
 - Implement durable resource sync with checkpoint advancement only after successful persistence.
 - Add scheduled reconciliation with bounded retry, `Retry-After`, exponential backoff with jitter, low concurrency, batching, caching, and incremental date ranges.
 - Add webhook ingestion only after signature/authentication requirements are verified.
-- Add production evidence certification criteria.
+- Add production evidence certification criteria beyond vehicle-only ingestion.
 
 ## Deferred
 
-HOS, safety, DVIR, fault codes, trips, maintenance, fuel purchases, webhooks, executive fleet KPIs, frontend fleet dashboard, and future multi-tenant OAuth architecture remain out of scope for Track 4C.1E.
+Drivers, vehicle utilization, driver utilization, IFTA summary, HOS, safety, DVIR, fault codes, trips, maintenance, fuel purchases, webhooks, executive fleet KPIs, frontend fleet dashboard, scheduled polling, broad synchronization, and future multi-tenant OAuth architecture remain out of scope for Track 4C.2A.
