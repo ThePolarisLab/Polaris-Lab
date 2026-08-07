@@ -1,4 +1,4 @@
-"""Motive Company API Key connector shell for limited read-only verification."""
+"""Motive Company API Key connector shell for read-only verification and vehicle ingestion."""
 
 from __future__ import annotations
 
@@ -15,12 +15,15 @@ import httpx
 
 from app.connectors.base import BaseConnector
 from app.connectors.models import ConnectorHealth, ConnectorStatus, SyncResult
+from app.connectors.motive_contracts import MotiveVehicle
 
 logger = logging.getLogger(__name__)
 
 MOTIVE_API_BASE_URL = "https://api.gomotive.com"
 MOTIVE_VERIFICATION_ENDPOINT = "/v1/vehicles"
 MOTIVE_VERIFICATION_PARAMS = {"per_page": 1, "page_no": 1}
+MOTIVE_VEHICLES_ENDPOINT = "/v1/vehicles"
+MOTIVE_VEHICLES_PER_PAGE = 100
 MOTIVE_AUTHENTICATION_METHOD = "company_api_key"
 MOTIVE_CREDENTIAL_SOURCE = "render_environment"
 MOTIVE_CONFIRMED_ENDPOINTS = (
@@ -64,7 +67,7 @@ class MotiveConnectorError(RuntimeError):
 
 
 class MotiveConnector(BaseConnector):
-    """Expose safe Motive status and one narrow API-key read-only verification call."""
+    """Expose safe Motive status, verification, and vehicle-only read ingestion."""
 
     def __init__(
         self,
@@ -73,12 +76,14 @@ class MotiveConnector(BaseConnector):
         http_client: httpx.Client | None = None,
         sleep: Callable[[float], None] = time.sleep,
         jitter: Callable[[], float] = random.random,
+        max_vehicle_pages: int | None = None,
     ) -> None:
         super().__init__(name="motive")
         self.organization_id = organization_id
         self._client = http_client
         self._sleep = sleep
         self._jitter = jitter
+        self._max_vehicle_pages = max_vehicle_pages
 
     def validate_configuration(self) -> None:
         if not _api_key_present():
@@ -114,7 +119,7 @@ class MotiveConnector(BaseConnector):
             records_written=0,
             events_published=0,
             success=False,
-            errors=["Motive broad synchronization is deferred; use Company API Key verification only."],
+            errors=["Motive broad synchronization is deferred; use vehicle-only manual sync."],
         )
 
     def disconnect(self) -> None:
@@ -147,14 +152,23 @@ class MotiveConnector(BaseConnector):
             "last_error_code": persisted_status.get("last_error_code") if persisted_status else None,
             "last_error_message_sanitized": persisted_status.get("last_error_message_sanitized") if persisted_status else None,
             "records_read": persisted_status.get("records_read") if persisted_status else 0,
+            "vehicle_sync_enabled": True,
+            "last_vehicle_sync_at": persisted_status.get("last_vehicle_sync_at") if persisted_status else None,
+            "last_vehicle_sync_status": persisted_status.get("last_vehicle_sync_status") if persisted_status else None,
+            "vehicle_records_stored": persisted_status.get("vehicle_records_stored") if persisted_status else 0,
+            "last_vehicle_records_read": persisted_status.get("last_vehicle_records_read") if persisted_status else 0,
+            "last_vehicle_pages_read": persisted_status.get("last_vehicle_pages_read") if persisted_status else 0,
             "read_only": True,
             "production_sync_enabled": False,
+            "broad_sync_enabled": False,
             "verification_endpoint": MOTIVE_VERIFICATION_ENDPOINT,
             "verification_params": dict(MOTIVE_VERIFICATION_PARAMS),
+            "vehicle_sync_endpoint": MOTIVE_VEHICLES_ENDPOINT,
             "confirmed_endpoints": list(MOTIVE_CONFIRMED_ENDPOINTS),
             "driver_user_pagination": {"endpoint": "/v1/users", "per_page_max": 100, "page_no": "one_based", "total_field": "pagination.total"},
             "production_certified": False,
-            "deferred_resources": ["driver_role_filtering", "broad_sync", "hos", "safety", "dvir", "fault_codes", "trips", "maintenance", "fuel_purchases", "webhooks", "fleet_kpis", "multi_tenant_oauth"],
+            "vehicle_ingestion_certified": bool((persisted_status or {}).get("last_vehicle_sync_status") == "success"),
+            "deferred_resources": ["drivers", "driver_role_filtering", "vehicle_utilization", "driver_utilization", "ifta_summary", "broad_sync", "hos", "safety", "dvir", "fault_codes", "trips", "maintenance", "fuel_purchases", "webhooks", "fleet_kpis", "multi_tenant_oauth"],
             "secrets_exposed": False,
         }
 
@@ -175,66 +189,100 @@ class MotiveConnector(BaseConnector):
             "secrets_exposed": False,
         }
 
+    def list_vehicles(self, *, organization_id: str, organization_slug: str) -> dict[str, Any]:
+        """Read all Motive vehicles using the confirmed one-based page_no contract."""
+        self.validate_configuration()
+        vehicles: list[MotiveVehicle] = []
+        pages_read = 0
+        retrieved = 0
+        total: int | None = None
+        seen_pages: set[int] = set()
+        for page_no in range(1, self._vehicle_page_limit() + 1):
+            if page_no in seen_pages:
+                raise MotiveConnectorError("Motive vehicle pagination repeated a page", status=ConnectorStatus.FAILED, code="provider_contract_error")
+            seen_pages.add(page_no)
+            params = {"per_page": MOTIVE_VEHICLES_PER_PAGE, "page_no": page_no}
+            payload = self._request_json(MOTIVE_VEHICLES_ENDPOINT, params=params, operation="vehicle_sync")
+            page_items = _vehicle_items(payload)
+            pages_read += 1
+            if total is None:
+                total = _pagination_total(payload)
+            if not page_items:
+                break
+            for item in page_items:
+                vehicles.append(_normalize_vehicle(item, organization_id=organization_id, organization_slug=organization_slug))
+            retrieved += len(page_items)
+            if total is not None and retrieved >= total:
+                break
+        else:
+            raise MotiveConnectorError("Motive vehicle pagination exceeded the maximum page guard", status=ConnectorStatus.FAILED, code="provider_contract_error")
+        return {"vehicles": vehicles, "pages_read": pages_read, "records_read": len(vehicles), "pagination_total": total}
+
     def _request_vehicle_probe(self) -> dict[str, Any]:
+        return self._request_json(MOTIVE_VERIFICATION_ENDPOINT, params=MOTIVE_VERIFICATION_PARAMS, operation="verification")
+
+    def _request_json(self, endpoint: str, *, params: dict[str, int], operation: str) -> dict[str, Any]:
         last_error: MotiveConnectorError | None = None
         for attempt in range(1, _max_attempts() + 1):
             try:
                 logger.info(
-                    "MOTIVE API KEY VERIFY",
+                    "MOTIVE API KEY REQUEST",
                     extra={
-                        "motive_operation": "verification",
+                        "motive_operation": operation,
                         "organization_id": self.organization_id,
-                        "endpoint_path": MOTIVE_VERIFICATION_ENDPOINT,
+                        "endpoint_path": endpoint,
                         "attempt": attempt,
                     },
                 )
                 response = self._http().get(
-                    f"{self._base_url()}{MOTIVE_VERIFICATION_ENDPOINT}",
-                    params=MOTIVE_VERIFICATION_PARAMS,
+                    f"{self._base_url()}{endpoint}",
+                    params=params,
                     headers={"Accept": "application/json", "X-API-Key": _api_key()},
                 )
                 payload = self._json_response(response)
                 logger.info(
-                    "MOTIVE API KEY VERIFY SUCCESS",
+                    "MOTIVE API KEY VERIFY SUCCESS" if operation == "verification" else "MOTIVE API KEY VEHICLES PAGE SUCCESS",
                     extra={
-                        "motive_operation": "verification",
+                        "motive_operation": operation,
                         "organization_id": self.organization_id,
-                        "endpoint_path": MOTIVE_VERIFICATION_ENDPOINT,
+                        "endpoint_path": endpoint,
                         "http_status": response.status_code,
                         "records_read": _records_read_from_vehicle_payload(payload),
                         "rate_limited": False,
+                        "page_no": params.get("page_no"),
                     },
                 )
                 return payload
             except MotiveConnectorError as exc:
                 last_error = exc
                 logger.info(
-                    "MOTIVE API KEY VERIFY ERROR",
+                    "MOTIVE API KEY REQUEST ERROR",
                     extra={
-                        "motive_operation": "verification",
+                        "motive_operation": operation,
                         "organization_id": self.organization_id,
-                        "endpoint_path": MOTIVE_VERIFICATION_ENDPOINT,
+                        "endpoint_path": endpoint,
                         "http_status": exc.http_status,
                         "error_code": exc.code,
                         "rate_limited": exc.status == ConnectorStatus.RATE_LIMITED,
                         "retry_after": exc.retry_after,
                         "attempt": attempt,
+                        "page_no": params.get("page_no"),
                     },
                 )
                 if not exc.retryable or attempt == _max_attempts():
                     raise
                 self._sleep(_retry_delay(attempt, exc.retry_after, self._jitter()))
             except httpx.TimeoutException as exc:
-                last_error = MotiveConnectorError("Motive verification timed out", status=ConnectorStatus.FAILED, retryable=True, code="provider_timeout")
+                last_error = MotiveConnectorError("Motive request timed out", status=ConnectorStatus.FAILED, retryable=True, code="provider_timeout")
                 if attempt == _max_attempts():
                     raise last_error from exc
                 self._sleep(_retry_delay(attempt, None, self._jitter()))
             except httpx.HTTPError as exc:
-                last_error = MotiveConnectorError("Motive verification failed due to a network error", status=ConnectorStatus.FAILED, retryable=True, code="network_failure")
+                last_error = MotiveConnectorError("Motive request failed due to a network error", status=ConnectorStatus.FAILED, retryable=True, code="network_failure")
                 if attempt == _max_attempts():
                     raise last_error from exc
                 self._sleep(_retry_delay(attempt, None, self._jitter()))
-        raise last_error or MotiveConnectorError("Motive verification failed", status=ConnectorStatus.FAILED, code="provider_unavailable")
+        raise last_error or MotiveConnectorError("Motive request failed", status=ConnectorStatus.FAILED, code="provider_unavailable")
 
     def _json_response(self, response: httpx.Response) -> dict[str, Any]:
         retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
@@ -284,6 +332,12 @@ class MotiveConnector(BaseConnector):
     def _base_url() -> str:
         return os.getenv("POLARIS_MOTIVE_API_BASE_URL", MOTIVE_API_BASE_URL).rstrip("/")
 
+    def _vehicle_page_limit(self) -> int:
+        configured = int(os.getenv("POLARIS_MOTIVE_VEHICLE_MAX_PAGES", "100"))
+        if self._max_vehicle_pages is not None:
+            configured = self._max_vehicle_pages
+        return min(max(configured, 1), 1000)
+
 
 def _connector_status(value: str) -> ConnectorStatus:
     mapping = {
@@ -313,14 +367,63 @@ def _status_message(value: str) -> str:
     return "Motive connector status is available."
 
 
+def _vehicle_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    value = payload.get("vehicles")
+    if value is None:
+        value = payload.get("data")
+    if not isinstance(value, list):
+        raise MotiveConnectorError("Motive vehicle response did not include a vehicle list", status=ConnectorStatus.FAILED, code="provider_contract_error")
+    items: list[dict[str, Any]] = []
+    for raw in value:
+        if isinstance(raw, dict) and isinstance(raw.get("vehicle"), dict):
+            raw = raw["vehicle"]
+        if not isinstance(raw, dict):
+            raise MotiveConnectorError("Motive vehicle response included an unexpected vehicle item", status=ConnectorStatus.FAILED, code="provider_contract_error")
+        items.append(raw)
+    return items
+
+
+def _pagination_total(payload: dict[str, Any]) -> int | None:
+    pagination = payload.get("pagination")
+    if not isinstance(pagination, dict) or pagination.get("total") is None:
+        return None
+    try:
+        total = int(pagination["total"])
+    except (TypeError, ValueError) as exc:
+        raise MotiveConnectorError("Motive pagination total was not numeric", status=ConnectorStatus.FAILED, code="provider_contract_error") from exc
+    return max(total, 0)
+
+
+def _normalize_vehicle(raw: dict[str, Any], *, organization_id: str, organization_slug: str) -> MotiveVehicle:
+    provider_vehicle_id = _string(raw.get("id") or raw.get("provider_vehicle_id"))
+    if not provider_vehicle_id:
+        raise MotiveConnectorError("Motive vehicle did not include a provider vehicle id", status=ConnectorStatus.FAILED, code="provider_contract_error")
+    observed_at = _parse_datetime(raw.get("updated_at") or raw.get("last_updated_at") or raw.get("created_at"))
+    metadata = {"source_keys": sorted(str(key) for key in raw.keys() if _safe_metadata_key(str(key)))}
+    return MotiveVehicle(
+        organization_id=organization_id,
+        organization_slug=organization_slug,
+        provider_vehicle_id=provider_vehicle_id,
+        source_endpoint=MOTIVE_VEHICLES_ENDPOINT,
+        unit_number=_string(raw.get("number") or raw.get("unit_number") or raw.get("name")),
+        vin=_string(raw.get("vin")),
+        make=_string(raw.get("make")),
+        model=_string(raw.get("model")),
+        year=_int_or_none(raw.get("year")),
+        license_plate=_string(raw.get("license_plate") or raw.get("license_plate_number")),
+        status=_string(raw.get("status")),
+        observed_at=observed_at,
+        metadata=metadata,
+    )
+
+
 def _records_read_from_vehicle_payload(payload: dict[str, Any]) -> int:
-    for key in ("vehicles", "data"):
-        value = payload.get(key)
-        if isinstance(value, list):
-            return min(len(value), 1)
-    if isinstance(payload.get("vehicle"), dict):
-        return 1
-    return 0
+    try:
+        return len(_vehicle_items(payload))
+    except MotiveConnectorError:
+        if isinstance(payload.get("vehicle"), dict):
+            return 1
+        return 0
 
 
 def _api_key_present() -> bool:
@@ -338,9 +441,31 @@ def _parse_datetime(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    return parsed
+
+
+def _string(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_metadata_key(key: str) -> bool:
+    lowered = key.lower()
+    return not any(marker in lowered for marker in ("token", "secret", "authorization", "api_key", "x-api-key"))
 
 
 def _timeout_seconds() -> float:
