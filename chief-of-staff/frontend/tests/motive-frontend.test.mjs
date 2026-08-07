@@ -30,7 +30,16 @@ const connectedPayload = {
     last_vehicle_records_read: 17,
     last_vehicle_pages_read: 1,
     vehicle_ingestion_certified: true,
-    vehicles: [{ id: "raw-provider-payload-should-not-render" }],
+    user_sync_enabled: true,
+    last_user_sync_at: "2026-08-07T06:00:00+00:00",
+    last_user_sync_status: "success",
+    user_records_stored: 9,
+    last_user_records_read: 9,
+    last_user_pages_read: 1,
+    user_ingestion_certified: true,
+    driver_classification_certified: false,
+    users: [{ id: "provider-data-should-not-render" }],
+    vehicles: [{ id: "provider-data-should-not-render" }],
     access_token: "should-not-render",
     refresh_token: "should-not-render",
     client_secret: "should-not-render",
@@ -50,7 +59,7 @@ test("loads Motive API-key status labels for safe connector states", () => {
   assert.equal(motiveConnectorPresentation({ status: { connection_status: "failed" } }).status, "Provider unavailable");
 });
 
-test("keeps Motive API-key and vehicle metadata safe for rendering", () => {
+test("keeps Motive API-key, vehicle, and user metadata safe for rendering", () => {
   const metadata = safeMotiveMetadata(connectedPayload);
   assert.deepEqual(Object.keys(metadata).sort(), [
     "authentication_method",
@@ -59,7 +68,12 @@ test("keeps Motive API-key and vehicle metadata safe for rendering", () => {
     "configured_by_administrator",
     "connection_status",
     "credential_source",
+    "driver_classification_certified",
     "key_present",
+    "last_user_pages_read",
+    "last_user_records_read",
+    "last_user_sync_at",
+    "last_user_sync_status",
     "last_vehicle_pages_read",
     "last_vehicle_records_read",
     "last_vehicle_sync_at",
@@ -68,6 +82,9 @@ test("keeps Motive API-key and vehicle metadata safe for rendering", () => {
     "production_certified",
     "production_sync_enabled",
     "records_read",
+    "user_ingestion_certified",
+    "user_records_stored",
+    "user_sync_enabled",
     "vehicle_ingestion_certified",
     "vehicle_records_stored",
     "vehicle_sync_enabled",
@@ -80,8 +97,12 @@ test("keeps Motive API-key and vehicle metadata safe for rendering", () => {
   assert.equal(metadata.vehicle_sync_enabled, true);
   assert.equal(metadata.vehicle_records_stored, 17);
   assert.equal(metadata.last_vehicle_sync_status, "success");
+  assert.equal(metadata.user_sync_enabled, true);
+  assert.equal(metadata.user_records_stored, 9);
+  assert.equal(metadata.last_user_sync_status, "success");
+  assert.equal(metadata.driver_classification_certified, false);
   assert.equal(hasRenderedSecret(metadata), false);
-  assert.equal(JSON.stringify(metadata).includes("raw-provider-payload"), false);
+  assert.equal(JSON.stringify(metadata).includes("provider-data"), false);
 });
 
 test("maps Motive system health only after successful API-key verification", () => {
@@ -98,29 +119,33 @@ test("maps Motive evidence without claiming broad ingestion", () => {
   assert.equal(motiveEvidenceStatus({ status: { connection_status: "configured_unverified" } }).status, "Pending");
   const verified = motiveEvidenceStatus(connectedPayload);
   assert.equal(verified.status, "Available");
-  assert.match(verified.detail, /Broad evidence ingestion remains deferred/);
+  assert.match(verified.detail, /broad evidence ingestion remains deferred/i);
 });
 
-test("uses backend API-key status verification and vehicle sync actions without OAuth connect", async () => {
+test("uses backend API-key status verification, vehicle sync, and user sync actions without OAuth connect", async () => {
   const source = await readFile(new URL("../src/components/ExecutiveViews.jsx", import.meta.url), "utf8");
   assert.match(source, /apiClient\.get\("\/api\/v1\/motive\/status"\)/);
   assert.doesNotMatch(source, /apiClient\.get\("\/api\/v1\/motive\/connect"\)/);
   assert.doesNotMatch(source, /motiveCallbackNotice/);
   assert.match(source, /apiClient\.post\("\/api\/v1\/motive\/verify"\)/);
   assert.match(source, /apiClient\.post\("\/api\/v1\/motive\/sync\/vehicles"\)/);
+  assert.match(source, /apiClient\.post\("\/api\/v1\/motive\/sync\/users"\)/);
   assert.match(source, /apiClient\.post\("\/api\/v1\/motive\/disconnect"\)/);
   assert.match(source, /Configured by administrator/);
   assert.match(source, /Sync Vehicles/);
+  assert.match(source, /Sync Users/);
   assert.match(source, /Vehicle records stored/);
-  assert.match(source, /Last vehicle sync status/);
+  assert.match(source, /User records stored/);
+  assert.match(source, /Driver classification: \{motiveDetails\.driver_classification_certified \? "Certified" : "Not certified"\}/);
   assert.doesNotMatch(source, /gomotive\.com\/oauth\/authorize/);
 });
 
-test("does not expose raw Motive provider payloads or secrets in frontend view code", async () => {
+test("does not expose Motive provider data or secrets in frontend view code", async () => {
   const source = await readFile(new URL("../src/components/ExecutiveViews.jsx", import.meta.url), "utf8");
   assert.doesNotMatch(source, /access_token|refresh_token|client_secret|oauth_state|authorization_header/i);
   assert.doesNotMatch(source, /MOTIVE_API_KEY|X-API-Key|x-api-key|motive_api_key/i);
-  assert.doesNotMatch(source, /vehicles\s*\.map|provider_payload|raw provider/i);
+  assert.doesNotMatch(source, /vehicles\s*\.map|users\s*\.map|provider_payload/i);
+  assert.doesNotMatch(source, /Driver records stored|Driver count|Drivers:/i);
 });
 
 test("keeps QuickBooks and Outlook connector consumers unchanged", async () => {
