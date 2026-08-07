@@ -15,15 +15,17 @@
 - User upserts are tenant-owned and idempotent through organization-owned provider user identity.
 - User checkpoints advance only after successful durable persistence.
 - Driver classification is not certified; Polaris does not expose a driver count or driver KPI from `/v1/users` records.
+- Temporary vehicle-utilization contract verification reached Motive and received HTTP 400; the follow-up diagnostic layer returns only sanitized provider rejection metadata before any future live retry.
 - System Health is Healthy only after successful API-key verification.
 - Evidence is Available only after successful verification and does not claim broad ingestion.
 - Existing OAuth runtime routes are disabled for active production behavior.
 - OAuth schema is retained unless cleanup receives a separate migration safety review.
-- No utilization, IFTA, HOS, safety, trips, fuel, maintenance, broad sync, KPIs, webhooks, or complete production certification claims.
+- No utilization ingestion, IFTA, HOS, safety, trips, fuel, maintenance, broad sync, KPIs, webhooks, or complete production certification claims.
 
 ## v1.1 Candidate Work
 
 - Complete broad sync design for vehicle utilization, driver utilization, and IFTA summary.
+- Resolve vehicle-utilization `X-User-Id` requirements only after an authoritative Fleet Admin/Fleet Manager provider user identity contract is verified.
 - Define driver filtering only from real provider role fields observed in sanitized production responses or official documentation.
 - Implement durable resource sync with checkpoint advancement only after successful persistence.
 - Add scheduled reconciliation with bounded retry, `Retry-After`, exponential backoff with jitter, low concurrency, batching, caching, and incremental date ranges.
@@ -32,4 +34,4 @@
 
 ## Deferred
 
-Driver classification, vehicle utilization, driver utilization, IFTA summary, HOS, safety, DVIR, fault codes, trips, maintenance, fuel purchases, webhooks, executive fleet KPIs, frontend fleet dashboard, scheduled polling, broad synchronization, and future multi-tenant OAuth architecture remain out of scope for Track 4C.2B.
+Driver classification, authoritative `X-User-Id` Fleet Admin/Fleet Manager candidate selection, vehicle utilization ingestion, driver utilization, IFTA summary, HOS, safety, DVIR, fault codes, trips, maintenance, fuel purchases, webhooks, executive fleet KPIs, frontend fleet dashboard, scheduled polling, broad synchronization, and future multi-tenant OAuth architecture remain out of scope for Track 4C.2C0.
