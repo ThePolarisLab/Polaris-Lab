@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   hasRenderedSecret,
-  motiveCallbackNotice,
   motiveConnectorPresentation,
   motiveEvidenceStatus,
   motiveSystemHealth,
@@ -11,14 +10,15 @@ import {
 } from "../src/motiveFrontend.js";
 
 const connectedPayload = {
-  health: { status: "connected", message: "Motive OAuth credential passed limited read-only verification." },
+  health: { status: "connected", message: "Motive Company API Key passed limited read-only verification." },
   status: {
-    authentication_method: "oauth2",
+    authentication_method: "company_api_key",
+    credential_source: "render_environment",
+    configured_by_administrator: true,
+    key_present: true,
     connection_status: "connected",
     last_verified_at: "2026-08-06T05:00:00+00:00",
-    granted_scopes: ["companies.read", "vehicles.read"],
-    provider_company_name: "Mor Logistics",
-    provider_company_id: "company-123",
+    records_read: 1,
     authorization_required: false,
     production_sync_enabled: false,
     production_certified: false,
@@ -26,47 +26,44 @@ const connectedPayload = {
     refresh_token: "should-not-render",
     client_secret: "should-not-render",
     authorization_header: "should-not-render",
-    oauth_state: "should-not-render",
+    motive_api_key: "should-not-render",
+    x_api_key: "should-not-render",
   },
 };
 
-test("loads Motive status labels for safe connector states", () => {
+test("loads Motive API-key status labels for safe connector states", () => {
   assert.equal(motiveConnectorPresentation(null, true).status, "Checking");
   assert.equal(motiveConnectorPresentation({ status: { connection_status: "not_configured" } }).status, "Not configured");
   assert.equal(motiveConnectorPresentation({ status: { connection_status: "authorization_required" } }).status, "Authorization required");
-  assert.equal(motiveConnectorPresentation({ status: { connection_status: "configured_unverified" } }).status, "Configured, not verified");
+  assert.equal(motiveConnectorPresentation({ status: { connection_status: "configured_unverified" } }).status, "Configured, verification pending");
   assert.equal(motiveConnectorPresentation(connectedPayload).status, "Connected");
   assert.equal(motiveConnectorPresentation({ status: { connection_status: "rate_limited" } }).status, "Rate limited");
-  assert.equal(motiveConnectorPresentation({ status: { connection_status: "failed" } }).status, "Failed");
+  assert.equal(motiveConnectorPresentation({ status: { connection_status: "failed" } }).status, "Provider unavailable");
 });
 
-test("parses Motive callback success denied and error hash statuses", () => {
-  assert.equal(motiveCallbackNotice("#executive/connectors?motive=connected_unverified").message, "Motive authorization completed. Run verification before using Motive evidence.");
-  assert.equal(motiveCallbackNotice("#executive/connectors?motive=denied").message, "Motive authorization was denied or cancelled.");
-  assert.equal(motiveCallbackNotice("#executive/connectors?motive=error").message, "Motive authorization could not be completed. No secrets were exposed.");
-  assert.equal(motiveCallbackNotice("#executive/connectors?code=abc&state=xyz"), null);
-});
-
-test("keeps Motive metadata safe for rendering", () => {
+test("keeps Motive API-key metadata safe for rendering", () => {
   const metadata = safeMotiveMetadata(connectedPayload);
   assert.deepEqual(Object.keys(metadata).sort(), [
     "authentication_method",
     "authorization_required",
+    "configured_by_administrator",
     "connection_status",
-    "granted_scopes",
+    "credential_source",
+    "key_present",
     "last_verified_at",
     "production_certified",
     "production_sync_enabled",
-    "provider_company_id",
-    "provider_company_name",
+    "records_read",
   ].sort());
-  assert.equal(metadata.authentication_method, "oauth2");
+  assert.equal(metadata.authentication_method, "company_api_key");
+  assert.equal(metadata.credential_source, "render_environment");
+  assert.equal(metadata.configured_by_administrator, true);
   assert.equal(metadata.production_sync_enabled, false);
   assert.equal(metadata.production_certified, false);
   assert.equal(hasRenderedSecret(metadata), false);
 });
 
-test("maps Motive system health only after successful verification", () => {
+test("maps Motive system health only after successful API-key verification", () => {
   assert.equal(motiveSystemHealth(null, true).status, "Checking");
   assert.equal(motiveSystemHealth({ status: { connection_status: "connected" } }).status, "Degraded");
   assert.equal(motiveSystemHealth(connectedPayload).status, "Healthy");
@@ -83,13 +80,14 @@ test("maps Motive evidence without claiming ingestion", () => {
   assert.match(verified.detail, /Broad evidence ingestion remains deferred/);
 });
 
-test("uses backend-provided Motive authorization URL and actions", async () => {
+test("uses backend API-key status and verification actions without OAuth connect", async () => {
   const source = await readFile(new URL("../src/components/ExecutiveViews.jsx", import.meta.url), "utf8");
   assert.match(source, /apiClient\.get\("\/api\/v1\/motive\/status"\)/);
-  assert.match(source, /apiClient\.get\("\/api\/v1\/motive\/connect"\)/);
-  assert.match(source, /window\.location\.assign\(payload\.authorization_url\)/);
+  assert.doesNotMatch(source, /apiClient\.get\("\/api\/v1\/motive\/connect"\)/);
+  assert.doesNotMatch(source, /motiveCallbackNotice/);
   assert.match(source, /apiClient\.post\("\/api\/v1\/motive\/verify"\)/);
   assert.match(source, /apiClient\.post\("\/api\/v1\/motive\/disconnect"\)/);
+  assert.match(source, /Configured by administrator/);
   assert.doesNotMatch(source, /gomotive\.com\/oauth\/authorize/);
 });
 

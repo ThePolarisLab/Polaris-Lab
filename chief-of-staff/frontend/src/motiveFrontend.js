@@ -1,40 +1,25 @@
-const SECRET_KEY_PATTERN = /(token|secret|authorization|oauth_state|state|code|header)/i;
+const SECRET_KEY_PATTERN = /(token|secret|authorization|oauth_state|state|code|header|api_key|x-api-key)/i;
 
 const STATUS_LABELS = Object.freeze({
   not_configured: "Not configured",
   authorization_required: "Authorization required",
-  configured_unverified: "Configured, not verified",
+  configured_unverified: "Configured, verification pending",
   connected: "Connected",
   rate_limited: "Rate limited",
-  failed: "Failed",
+  failed: "Provider unavailable",
   running: "Checking",
   checking: "Checking",
 });
 
 const STATUS_DETAILS = Object.freeze({
-  not_configured: "Motive OAuth has not been configured for this organization.",
-  authorization_required: "Motive authorization is required before verification can run.",
-  configured_unverified: "Motive OAuth is connected and awaiting limited read-only verification.",
-  connected: "Motive OAuth passed limited read-only connection verification.",
-  rate_limited: "Motive returned a rate-limit response; retry timing is not assumed.",
-  failed: "Motive verification failed with a sanitized provider error.",
-  running: "Checking Motive OAuth status.",
-  checking: "Checking Motive OAuth status.",
-});
-
-const CALLBACK_MESSAGES = Object.freeze({
-  connected_unverified: {
-    tone: "success",
-    message: "Motive authorization completed. Run verification before using Motive evidence.",
-  },
-  denied: {
-    tone: "warning",
-    message: "Motive authorization was denied or cancelled.",
-  },
-  error: {
-    tone: "warning",
-    message: "Motive authorization could not be completed. No secrets were exposed.",
-  },
+  not_configured: "Motive Company API Key is not configured in the backend environment.",
+  authorization_required: "Motive rejected the Company API Key or the key lacks required read access.",
+  configured_unverified: "Motive Company API Key is configured by an administrator and awaiting limited read-only verification.",
+  connected: "Motive Company API Key passed limited read-only vehicle verification.",
+  rate_limited: "Motive returned a rate-limit response; Retry-After is honored when present.",
+  failed: "Motive provider verification failed with a sanitized error.",
+  running: "Checking Motive Company API Key status.",
+  checking: "Checking Motive Company API Key status.",
 });
 
 function connectionStatus(payload) {
@@ -55,7 +40,7 @@ export function motiveSystemHealth(payload, loading = false) {
   if (loading) return { status: "Checking", detail: STATUS_DETAILS.checking };
   const statusKey = connectionStatus(payload);
   if (statusKey === "connected" && Boolean(payload?.status?.last_verified_at || payload?.health?.details?.last_verified_at)) {
-    return { status: "Healthy", detail: "Motive OAuth connection verification has succeeded." };
+    return { status: "Healthy", detail: "Motive Company API Key verification has succeeded." };
   }
   if (statusKey === "not_configured") return { status: "Not configured", detail: STATUS_DETAILS.not_configured };
   if (statusKey === "configured_unverified") return { status: "Checking", detail: STATUS_DETAILS.configured_unverified };
@@ -65,33 +50,27 @@ export function motiveSystemHealth(payload, loading = false) {
 }
 
 export function motiveEvidenceStatus(payload, loading = false) {
-  if (loading) return { status: "Checking", detail: "Checking Motive OAuth verification status." };
+  if (loading) return { status: "Checking", detail: "Checking Motive Company API Key verification status." };
   const statusKey = connectionStatus(payload);
   if (statusKey === "connected" && Boolean(payload?.status?.last_verified_at || payload?.health?.details?.last_verified_at)) {
-    return { status: "Available", detail: "Available after successful OAuth connection verification. Broad evidence ingestion remains deferred." };
+    return { status: "Available", detail: "Available after successful API-key connection verification. Broad evidence ingestion remains deferred." };
   }
   if (statusKey === "configured_unverified") {
-    return { status: "Pending", detail: "Connected, verification pending. Production data ingestion remains deferred." };
+    return { status: "Pending", detail: "Configured by administrator, verification pending. Production data ingestion remains deferred." };
   }
-  return { status: "Not configured", detail: "Motive OAuth foundation and connection verification only; production data ingestion remains deferred." };
-}
-
-export function motiveCallbackNotice(hash) {
-  const rawHash = String(hash || "").replace(/^#\/?/, "");
-  const [, query = ""] = rawHash.split("?");
-  const status = new URLSearchParams(query).get("motive");
-  return CALLBACK_MESSAGES[status] ? { status, ...CALLBACK_MESSAGES[status] } : null;
+  return { status: "Not configured", detail: "Motive Company API Key verification only; production data ingestion remains deferred." };
 }
 
 export function safeMotiveMetadata(payload) {
   const details = payload?.status || payload?.health?.details || {};
   const safeKeys = [
     "authentication_method",
+    "credential_source",
+    "configured_by_administrator",
+    "key_present",
     "connection_status",
     "last_verified_at",
-    "granted_scopes",
-    "provider_company_name",
-    "provider_company_id",
+    "records_read",
     "authorization_required",
     "production_sync_enabled",
     "broad_sync_enabled",
@@ -99,7 +78,7 @@ export function safeMotiveMetadata(payload) {
   ];
   const result = {};
   for (const key of safeKeys) {
-    if (key !== "authorization_required" && SECRET_KEY_PATTERN.test(key)) continue;
+    if (!["authorization_required", "configured_by_administrator", "key_present"].includes(key) && SECRET_KEY_PATTERN.test(key)) continue;
     if (Object.prototype.hasOwnProperty.call(details, key)) result[key] = details[key];
   }
   result.production_sync_enabled = Boolean(result.production_sync_enabled);
@@ -109,10 +88,9 @@ export function safeMotiveMetadata(payload) {
 
 export function hasRenderedSecret(value) {
   const text = JSON.stringify(value || {}).toLowerCase();
-  return ["access_token", "refresh_token", "client_secret", "authorization header", "oauth_state", " state secret"].some((marker) => text.includes(marker));
+  return ["access_token", "refresh_token", "client_secret", "authorization header", "oauth_state", " state secret", "motive_api_key", "x-api-key"].some((marker) => text.includes(marker));
 }
 
 export const motiveFrontendContract = Object.freeze({
   statusLabels: STATUS_LABELS,
-  callbackMessages: CALLBACK_MESSAGES,
 });
