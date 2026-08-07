@@ -135,7 +135,7 @@ class MotiveConnector(BaseConnector):
             "provider": "motive",
             "authentication_method": MOTIVE_AUTHENTICATION_METHOD,
             "credential_source": MOTIVE_CREDENTIAL_SOURCE,
-            "credential_precedence": ["MOTIVE_API_KEY"],
+            "credential_precedence": [MOTIVE_CREDENTIAL_SOURCE],
             "configured_by_administrator": configured,
             "key_present": configured,
             "token_present": False,
@@ -195,7 +195,7 @@ class MotiveConnector(BaseConnector):
                 )
                 payload = self._json_response(response)
                 logger.info(
-                    "MOTIVE API KEY VERIFY RESULT",
+                    "MOTIVE API KEY VERIFY SUCCESS",
                     extra={
                         "motive_operation": "verification",
                         "organization_id": self.organization_id,
