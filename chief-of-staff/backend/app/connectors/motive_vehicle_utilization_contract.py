@@ -335,3 +335,6 @@ def _json_type(value: Any) -> str:
     if isinstance(value, dict):
         return "object"
     return type(value).__name__
+
+
+run_vehicle_utilization_contract_verification = verify_vehicle_utilization_contract
