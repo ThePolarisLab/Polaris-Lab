@@ -1,4 +1,4 @@
-"""Authenticated Motive connector APIs for Company API Key verification and vehicle ingestion."""
+"""Authenticated Motive connector APIs for Company API Key verification and narrow ingestion."""
 
 from __future__ import annotations
 
@@ -15,6 +15,8 @@ from app.connectors.motive import (
     MOTIVE_AUTHENTICATION_METHOD,
     MOTIVE_CONFIRMED_ENDPOINTS,
     MOTIVE_CREDENTIAL_SOURCE,
+    MOTIVE_USERS_ENDPOINT,
+    MOTIVE_USERS_PER_PAGE,
     MOTIVE_VEHICLES_ENDPOINT,
     MOTIVE_VEHICLES_PER_PAGE,
     MOTIVE_VERIFICATION_ENDPOINT,
@@ -22,9 +24,9 @@ from app.connectors.motive import (
     MotiveConnector,
     MotiveConnectorError,
 )
-from app.connectors.motive_contracts import MotiveVehicle
+from app.connectors.motive_contracts import MotiveDriver, MotiveVehicle
 from app.database.database import SessionLocal
-from app.models.motive import MotiveSyncCheckpoint, MotiveSyncHistory, MotiveVehicleRecord
+from app.models.motive import MotiveDriverRecord, MotiveSyncCheckpoint, MotiveSyncHistory, MotiveVehicleRecord
 from app.organizations.models import Organization
 from app.security.dependencies import require_permission
 from app.security.models import AuthenticatedPrincipal, Permission
@@ -32,7 +34,8 @@ from app.security.models import AuthenticatedPrincipal, Permission
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/motive", tags=["motive"])
 _DATABASE_PERSISTENCE_ERROR_CODE = "database_persistence_error"
-_DATABASE_PERSISTENCE_ERROR_MESSAGE = "Motive vehicle sync failed during database persistence."
+_DATABASE_VEHICLE_PERSISTENCE_ERROR_MESSAGE = "Motive vehicle sync failed during database persistence."
+_DATABASE_USER_PERSISTENCE_ERROR_MESSAGE = "Motive user sync failed during database persistence."
 
 
 def _db() -> Session:
@@ -139,84 +142,29 @@ def sync_motive_vehicles(
 ) -> dict[str, Any]:
     """Run one manual read-only vehicle ingestion for the active organization."""
     organization = _organization(session, principal.organization_id)
-    checkpoint = _vehicle_checkpoint(session, principal.organization_id)
+    checkpoint = _resource_checkpoint(session, principal.organization_id, "vehicles")
     checkpoint_before = _checkpoint_snapshot(checkpoint)
     started_at = datetime.now(timezone.utc)
     run_id = f"motive-vehicles-{uuid4()}"
-    history = MotiveSyncHistory(
-        organization_id=principal.organization_id,
-        organization_slug=organization.slug,
-        provider="motive",
-        provider_resource="vehicles",
-        mode="vehicle_sync",
-        status="running",
-        run_id=run_id,
-        started_at=started_at,
-        checkpoint_before=checkpoint_before,
-        checkpoint_after=checkpoint_before,
-        resource_counts={},
-    )
-    session.add(history)
-    session.commit()
+    history = _create_running_history(session, organization, run_id=run_id, provider_resource="vehicles", mode="vehicle_sync", checkpoint_before=checkpoint_before, started_at=started_at)
     try:
         result = _connector(principal.organization_id).list_vehicles(organization_id=principal.organization_id, organization_slug=organization.slug)
         counts = _upsert_vehicles(session, result["vehicles"])
         completed_at = datetime.now(timezone.utc)
-        checkpoint_after = {
-            "page_number": result["pages_read"],
-            "records_read": result["records_read"],
-            "pagination_total": result.get("pagination_total"),
-            "completed_at": completed_at.isoformat(),
-        }
-        checkpoint = _ensure_vehicle_checkpoint(session, organization)
-        checkpoint.page_number = int(result["pages_read"] or 0)
-        checkpoint.last_successful_position = checkpoint_after
-        checkpoint.checkpoint_status = "success"
-        checkpoint.last_successful_sync_at = completed_at
-        checkpoint.updated_at = completed_at
-        history.status = "success"
-        history.completed_at = completed_at
-        history.records_read = int(result["records_read"] or 0)
-        history.records_written = counts["records_upserted"]
-        history.checkpoint_after = checkpoint_after
-        history.resource_counts = {
-            "vehicles": history.records_read,
-            "pages_read": int(result["pages_read"] or 0),
-            **counts,
-        }
+        checkpoint_after = _checkpoint_after(result, completed_at)
+        checkpoint = _ensure_resource_checkpoint(session, organization, "vehicles")
+        _mark_checkpoint_success(checkpoint, checkpoint_after, completed_at)
+        _mark_history_success(history, result=result, counts=counts, checkpoint_after=checkpoint_after, completed_at=completed_at, resource="vehicles")
         session.commit()
     except MotiveConnectorError as exc:
         session.rollback()
         history = session.query(MotiveSyncHistory).filter(MotiveSyncHistory.run_id == run_id).one()
-        _mark_history_failure(session, history, exc, checkpoint_before=checkpoint_before)
+        _mark_history_failure(session, history, exc, checkpoint_before=checkpoint_before, resource="vehicles")
         raise HTTPException(status_code=_http_status(exc), detail={"status": exc.status.value, "resource": "vehicles", "error_code": exc.code, "message": str(exc)}) from exc
     except SQLAlchemyError as exc:
-        _mark_vehicle_persistence_failure(session, run_id=run_id, checkpoint_before=checkpoint_before)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "status": "failed",
-                "resource": "vehicles",
-                "error_code": _DATABASE_PERSISTENCE_ERROR_CODE,
-                "message": _DATABASE_PERSISTENCE_ERROR_MESSAGE,
-            },
-        ) from exc
-    response = {
-        "status": "success",
-        "resource": "vehicles",
-        "pages_read": int(result["pages_read"] or 0),
-        "records_read": int(result["records_read"] or 0),
-        "records_inserted": counts["records_inserted"],
-        "records_updated": counts["records_updated"],
-        "records_unchanged": counts["records_unchanged"],
-        "records_upserted": counts["records_upserted"],
-        "completed_at": history.completed_at.isoformat() if history.completed_at else None,
-        "error_code": None,
-        "production_certified": False,
-        "vehicle_ingestion_certified": True,
-        "secrets_exposed": False,
-        "run_id": run_id,
-    }
+        _mark_persistence_failure(session, run_id=run_id, checkpoint_before=checkpoint_before, resource="vehicles", message=_DATABASE_VEHICLE_PERSISTENCE_ERROR_MESSAGE)
+        raise _persistence_http_exception("vehicles", _DATABASE_VEHICLE_PERSISTENCE_ERROR_MESSAGE) from exc
+    response = _sync_response(result=result, counts=counts, history=history, resource="vehicles", certified_field="vehicle_ingestion_certified")
     logger.info(
         "MOTIVE VEHICLES SYNC SUCCESS",
         extra={
@@ -226,6 +174,52 @@ def sync_motive_vehicles(
             "pages_read": response["pages_read"],
             "records_read": response["records_read"],
             "records_upserted": response["records_upserted"],
+        },
+    )
+    return response
+
+
+@router.post("/sync/users")
+def sync_motive_users(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_WRITE)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Run one manual read-only company-user ingestion for the active organization."""
+    organization = _organization(session, principal.organization_id)
+    checkpoint = _resource_checkpoint(session, principal.organization_id, "users")
+    checkpoint_before = _checkpoint_snapshot(checkpoint)
+    started_at = datetime.now(timezone.utc)
+    run_id = f"motive-users-{uuid4()}"
+    history = _create_running_history(session, organization, run_id=run_id, provider_resource="users", mode="user_sync", checkpoint_before=checkpoint_before, started_at=started_at)
+    try:
+        result = _connector(principal.organization_id).list_users(organization_id=principal.organization_id, organization_slug=organization.slug)
+        counts = _upsert_users(session, result["users"])
+        completed_at = datetime.now(timezone.utc)
+        checkpoint_after = _checkpoint_after(result, completed_at)
+        checkpoint = _ensure_resource_checkpoint(session, organization, "users")
+        _mark_checkpoint_success(checkpoint, checkpoint_after, completed_at)
+        _mark_history_success(history, result=result, counts=counts, checkpoint_after=checkpoint_after, completed_at=completed_at, resource="users")
+        session.commit()
+    except MotiveConnectorError as exc:
+        session.rollback()
+        history = session.query(MotiveSyncHistory).filter(MotiveSyncHistory.run_id == run_id).one()
+        _mark_history_failure(session, history, exc, checkpoint_before=checkpoint_before, resource="users")
+        raise HTTPException(status_code=_http_status(exc), detail={"status": exc.status.value, "resource": "users", "error_code": exc.code, "message": str(exc)}) from exc
+    except SQLAlchemyError as exc:
+        _mark_persistence_failure(session, run_id=run_id, checkpoint_before=checkpoint_before, resource="users", message=_DATABASE_USER_PERSISTENCE_ERROR_MESSAGE)
+        raise _persistence_http_exception("users", _DATABASE_USER_PERSISTENCE_ERROR_MESSAGE) from exc
+    response = _sync_response(result=result, counts=counts, history=history, resource="users", certified_field="user_ingestion_certified")
+    response["driver_classification_certified"] = False
+    logger.info(
+        "MOTIVE USERS SYNC SUCCESS",
+        extra={
+            "motive_operation": "user_sync",
+            "organization_id": principal.organization_id,
+            "endpoint_path": MOTIVE_USERS_ENDPOINT,
+            "pages_read": response["pages_read"],
+            "records_read": response["records_read"],
+            "records_upserted": response["records_upserted"],
+            "driver_classification_certified": False,
         },
     )
     return response
@@ -251,14 +245,16 @@ def motive_verification_contract(principal: AuthenticatedPrincipal = Depends(req
         "credential_configuration": "administrator_backend_environment",
         "request_authentication": "company_api_key_header_at_provider_boundary",
         "confirmed_endpoints": list(MOTIVE_CONFIRMED_ENDPOINTS),
-        "driver_user_pagination": {"endpoint": "/v1/users", "per_page_max": 100, "page_no": "one_based", "total_field": "pagination.total"},
+        "driver_user_pagination": {"endpoint": MOTIVE_USERS_ENDPOINT, "per_page_max": MOTIVE_USERS_PER_PAGE, "page_no": "one_based", "total_field": "pagination.total"},
         "verification_endpoint": MOTIVE_VERIFICATION_ENDPOINT,
         "verification_request": {"method": "GET", "path": MOTIVE_VERIFICATION_ENDPOINT, "params": dict(MOTIVE_VERIFICATION_PARAMS), "authentication": "company_api_key_header"},
         "vehicle_sync": {"method": "GET", "path": MOTIVE_VEHICLES_ENDPOINT, "params": {"per_page": MOTIVE_VEHICLES_PER_PAGE, "page_no": "one_based"}, "manual_route": "/api/v1/motive/sync/vehicles"},
+        "user_sync": {"method": "GET", "path": MOTIVE_USERS_ENDPOINT, "params": {"per_page": MOTIVE_USERS_PER_PAGE, "page_no": "one_based"}, "manual_route": "/api/v1/motive/sync/users", "driver_classification_certified": False},
         "oauth_runtime_enabled": False,
         "broad_sync_enabled": False,
         "production_certified": False,
         "vehicle_ingestion_certified_only_after_successful_manual_sync": True,
+        "user_ingestion_certified_only_after_successful_manual_sync": True,
         "secrets_exposed": False,
     }
 
@@ -271,31 +267,25 @@ def _organization(session: Session, organization_id: str) -> Organization:
 
 
 def _latest_motive_status(session: Session, organization_id: str) -> dict[str, Any] | None:
-    verification = (
-        session.query(MotiveSyncHistory)
-        .filter(MotiveSyncHistory.organization_id == organization_id, MotiveSyncHistory.provider == "motive", MotiveSyncHistory.mode == "verification")
-        .order_by(MotiveSyncHistory.started_at.desc(), MotiveSyncHistory.id.desc())
-        .first()
-    )
-    vehicle_sync = (
-        session.query(MotiveSyncHistory)
-        .filter(MotiveSyncHistory.organization_id == organization_id, MotiveSyncHistory.provider == "motive", MotiveSyncHistory.mode == "vehicle_sync")
-        .order_by(MotiveSyncHistory.started_at.desc(), MotiveSyncHistory.id.desc())
-        .first()
-    )
+    verification = _latest_history(session, organization_id, mode="verification")
+    vehicle_sync = _latest_history(session, organization_id, mode="vehicle_sync")
+    user_sync = _latest_history(session, organization_id, mode="user_sync")
     vehicle_count = session.query(MotiveVehicleRecord).filter(MotiveVehicleRecord.organization_id == organization_id).count()
-    if verification is None and vehicle_sync is None:
-        return {"vehicle_records_stored": vehicle_count}
+    user_count = session.query(MotiveDriverRecord).filter(MotiveDriverRecord.organization_id == organization_id, MotiveDriverRecord.source_endpoint == MOTIVE_USERS_ENDPOINT).count()
+    if verification is None and vehicle_sync is None and user_sync is None:
+        return {"vehicle_records_stored": vehicle_count, "user_records_stored": user_count, "driver_classification_certified": False}
     connection_status = "configured_unverified"
     if verification is not None:
         connection_status = "connected" if verification.status == "success" else verification.status
-    latest_error = verification if verification and verification.status != "success" else vehicle_sync if vehicle_sync and vehicle_sync.status != "success" else None
+    latest_error = next((row for row in (verification, vehicle_sync, user_sync) if row and row.status != "success"), None)
     vehicle_counts = vehicle_sync.resource_counts if vehicle_sync and isinstance(vehicle_sync.resource_counts, dict) else {}
+    user_counts = user_sync.resource_counts if user_sync and isinstance(user_sync.resource_counts, dict) else {}
+    last_successful = _latest_completed_success(vehicle_sync, user_sync, verification)
     return {
         "connection_status": connection_status,
         "authorization_required": connection_status == "authorization_required",
         "last_verified_at": verification.completed_at.isoformat() if verification and verification.status == "success" and verification.completed_at else None,
-        "last_successful_sync_at": vehicle_sync.completed_at.isoformat() if vehicle_sync and vehicle_sync.status == "success" and vehicle_sync.completed_at else (verification.completed_at.isoformat() if verification and verification.status == "success" and verification.completed_at else None),
+        "last_successful_sync_at": last_successful.completed_at.isoformat() if last_successful and last_successful.completed_at else None,
         "last_error_code": latest_error.error_code if latest_error else None,
         "last_error_message_sanitized": latest_error.error_message_sanitized if latest_error else None,
         "records_read": verification.records_read if verification else 0,
@@ -304,7 +294,27 @@ def _latest_motive_status(session: Session, organization_id: str) -> dict[str, A
         "vehicle_records_stored": vehicle_count,
         "last_vehicle_records_read": vehicle_sync.records_read if vehicle_sync else 0,
         "last_vehicle_pages_read": int(vehicle_counts.get("pages_read") or 0),
+        "last_user_sync_at": user_sync.completed_at.isoformat() if user_sync and user_sync.status == "success" and user_sync.completed_at else None,
+        "last_user_sync_status": user_sync.status if user_sync else None,
+        "user_records_stored": user_count,
+        "last_user_records_read": user_sync.records_read if user_sync else 0,
+        "last_user_pages_read": int(user_counts.get("pages_read") or 0),
+        "driver_classification_certified": False,
     }
+
+
+def _latest_history(session: Session, organization_id: str, *, mode: str) -> MotiveSyncHistory | None:
+    return (
+        session.query(MotiveSyncHistory)
+        .filter(MotiveSyncHistory.organization_id == organization_id, MotiveSyncHistory.provider == "motive", MotiveSyncHistory.mode == mode)
+        .order_by(MotiveSyncHistory.started_at.desc(), MotiveSyncHistory.id.desc())
+        .first()
+    )
+
+
+def _latest_completed_success(*rows: MotiveSyncHistory | None) -> MotiveSyncHistory | None:
+    successes = [row for row in rows if row is not None and row.status == "success" and row.completed_at is not None]
+    return max(successes, key=lambda row: row.completed_at) if successes else None
 
 
 def _upsert_vehicles(session: Session, vehicles: list[MotiveVehicle]) -> dict[str, int]:
@@ -349,20 +359,69 @@ def _upsert_vehicles(session: Session, vehicles: list[MotiveVehicle]) -> dict[st
     return counts
 
 
-def _vehicle_checkpoint(session: Session, organization_id: str) -> MotiveSyncCheckpoint | None:
+def _upsert_users(session: Session, users: list[MotiveDriver]) -> dict[str, int]:
+    counts = {"records_inserted": 0, "records_updated": 0, "records_unchanged": 0, "records_upserted": 0}
+    now = datetime.now(timezone.utc)
+    for user in users:
+        provider_user_id = user.provider_driver_id
+        if not provider_user_id:
+            raise MotiveConnectorError("Motive user did not include a provider user id", status=ConnectorStatus.FAILED, code="provider_contract_error")
+        existing = (
+            session.query(MotiveDriverRecord)
+            .filter(
+                MotiveDriverRecord.organization_id == user.organization_id,
+                MotiveDriverRecord.provider_driver_id == provider_user_id,
+            )
+            .one_or_none()
+        )
+        values = {
+            "organization_slug": user.organization_slug,
+            "provider": "motive",
+            "source_endpoint": user.source_endpoint,
+            "name": user.name,
+            "email": user.email,
+            "status": user.status,
+            "observed_at": user.observed_at,
+            "provider_payload_metadata": user.metadata,
+        }
+        if existing is None:
+            session.add(MotiveDriverRecord(organization_id=user.organization_id, provider_driver_id=provider_user_id, **values))
+            counts["records_inserted"] += 1
+            continue
+        changed = any(getattr(existing, key) != value for key, value in values.items())
+        if changed:
+            for key, value in values.items():
+                setattr(existing, key, value)
+            existing.updated_at = now
+            counts["records_updated"] += 1
+        else:
+            counts["records_unchanged"] += 1
+    counts["records_upserted"] = counts["records_inserted"] + counts["records_updated"]
+    return counts
+
+
+def _resource_checkpoint(session: Session, organization_id: str, provider_resource: str) -> MotiveSyncCheckpoint | None:
     return (
         session.query(MotiveSyncCheckpoint)
-        .filter(MotiveSyncCheckpoint.organization_id == organization_id, MotiveSyncCheckpoint.provider_resource == "vehicles")
+        .filter(MotiveSyncCheckpoint.organization_id == organization_id, MotiveSyncCheckpoint.provider_resource == provider_resource)
         .one_or_none()
     )
 
 
-def _ensure_vehicle_checkpoint(session: Session, organization: Organization) -> MotiveSyncCheckpoint:
-    checkpoint = _vehicle_checkpoint(session, organization.id)
+def _ensure_resource_checkpoint(session: Session, organization: Organization, provider_resource: str) -> MotiveSyncCheckpoint:
+    checkpoint = _resource_checkpoint(session, organization.id, provider_resource)
     if checkpoint is None:
-        checkpoint = MotiveSyncCheckpoint(organization_id=organization.id, organization_slug=organization.slug, provider_resource="vehicles", provider="motive")
+        checkpoint = MotiveSyncCheckpoint(organization_id=organization.id, organization_slug=organization.slug, provider_resource=provider_resource, provider="motive")
         session.add(checkpoint)
     return checkpoint
+
+
+def _vehicle_checkpoint(session: Session, organization_id: str) -> MotiveSyncCheckpoint | None:
+    return _resource_checkpoint(session, organization_id, "vehicles")
+
+
+def _ensure_vehicle_checkpoint(session: Session, organization: Organization) -> MotiveSyncCheckpoint:
+    return _ensure_resource_checkpoint(session, organization, "vehicles")
 
 
 def _checkpoint_snapshot(checkpoint: MotiveSyncCheckpoint | None) -> dict[str, Any]:
@@ -377,19 +436,111 @@ def _checkpoint_snapshot(checkpoint: MotiveSyncCheckpoint | None) -> dict[str, A
     }
 
 
-def _mark_history_failure(session: Session, history: MotiveSyncHistory, exc: MotiveConnectorError, *, checkpoint_before: dict[str, Any]) -> None:
+def _create_running_history(
+    session: Session,
+    organization: Organization,
+    *,
+    run_id: str,
+    provider_resource: str,
+    mode: str,
+    checkpoint_before: dict[str, Any],
+    started_at: datetime,
+) -> MotiveSyncHistory:
+    history = MotiveSyncHistory(
+        organization_id=organization.id,
+        organization_slug=organization.slug,
+        provider="motive",
+        provider_resource=provider_resource,
+        mode=mode,
+        status="running",
+        run_id=run_id,
+        started_at=started_at,
+        checkpoint_before=checkpoint_before,
+        checkpoint_after=checkpoint_before,
+        resource_counts={},
+    )
+    session.add(history)
+    session.commit()
+    return history
+
+
+def _checkpoint_after(result: dict[str, Any], completed_at: datetime) -> dict[str, Any]:
+    return {
+        "page_number": result["pages_read"],
+        "records_read": result["records_read"],
+        "pagination_total": result.get("pagination_total"),
+        "completed_at": completed_at.isoformat(),
+    }
+
+
+def _mark_checkpoint_success(checkpoint: MotiveSyncCheckpoint, checkpoint_after: dict[str, Any], completed_at: datetime) -> None:
+    checkpoint.page_number = int(checkpoint_after.get("page_number") or 0)
+    checkpoint.last_successful_position = checkpoint_after
+    checkpoint.checkpoint_status = "success"
+    checkpoint.last_successful_sync_at = completed_at
+    checkpoint.updated_at = completed_at
+
+
+def _mark_history_success(
+    history: MotiveSyncHistory,
+    *,
+    result: dict[str, Any],
+    counts: dict[str, int],
+    checkpoint_after: dict[str, Any],
+    completed_at: datetime,
+    resource: str,
+) -> None:
+    history.status = "success"
+    history.completed_at = completed_at
+    history.records_read = int(result["records_read"] or 0)
+    history.records_written = counts["records_upserted"]
+    history.checkpoint_after = checkpoint_after
+    history.resource_counts = {
+        resource: history.records_read,
+        "pages_read": int(result["pages_read"] or 0),
+        **counts,
+    }
+
+
+def _sync_response(
+    *,
+    result: dict[str, Any],
+    counts: dict[str, int],
+    history: MotiveSyncHistory,
+    resource: str,
+    certified_field: str,
+) -> dict[str, Any]:
+    return {
+        "status": "success",
+        "resource": resource,
+        "pages_read": int(result["pages_read"] or 0),
+        "records_read": int(result["records_read"] or 0),
+        "records_inserted": counts["records_inserted"],
+        "records_updated": counts["records_updated"],
+        "records_unchanged": counts["records_unchanged"],
+        "records_upserted": counts["records_upserted"],
+        "completed_at": history.completed_at.isoformat() if history.completed_at else None,
+        "error_code": None,
+        "production_certified": False,
+        certified_field: True,
+        "secrets_exposed": False,
+        "run_id": history.run_id,
+    }
+
+
+def _mark_history_failure(session: Session, history: MotiveSyncHistory, exc: MotiveConnectorError, *, checkpoint_before: dict[str, Any], resource: str = "vehicles") -> None:
     history.status = exc.status.value
     history.completed_at = datetime.now(timezone.utc)
     history.error_code = exc.code
     history.error_message_sanitized = str(exc)
     history.records_read = 0
     history.records_written = 0
-    history.resource_counts = {"vehicles": 0}
+    history.resource_counts = {resource: 0}
     history.checkpoint_after = checkpoint_before
     session.commit()
 
 
-def _mark_vehicle_persistence_failure(session: Session, *, run_id: str, checkpoint_before: dict[str, Any]) -> None:
+def _mark_persistence_failure(session: Session, *, run_id: str, checkpoint_before: dict[str, Any], resource: str, message: str) -> None:
     try:
         session.rollback()
         history = session.query(MotiveSyncHistory).filter(MotiveSyncHistory.run_id == run_id).one_or_none()
@@ -398,13 +549,24 @@ def _mark_vehicle_persistence_failure(session: Session, *, run_id: str, checkpoi
         history.status = "failed"
         history.completed_at = datetime.now(timezone.utc)
         history.error_code = _DATABASE_PERSISTENCE_ERROR_CODE
-        history.error_message_sanitized = _DATABASE_PERSISTENCE_ERROR_MESSAGE
+        history.error_message_sanitized = message
         history.records_written = 0
-        history.resource_counts = {"vehicles": 0}
+        history.resource_counts = {resource: 0}
         history.checkpoint_after = checkpoint_before
         session.commit()
     except SQLAlchemyError:
         session.rollback()
+
+
+def _mark_vehicle_persistence_failure(session: Session, *, run_id: str, checkpoint_before: dict[str, Any]) -> None:
+    _mark_persistence_failure(session, run_id=run_id, checkpoint_before=checkpoint_before, resource="vehicles", message=_DATABASE_VEHICLE_PERSISTENCE_ERROR_MESSAGE)
+
+
+def _persistence_http_exception(resource: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail={"status": "failed", "resource": resource, "error_code": _DATABASE_PERSISTENCE_ERROR_CODE, "message": message},
+    )
 
 
 def _http_status(error: MotiveConnectorError) -> int:

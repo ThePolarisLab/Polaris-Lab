@@ -53,7 +53,7 @@ export function motiveEvidenceStatus(payload, loading = false) {
   if (loading) return { status: "Checking", detail: "Checking Motive Company API Key verification status." };
   const statusKey = connectionStatus(payload);
   if (statusKey === "connected" && Boolean(payload?.status?.last_verified_at || payload?.health?.details?.last_verified_at)) {
-    return { status: "Available", detail: "Available after successful API-key connection verification. Broad evidence ingestion remains deferred." };
+    return { status: "Available", detail: "Available after successful API-key connection verification. Vehicle and user sync metadata may be available, but broad evidence ingestion remains deferred." };
   }
   if (statusKey === "configured_unverified") {
     return { status: "Pending", detail: "Configured by administrator, verification pending. Production data ingestion remains deferred." };
@@ -82,6 +82,14 @@ export function safeMotiveMetadata(payload) {
     "last_vehicle_records_read",
     "last_vehicle_pages_read",
     "vehicle_ingestion_certified",
+    "user_sync_enabled",
+    "last_user_sync_at",
+    "last_user_sync_status",
+    "user_records_stored",
+    "last_user_records_read",
+    "last_user_pages_read",
+    "user_ingestion_certified",
+    "driver_classification_certified",
   ];
   const result = {};
   for (const key of safeKeys) {
@@ -92,6 +100,9 @@ export function safeMotiveMetadata(payload) {
   result.production_certified = Boolean(result.production_certified);
   result.vehicle_sync_enabled = Boolean(result.vehicle_sync_enabled);
   result.vehicle_ingestion_certified = Boolean(result.vehicle_ingestion_certified);
+  result.user_sync_enabled = Boolean(result.user_sync_enabled);
+  result.user_ingestion_certified = Boolean(result.user_ingestion_certified);
+  result.driver_classification_certified = Boolean(result.driver_classification_certified);
   return result;
 }
 

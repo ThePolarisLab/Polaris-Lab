@@ -18,15 +18,25 @@
 - Exposes safe vehicle sync metadata on Motive status: last vehicle sync time/status, records stored, records read, and pages read.
 - Keeps broad sync disabled and production certification false; this track certifies only vehicle endpoint connectivity, pagination, idempotent vehicle upserts, manual vehicle sync, and safe metadata.
 
-## 4C.2B+: Provider Contract Completion and Sync Design
+## 4C.2B: Company User Read-Only Production Ingestion
+
+- Adds manual company-user ingestion using `POST /api/v1/motive/sync/users`.
+- Uses the confirmed endpoint `GET /v1/users?per_page=100&page_no=N` with Company API Key authentication at the backend HTTP boundary.
+- Uses Motive support's confirmed pagination contract: `per_page` maximum 100, one-based `page_no`, and `pagination.total`.
+- Persists tenant-owned company-user records using `(organization_id, provider_user_id)` as the provider identity. The existing storage column name remains `provider_driver_id` until a separately reviewed schema cleanup is justified.
+- Does not classify every `/v1/users` row as a driver. Driver classification remains `unknown` and `driver_classification_certified=false` until Motive documents or production samples certify a role/type discriminator.
+- Exposes safe user sync metadata only: last user sync time/status, records stored, records read, pages read, and driver-classification certification state.
+- Keeps broad sync disabled and production certification false; this track certifies only `/v1/users` connectivity, pagination, idempotent company-user upserts, manual user sync, and safe metadata.
+
+## 4C.2C+: Provider Contract Completion and Sync Design
 
 Before broader sync is implemented, Polaris must complete design and verification for:
 
 - driver filtering based on real provider role fields observed in sanitized provider data or official documentation
-- durable ingestion for users/drivers, vehicle utilization, driver utilization, and IFTA summary
+- durable ingestion for vehicle utilization, driver utilization, and IFTA summary
 - production-safe batching and incremental date ranges per resource
 - webhook authentication/signature contract
-- production evidence certification criteria beyond vehicle-only persistence
+- production evidence certification criteria beyond vehicle/user-only persistence
 
 ## Confirmed Provider Inputs
 
@@ -34,9 +44,11 @@ Motive support confirmed the production Company API Key path, required endpoints
 
 For vehicles, Track 4C.2A uses the confirmed `/v1/vehicles` endpoint with `per_page=100` and one-based `page_no`; it uses `pagination.total` when returned, stops on empty pages, and enforces a maximum-page guard.
 
+For company users, Track 4C.2B uses the confirmed `/v1/users` endpoint with `per_page=100` and one-based `page_no`; it uses `pagination.total` when returned, stops on empty pages, and enforces a maximum-page guard. Driver role classification is not certified.
+
 ## Later Tracks
 
-- users/drivers synchronization after role filtering is verified
+- driver classification after role filtering is verified
 - vehicle utilization, driver utilization, and IFTA summary ingestion
 - broad synchronization and scheduled reconciliation
 - webhooks with delivery audit trail and dead-letter handling

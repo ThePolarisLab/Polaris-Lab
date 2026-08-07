@@ -1,4 +1,4 @@
-"""Motive Company API Key connector shell for read-only verification and vehicle ingestion."""
+"""Motive Company API Key connector shell for read-only verification and vehicle/user ingestion."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import httpx
 
 from app.connectors.base import BaseConnector
 from app.connectors.models import ConnectorHealth, ConnectorStatus, SyncResult
-from app.connectors.motive_contracts import MotiveVehicle
+from app.connectors.motive_contracts import MotiveDriver, MotiveVehicle
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,8 @@ MOTIVE_VERIFICATION_ENDPOINT = "/v1/vehicles"
 MOTIVE_VERIFICATION_PARAMS = {"per_page": 1, "page_no": 1}
 MOTIVE_VEHICLES_ENDPOINT = "/v1/vehicles"
 MOTIVE_VEHICLES_PER_PAGE = 100
+MOTIVE_USERS_ENDPOINT = "/v1/users"
+MOTIVE_USERS_PER_PAGE = 100
 MOTIVE_AUTHENTICATION_METHOD = "company_api_key"
 MOTIVE_CREDENTIAL_SOURCE = "render_environment"
 MOTIVE_CONFIRMED_ENDPOINTS = (
@@ -67,7 +69,7 @@ class MotiveConnectorError(RuntimeError):
 
 
 class MotiveConnector(BaseConnector):
-    """Expose safe Motive status, verification, and vehicle-only read ingestion."""
+    """Expose safe Motive status, verification, and narrow read ingestion."""
 
     def __init__(
         self,
@@ -77,6 +79,7 @@ class MotiveConnector(BaseConnector):
         sleep: Callable[[float], None] = time.sleep,
         jitter: Callable[[], float] = random.random,
         max_vehicle_pages: int | None = None,
+        max_user_pages: int | None = None,
     ) -> None:
         super().__init__(name="motive")
         self.organization_id = organization_id
@@ -84,6 +87,7 @@ class MotiveConnector(BaseConnector):
         self._sleep = sleep
         self._jitter = jitter
         self._max_vehicle_pages = max_vehicle_pages
+        self._max_user_pages = max_user_pages
 
     def validate_configuration(self) -> None:
         if not _api_key_present():
@@ -119,7 +123,7 @@ class MotiveConnector(BaseConnector):
             records_written=0,
             events_published=0,
             success=False,
-            errors=["Motive broad synchronization is deferred; use vehicle-only manual sync."],
+            errors=["Motive broad synchronization is deferred; use vehicle-only or user-only manual sync."],
         )
 
     def disconnect(self) -> None:
@@ -158,17 +162,26 @@ class MotiveConnector(BaseConnector):
             "vehicle_records_stored": persisted_status.get("vehicle_records_stored") if persisted_status else 0,
             "last_vehicle_records_read": persisted_status.get("last_vehicle_records_read") if persisted_status else 0,
             "last_vehicle_pages_read": persisted_status.get("last_vehicle_pages_read") if persisted_status else 0,
+            "user_sync_enabled": True,
+            "last_user_sync_at": persisted_status.get("last_user_sync_at") if persisted_status else None,
+            "last_user_sync_status": persisted_status.get("last_user_sync_status") if persisted_status else None,
+            "user_records_stored": persisted_status.get("user_records_stored") if persisted_status else 0,
+            "last_user_records_read": persisted_status.get("last_user_records_read") if persisted_status else 0,
+            "last_user_pages_read": persisted_status.get("last_user_pages_read") if persisted_status else 0,
+            "driver_classification_certified": False,
             "read_only": True,
             "production_sync_enabled": False,
             "broad_sync_enabled": False,
             "verification_endpoint": MOTIVE_VERIFICATION_ENDPOINT,
             "verification_params": dict(MOTIVE_VERIFICATION_PARAMS),
             "vehicle_sync_endpoint": MOTIVE_VEHICLES_ENDPOINT,
+            "user_sync_endpoint": MOTIVE_USERS_ENDPOINT,
             "confirmed_endpoints": list(MOTIVE_CONFIRMED_ENDPOINTS),
-            "driver_user_pagination": {"endpoint": "/v1/users", "per_page_max": 100, "page_no": "one_based", "total_field": "pagination.total"},
+            "driver_user_pagination": {"endpoint": MOTIVE_USERS_ENDPOINT, "per_page_max": MOTIVE_USERS_PER_PAGE, "page_no": "one_based", "total_field": "pagination.total"},
             "production_certified": False,
             "vehicle_ingestion_certified": bool((persisted_status or {}).get("last_vehicle_sync_status") == "success"),
-            "deferred_resources": ["drivers", "driver_role_filtering", "vehicle_utilization", "driver_utilization", "ifta_summary", "broad_sync", "hos", "safety", "dvir", "fault_codes", "trips", "maintenance", "fuel_purchases", "webhooks", "fleet_kpis", "multi_tenant_oauth"],
+            "user_ingestion_certified": bool((persisted_status or {}).get("last_user_sync_status") == "success"),
+            "deferred_resources": ["driver_classification", "driver_utilization", "vehicle_utilization", "ifta_summary", "broad_sync", "hos", "safety", "dvir", "fault_codes", "trips", "maintenance", "fuel_purchases", "webhooks", "fleet_kpis", "multi_tenant_oauth"],
             "secrets_exposed": False,
         }
 
@@ -197,7 +210,7 @@ class MotiveConnector(BaseConnector):
         retrieved = 0
         total: int | None = None
         seen_pages: set[int] = set()
-        for page_no in range(1, self._vehicle_page_limit() + 1):
+        for page_no in range(1, self._page_limit("vehicles") + 1):
             if page_no in seen_pages:
                 raise MotiveConnectorError("Motive vehicle pagination repeated a page", status=ConnectorStatus.FAILED, code="provider_contract_error")
             seen_pages.add(page_no)
@@ -217,6 +230,35 @@ class MotiveConnector(BaseConnector):
         else:
             raise MotiveConnectorError("Motive vehicle pagination exceeded the maximum page guard", status=ConnectorStatus.FAILED, code="provider_contract_error")
         return {"vehicles": vehicles, "pages_read": pages_read, "records_read": len(vehicles), "pagination_total": total}
+
+    def list_users(self, *, organization_id: str, organization_slug: str) -> dict[str, Any]:
+        """Read Motive company users without certifying driver classification."""
+        self.validate_configuration()
+        users: list[MotiveDriver] = []
+        pages_read = 0
+        retrieved = 0
+        total: int | None = None
+        seen_pages: set[int] = set()
+        for page_no in range(1, self._page_limit("users") + 1):
+            if page_no in seen_pages:
+                raise MotiveConnectorError("Motive user pagination repeated a page", status=ConnectorStatus.FAILED, code="provider_contract_error")
+            seen_pages.add(page_no)
+            params = {"per_page": MOTIVE_USERS_PER_PAGE, "page_no": page_no}
+            payload = self._request_json(MOTIVE_USERS_ENDPOINT, params=params, operation="user_sync")
+            page_items = _user_items(payload)
+            pages_read += 1
+            if total is None:
+                total = _pagination_total(payload)
+            if not page_items:
+                break
+            for item in page_items:
+                users.append(_normalize_user(item, organization_id=organization_id, organization_slug=organization_slug))
+            retrieved += len(page_items)
+            if total is not None and retrieved >= total:
+                break
+        else:
+            raise MotiveConnectorError("Motive user pagination exceeded the maximum page guard", status=ConnectorStatus.FAILED, code="provider_contract_error")
+        return {"users": users, "pages_read": pages_read, "records_read": len(users), "pagination_total": total, "driver_classification_certified": False}
 
     def _request_vehicle_probe(self) -> dict[str, Any]:
         return self._request_json(MOTIVE_VERIFICATION_ENDPOINT, params=MOTIVE_VERIFICATION_PARAMS, operation="verification")
@@ -241,13 +283,13 @@ class MotiveConnector(BaseConnector):
                 )
                 payload = self._json_response(response)
                 logger.info(
-                    "MOTIVE API KEY VERIFY SUCCESS" if operation == "verification" else "MOTIVE API KEY VEHICLES PAGE SUCCESS",
+                    _success_log_message(operation),
                     extra={
                         "motive_operation": operation,
                         "organization_id": self.organization_id,
                         "endpoint_path": endpoint,
                         "http_status": response.status_code,
-                        "records_read": _records_read_from_vehicle_payload(payload),
+                        "records_read": _records_read_from_payload(endpoint, payload),
                         "rate_limited": False,
                         "page_no": params.get("page_no"),
                     },
@@ -332,10 +374,15 @@ class MotiveConnector(BaseConnector):
     def _base_url() -> str:
         return os.getenv("POLARIS_MOTIVE_API_BASE_URL", MOTIVE_API_BASE_URL).rstrip("/")
 
-    def _vehicle_page_limit(self) -> int:
-        configured = int(os.getenv("POLARIS_MOTIVE_VEHICLE_MAX_PAGES", "100"))
-        if self._max_vehicle_pages is not None:
-            configured = self._max_vehicle_pages
+    def _page_limit(self, resource: str) -> int:
+        if resource == "users":
+            configured = int(os.getenv("POLARIS_MOTIVE_USER_MAX_PAGES", "100"))
+            if self._max_user_pages is not None:
+                configured = self._max_user_pages
+        else:
+            configured = int(os.getenv("POLARIS_MOTIVE_VEHICLE_MAX_PAGES", "100"))
+            if self._max_vehicle_pages is not None:
+                configured = self._max_vehicle_pages
         return min(max(configured, 1), 1000)
 
 
@@ -371,14 +418,25 @@ def _vehicle_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
     value = payload.get("vehicles")
     if value is None:
         value = payload.get("data")
+    return _dict_items(value, item_key="vehicle", resource="vehicle")
+
+
+def _user_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    value = payload.get("users")
+    if value is None:
+        value = payload.get("data")
+    return _dict_items(value, item_key="user", resource="user")
+
+
+def _dict_items(value: Any, *, item_key: str, resource: str) -> list[dict[str, Any]]:
     if not isinstance(value, list):
-        raise MotiveConnectorError("Motive vehicle response did not include a vehicle list", status=ConnectorStatus.FAILED, code="provider_contract_error")
+        raise MotiveConnectorError(f"Motive {resource} response did not include a {resource} list", status=ConnectorStatus.FAILED, code="provider_contract_error")
     items: list[dict[str, Any]] = []
     for raw in value:
-        if isinstance(raw, dict) and isinstance(raw.get("vehicle"), dict):
-            raw = raw["vehicle"]
+        if isinstance(raw, dict) and isinstance(raw.get(item_key), dict):
+            raw = raw[item_key]
         if not isinstance(raw, dict):
-            raise MotiveConnectorError("Motive vehicle response included an unexpected vehicle item", status=ConnectorStatus.FAILED, code="provider_contract_error")
+            raise MotiveConnectorError(f"Motive {resource} response included an unexpected {resource} item", status=ConnectorStatus.FAILED, code="provider_contract_error")
         items.append(raw)
     return items
 
@@ -417,6 +475,37 @@ def _normalize_vehicle(raw: dict[str, Any], *, organization_id: str, organizatio
     )
 
 
+def _normalize_user(raw: dict[str, Any], *, organization_id: str, organization_slug: str) -> MotiveDriver:
+    provider_user_id = _string(raw.get("id") or raw.get("provider_user_id") or raw.get("user_id"))
+    if not provider_user_id:
+        raise MotiveConnectorError("Motive user did not include a provider user id", status=ConnectorStatus.FAILED, code="provider_contract_error")
+    observed_at = _parse_datetime(raw.get("updated_at") or raw.get("last_updated_at") or raw.get("created_at"))
+    first_name = _string(raw.get("first_name"))
+    last_name = _string(raw.get("last_name"))
+    combined_name = " ".join(part for part in (first_name, last_name) if part).strip() or None
+    metadata = {
+        "source_keys": sorted(str(key) for key in raw.keys() if _safe_metadata_key(str(key))),
+        "driver_classification": "unknown",
+        "driver_classification_certified": False,
+    }
+    for key in ("username", "role", "roles", "type", "user_type"):
+        value = raw.get(key)
+        if value in (None, ""):
+            continue
+        metadata[key] = value if isinstance(value, (str, int, float, bool, list, dict)) else str(value)
+    return MotiveDriver(
+        organization_id=organization_id,
+        organization_slug=organization_slug,
+        provider_driver_id=provider_user_id,
+        source_endpoint=MOTIVE_USERS_ENDPOINT,
+        name=_string(raw.get("name")) or combined_name,
+        email=_string(raw.get("email")),
+        status=_string(raw.get("status") or raw.get("state")),
+        observed_at=observed_at,
+        metadata=metadata,
+    )
+
+
 def _records_read_from_vehicle_payload(payload: dict[str, Any]) -> int:
     try:
         return len(_vehicle_items(payload))
@@ -424,6 +513,29 @@ def _records_read_from_vehicle_payload(payload: dict[str, Any]) -> int:
         if isinstance(payload.get("vehicle"), dict):
             return 1
         return 0
+
+
+def _records_read_from_user_payload(payload: dict[str, Any]) -> int:
+    try:
+        return len(_user_items(payload))
+    except MotiveConnectorError:
+        if isinstance(payload.get("user"), dict):
+            return 1
+        return 0
+
+
+def _records_read_from_payload(endpoint: str, payload: dict[str, Any]) -> int:
+    if endpoint == MOTIVE_USERS_ENDPOINT:
+        return _records_read_from_user_payload(payload)
+    return _records_read_from_vehicle_payload(payload)
+
+
+def _success_log_message(operation: str) -> str:
+    if operation == "verification":
+        return "MOTIVE API KEY VERIFY SUCCESS"
+    if operation == "user_sync":
+        return "MOTIVE API KEY USERS PAGE SUCCESS"
+    return "MOTIVE API KEY VEHICLES PAGE SUCCESS"
 
 
 def _api_key_present() -> bool:
