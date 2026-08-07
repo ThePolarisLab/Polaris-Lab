@@ -119,7 +119,7 @@ test("uses backend API-key status verification and vehicle sync actions without 
 test("does not expose raw Motive provider payloads or secrets in frontend view code", async () => {
   const source = await readFile(new URL("../src/components/ExecutiveViews.jsx", import.meta.url), "utf8");
   assert.doesNotMatch(source, /access_token|refresh_token|client_secret|oauth_state|authorization_header/i);
-  assert.doesNotMatch(source, /X-API-Key|x-api-key|motive_api_key/i);
+  assert.doesNotMatch(source, /MOTIVE_API_KEY|X-API-Key|x-api-key|motive_api_key/i);
   assert.doesNotMatch(source, /vehicles\s*\.map|provider_payload|raw provider/i);
 });
 
