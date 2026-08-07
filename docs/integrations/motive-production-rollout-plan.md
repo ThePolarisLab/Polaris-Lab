@@ -14,7 +14,20 @@ Implemented scope:
 - System Health and Evidence mappings that require successful verification before reporting availability
 - safe Motive logging and query redaction controls retained
 
-No broad Motive synchronization is enabled.
+## Track 4C.2A: Vehicle-Only Manual Ingestion
+
+Implemented scope:
+
+- read-only vehicle listing using `GET /v1/vehicles?per_page=100&page_no=N`
+- manual backend route `POST /api/v1/motive/sync/vehicles`
+- tenant-owned upserts into `motive_vehicles`
+- idempotency through `(organization_id, provider_vehicle_id)`
+- sync history for resource `vehicles`
+- checkpoint advancement only after successful vehicle persistence
+- safe Motive status metadata for last vehicle sync, pages read, records read, and records stored
+- minimal frontend `Sync Vehicles` action on the existing connector card
+
+No driver, utilization, IFTA, HOS, safety, trip, fuel, maintenance, webhook, scheduled polling, broad sync, or executive KPI ingestion is enabled.
 
 ## Render Environment Configuration
 
@@ -34,24 +47,30 @@ The OAuth environment variables from PRs #115-#118 are no longer required for ac
 
 Leave deployed OAuth database schema in place unless a separate migration safety review approves cleanup.
 
-## Verification Runbook
+## Vehicle Sync Runbook
 
 After deployment:
 
 1. Confirm `MOTIVE_API_KEY` is configured in the backend Render service.
-2. Open the executive connectors page.
-3. Confirm the Motive card shows `Configured by administrator` and `Configured, verification pending` before verification.
-4. Click `Verify`.
-5. Confirm the backend performs only this request:
+2. Confirm Motive verification has succeeded.
+3. Open the executive connectors page.
+4. Click `Sync Vehicles`.
+5. Confirm the backend performs paginated read-only requests only:
 
 ```text
-GET https://api.gomotive.com/v1/vehicles?per_page=1&page_no=1
+GET https://api.gomotive.com/v1/vehicles?per_page=100&page_no=1
 Accept: application/json
 X-API-Key: <secret>
 ```
 
-6. Confirm status becomes `Connected` only after a successful verification response.
+6. Confirm status metadata updates with last vehicle sync time/status, pages read, records read, and vehicle records stored.
 7. Confirm Render logs do not contain the API key, `X-API-Key` value, raw request headers, authorization headers, or raw provider payloads.
+
+## Pagination and Retry Boundary
+
+Vehicle ingestion starts at `page_no=1` with `per_page=100`, uses `pagination.total` when returned, stops when retrieved records reach total, stops on an empty page, and enforces a maximum-page guard to prevent infinite loops.
+
+For retryable `429`, provider `5xx`, timeout, or network failures, Polaris uses bounded retries with exponential backoff and jitter and honors `Retry-After` when present. Polaris does not retry `401` or `403` and does not invent numeric Motive quota limits or reset windows.
 
 ## Provider Contract Confirmed by Motive Support
 
@@ -67,7 +86,10 @@ Motive API Support case 11006147 confirmed:
 
 - broad resource synchronization
 - recurring polling
-- driver role filtering until real provider role fields are observed or officially documented
+- driver/user ingestion and driver role filtering until real provider role fields are observed or officially documented
+- vehicle utilization
+- driver utilization
+- IFTA summary
 - HOS
 - safety events
 - DVIR
@@ -82,6 +104,6 @@ Motive API Support case 11006147 confirmed:
 
 ## Webhook Design Note
 
-Motive webhooks are available, but no webhook routes, subscriptions, or handlers are implemented in Track 4C.1E.
+Motive webhooks are available, but no webhook routes, subscriptions, or handlers are implemented in Track 4C.2A.
 
 Future webhooks should complement scheduled reconciliation sync, not replace it. Webhook ingestion will require signature or authentication validation, organization routing, event deduplication, replay protection, event persistence, retry handling, delivery audit trail, and dead-letter handling.

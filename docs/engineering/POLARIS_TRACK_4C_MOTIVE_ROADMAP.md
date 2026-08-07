@@ -9,23 +9,35 @@
 - Use limited read-only verification only: `GET /v1/vehicles?per_page=1&page_no=1`.
 - Disable active OAuth connect/callback behavior while retaining deployed OAuth schema unless cleanup is separately reviewed.
 
-## 4C.1F: Provider Contract Completion and Sync Design
+## 4C.2A: Vehicle Read-Only Production Ingestion
 
-Before broad sync is implemented, Polaris must complete design and verification for:
+- Adds manual vehicle-only ingestion using `POST /api/v1/motive/sync/vehicles`.
+- Uses the confirmed endpoint `GET /v1/vehicles?per_page=100&page_no=N` with Company API Key authentication at the backend HTTP boundary.
+- Persists only tenant-owned vehicle records in `motive_vehicles` using `(organization_id, provider_vehicle_id)` as the idempotent provider identity.
+- Reuses existing `motive_sync_history` and `motive_sync_checkpoints`; checkpoints advance only after successful durable persistence.
+- Exposes safe vehicle sync metadata on Motive status: last vehicle sync time/status, records stored, records read, and pages read.
+- Keeps broad sync disabled and production certification false; this track certifies only vehicle endpoint connectivity, pagination, idempotent vehicle upserts, manual vehicle sync, and safe metadata.
+
+## 4C.2B+: Provider Contract Completion and Sync Design
+
+Before broader sync is implemented, Polaris must complete design and verification for:
 
 - driver filtering based on real provider role fields observed in sanitized provider data or official documentation
-- checkpoint advancement after durable persistence for each resource
-- pagination behavior for each resource beyond the confirmed users contract
-- production-safe batching and incremental date ranges
+- durable ingestion for users/drivers, vehicle utilization, driver utilization, and IFTA summary
+- production-safe batching and incremental date ranges per resource
 - webhook authentication/signature contract
-- production evidence certification criteria
+- production evidence certification criteria beyond vehicle-only persistence
 
 ## Confirmed Provider Inputs
 
 Motive support confirmed the production Company API Key path, required endpoints, users pagination (`per_page` maximum 100, one-based `page_no`, `pagination.total`), and rate-limit guidance: handle `429`, honor `Retry-After` when present, use exponential backoff with jitter, avoid immediate retry loops, avoid excessive concurrency, and use pagination, caching, batching, incremental ranges, and multi-ID requests where supported.
 
+For vehicles, Track 4C.2A uses the confirmed `/v1/vehicles` endpoint with `per_page=100` and one-based `page_no`; it uses `pagination.total` when returned, stops on empty pages, and enforces a maximum-page guard.
+
 ## Later Tracks
 
+- users/drivers synchronization after role filtering is verified
+- vehicle utilization, driver utilization, and IFTA summary ingestion
 - broad synchronization and scheduled reconciliation
 - webhooks with delivery audit trail and dead-letter handling
 - executive fleet KPIs

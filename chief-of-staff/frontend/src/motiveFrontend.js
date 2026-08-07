@@ -75,6 +75,13 @@ export function safeMotiveMetadata(payload) {
     "production_sync_enabled",
     "broad_sync_enabled",
     "production_certified",
+    "vehicle_sync_enabled",
+    "last_vehicle_sync_at",
+    "last_vehicle_sync_status",
+    "vehicle_records_stored",
+    "last_vehicle_records_read",
+    "last_vehicle_pages_read",
+    "vehicle_ingestion_certified",
   ];
   const result = {};
   for (const key of safeKeys) {
@@ -83,6 +90,8 @@ export function safeMotiveMetadata(payload) {
   }
   result.production_sync_enabled = Boolean(result.production_sync_enabled);
   result.production_certified = Boolean(result.production_certified);
+  result.vehicle_sync_enabled = Boolean(result.vehicle_sync_enabled);
+  result.vehicle_ingestion_certified = Boolean(result.vehicle_ingestion_certified);
   return result;
 }
 
