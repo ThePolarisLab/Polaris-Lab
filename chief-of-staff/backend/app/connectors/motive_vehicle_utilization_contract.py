@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import date
 from typing import Any
 
@@ -22,11 +23,34 @@ MOTIVE_VEHICLE_UTILIZATION_ENDPOINT = "/v1/vehicle_utilization"
 MOTIVE_VEHICLE_UTILIZATION_CONTRACT_PARAMS = {"per_page": 1, "page_no": 1}
 MOTIVE_VEHICLE_UTILIZATION_METRICS = ("utilization", "idle_time", "idle_fuel", "driving_time", "driving_fuel")
 MOTIVE_VEHICLE_UTILIZATION_TIME_ZONE = "America/Winnipeg"
+PROVIDER_400_GENERIC_MESSAGE = "Provider rejected request parameters or required context."
 _SCHEMA_COMPATIBLE = "compatible"
 _SCHEMA_REQUIRES_MAPPING_REVIEW = "requires_mapping_review"
 _SCHEMA_INSUFFICIENT_IDENTITY = "insufficient_identity"
 _SCHEMA_INSUFFICIENT_PERIOD = "insufficient_period"
 _SECRET_KEY_MARKERS = ("token", "secret", "authorization", "api_key", "x-api-key", "credential")
+_SENSITIVE_MESSAGE_MARKERS = _SECRET_KEY_MARKERS + (
+    "bearer",
+    "header",
+    "headers",
+    "vehicle_ids",
+    "vehicle_id",
+    "start_date",
+    "end_date",
+    "x-user-id",
+    "x-time-zone",
+    "x-metric-units",
+    "vin",
+    "plate",
+    "license",
+    "email",
+)
+_EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
+_UUID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE)
+_LONG_NUMBER_RE = re.compile(r"\b\d{6,}\b")
+_TOKENISH_RE = re.compile(r"\b[A-Za-z0-9_-]{24,}\b")
+_VIN_RE = re.compile(r"\b[A-HJ-NPR-Z0-9]{17}\b", re.IGNORECASE)
+_SHORT_CODE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 
 
 def verify_vehicle_utilization_contract(
@@ -108,6 +132,10 @@ def verify_vehicle_utilization_contract(
 
 def _contract_json_response(response: httpx.Response) -> Any:
     retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
+    if response.status_code == 400:
+        exc = MotiveConnectorError("Motive vehicle utilization contract request failed with HTTP 400", status=ConnectorStatus.FAILED, retryable=False, code="http_400", http_status=400)
+        exc.provider_diagnostics = _provider_400_diagnostics(response)  # type: ignore[attr-defined]
+        raise exc
     if response.status_code == 429:
         raise MotiveConnectorError("Motive vehicle utilization contract request was rate limited", status=ConnectorStatus.RATE_LIMITED, retryable=False, code="rate_limited", http_status=429, retry_after=retry_after)
     if response.status_code in {401, 403}:
@@ -131,6 +159,113 @@ def _contract_json_response(response: httpx.Response) -> Any:
     if not isinstance(decoded, (dict, list)):
         raise MotiveConnectorError("Motive vehicle utilization contract returned an unexpected response shape", status=ConnectorStatus.FAILED, retryable=False, code="provider_contract_error", http_status=response.status_code)
     return decoded
+
+
+def _provider_400_diagnostics(response: httpx.Response) -> dict[str, Any]:
+    payload = _safe_json_payload(response)
+    if not isinstance(payload, (dict, list)):
+        return _generic_provider_400_diagnostics()
+    keys = _safe_error_paths(payload)
+    message_candidates = _message_candidates(payload)
+    category = _message_category(message_candidates, keys)
+    safe_message = next((message for message in message_candidates if _is_safe_provider_message(message)), None)
+    diagnostics: dict[str, Any] = {
+        "provider_error_keys": keys,
+        "provider_error_message_category": category,
+        "provider_error_message": safe_message or PROVIDER_400_GENERIC_MESSAGE,
+    }
+    code = _provider_error_code(payload)
+    if code is not None:
+        diagnostics["provider_error_code"] = code
+    return diagnostics
+
+
+def _generic_provider_400_diagnostics() -> dict[str, Any]:
+    return {
+        "provider_error_keys": [],
+        "provider_error_message_category": "unknown_provider_rejection",
+        "provider_error_message": PROVIDER_400_GENERIC_MESSAGE,
+    }
+
+
+def _safe_json_payload(response: httpx.Response) -> Any:
+    if not response.content:
+        return None
+    try:
+        return response.json()
+    except ValueError:
+        return None
+
+
+def _safe_error_paths(value: Any, *, prefix: str = "") -> list[str]:
+    paths: list[str] = []
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            key_text = str(key)
+            if not _safe_schema_key(key_text):
+                continue
+            path = f"{prefix}.{key_text}" if prefix else key_text
+            paths.append(path)
+            if isinstance(nested, dict):
+                paths.extend(_safe_error_paths(nested, prefix=path))
+            elif isinstance(nested, list) and nested and isinstance(nested[0], dict):
+                paths.extend(_safe_error_paths(nested[0], prefix=f"{path}[]"))
+    elif isinstance(value, list) and value and isinstance(value[0], dict):
+        paths.extend(_safe_error_paths(value[0], prefix=prefix))
+    return sorted(set(paths))[:20]
+
+
+def _message_candidates(value: Any) -> list[str]:
+    candidates: list[str] = []
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            lowered = str(key).lower()
+            if lowered in {"error", "message", "detail", "description"} and isinstance(nested, str):
+                candidates.append(" ".join(nested.split()))
+            elif isinstance(nested, (dict, list)):
+                candidates.extend(_message_candidates(nested))
+    elif isinstance(value, list):
+        for item in value[:5]:
+            candidates.extend(_message_candidates(item))
+    return candidates[:10]
+
+
+def _provider_error_code(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    for key in ("code", "error_code", "errorCode", "type", "status"):
+        candidate = value.get(key)
+        if isinstance(candidate, (str, int)):
+            text = str(candidate).strip()
+            if _SHORT_CODE_RE.match(text) and _is_safe_provider_message(text):
+                return text
+    return None
+
+
+def _message_category(messages: list[str], keys: list[str]) -> str:
+    text = " ".join(messages + keys).lower()
+    if "x-user-id" in text or ("user" in text and ("required" in text or "missing" in text or "fleet" in text)):
+        return "permission_context_required"
+    if "header" in text and ("required" in text or "missing" in text):
+        return "missing_required_header"
+    if any(marker in text for marker in ("parameter", "param", "vehicle_ids", "start_date", "end_date", "per_page", "page_no")) and any(marker in text for marker in ("required", "missing")):
+        return "missing_required_parameter"
+    if "invalid" in text or "not valid" in text:
+        return "invalid_parameter"
+    if "malformed" in text or "bad request" in text:
+        return "malformed_request"
+    return "unknown_provider_rejection"
+
+
+def _is_safe_provider_message(message: str) -> bool:
+    if not message or len(message) > 160:
+        return False
+    lowered = message.lower()
+    if any(marker in lowered for marker in _SENSITIVE_MESSAGE_MARKERS):
+        return False
+    if _EMAIL_RE.search(message) or _UUID_RE.search(message) or _LONG_NUMBER_RE.search(message) or _TOKENISH_RE.search(message) or _VIN_RE.search(message):
+        return False
+    return True
 
 
 def _summarize_contract_payload(payload: Any, *, request_date: date) -> dict[str, Any]:
