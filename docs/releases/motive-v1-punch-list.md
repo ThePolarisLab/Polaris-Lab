@@ -15,7 +15,7 @@
 - User upserts are tenant-owned and idempotent through organization-owned provider user identity.
 - User checkpoints advance only after successful durable persistence.
 - Driver classification is not certified; Polaris does not expose a driver count or driver KPI from `/v1/users` records.
-- Temporary vehicle-utilization contract verification reached Motive and received HTTP 400; the follow-up diagnostic layer returns only sanitized provider rejection metadata before any future live retry.
+- Temporary vehicle-utilization contract verification reached Motive and received HTTP 400 with provider JSON key `error_message`; semantic categories are fixed Polaris-owned labels/messages and raw provider text remains suppressed.
 - System Health is Healthy only after successful API-key verification.
 - Evidence is Available only after successful verification and does not claim broad ingestion.
 - Existing OAuth runtime routes are disabled for active production behavior.

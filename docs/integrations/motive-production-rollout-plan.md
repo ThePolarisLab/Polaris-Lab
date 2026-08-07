@@ -57,13 +57,15 @@ Implemented scope:
 - redacts the provider vehicle ID and never returns metric values, VIN, plate, request headers, API key, or raw provider payload
 - performs no utilization persistence, checkpoint mutation, frontend activation, polling, broad sync, KPI calculation, or schema migration
 
-First live production verification evidence:
+Live production verification evidence:
 
 - the Polaris endpoint executed and reached Motive successfully
 - Motive returned HTTP 400
-- the provider rejection reason was not known from the initial sanitized response
-- the follow-up diagnostic layer must be deployed before another live contract request is attempted
+- the latest sanitized response showed provider JSON key `error_message`
+- raw provider error text remains intentionally suppressed from API responses and logs
+- semantic classification is used only to identify the missing provider-contract requirement before a future controlled verification call
 - `X-User-Id` is documented by Motive as a possible Fleet Admin/Fleet Manager context header, but Polaris does not yet have an authoritative organization-safe provider user candidate
+- do not claim `X-User-Id` is required for Mor Logistics until a later controlled production verification proves that category
 
 Track 4C.2C vehicle-utilization ingestion remains blocked until the sanitized live contract result is reviewed and the existing `motive_vehicle_utilization` identity/period mapping is certified.
 
@@ -139,10 +141,11 @@ X-API-Key: <secret>
 ```
 
 4. Confirm the response contains only sanitized field/type/schema metadata on success.
-5. If Motive returns HTTP 400, confirm the response contains only sanitized diagnostic fields: `provider_error_keys`, `provider_error_code` when safe, `provider_error_message_category`, and a strict safe `provider_error_message` or the generic fallback `Provider rejected request parameters or required context.`
-6. Confirm no row is written to `motive_vehicle_utilization` and no sync checkpoint changes.
-7. Confirm Render logs contain only `MOTIVE VEHICLE UTILIZATION CONTRACT VERIFY` with organization ID, HTTP status, response type, item count, and schema compatibility.
-8. Do not treat this endpoint as production ingestion or KPI certification.
+5. If Motive returns HTTP 400, confirm the response contains only sanitized diagnostic fields: `provider_error_keys`, `provider_error_code` when safe, `provider_error_message_category`, and a fixed Polaris-owned `provider_error_message`.
+6. Confirm raw provider error text, provider IDs, VINs, plates, emails, query values, headers, and secrets are not returned.
+7. Confirm no row is written to `motive_vehicle_utilization` and no sync checkpoint changes.
+8. Confirm Render logs contain only `MOTIVE VEHICLE UTILIZATION CONTRACT VERIFY` with organization ID, HTTP status, response type, item count, and schema compatibility.
+9. Do not treat this endpoint as production ingestion or KPI certification.
 
 ## Pagination and Retry Boundary
 

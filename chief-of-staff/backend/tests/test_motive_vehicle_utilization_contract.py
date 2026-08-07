@@ -13,7 +13,7 @@ import pytest
 
 from app.api import motive as motive_api
 from app.connectors.motive import MotiveConnectorError
-from app.connectors.motive_vehicle_utilization_contract import PROVIDER_400_GENERIC_MESSAGE, verify_vehicle_utilization_contract
+from app.connectors.motive_vehicle_utilization_contract import PROVIDER_400_GENERIC_MESSAGE, PROVIDER_400_MESSAGE_BY_CATEGORY, verify_vehicle_utilization_contract
 from app.models.motive import MotiveSyncCheckpoint, MotiveVehicleUtilizationRecord
 from app.security.models import AuthenticatedPrincipal, Permission
 
@@ -90,6 +90,17 @@ def _contract_error_for_response(monkeypatch: pytest.MonkeyPatch, response: http
     return exc_info.value
 
 
+def _assert_fixed_diagnostic(diagnostics: dict[str, Any], *, category: str, original_message: str) -> None:
+    assert diagnostics["provider_error_message_category"] == category
+    assert diagnostics["provider_error_message"] == PROVIDER_400_MESSAGE_BY_CATEGORY[category]
+    rendered = json.dumps(diagnostics, sort_keys=True)
+    assert original_message not in rendered
+    assert "provider-vehicle-secret" not in rendered
+    assert "fake-motive-key" not in rendered
+    assert "X-API-Key" not in rendered
+    assert "MOTIVE_API_KEY" not in rendered
+
+
 def test_vehicle_utilization_contract_request_is_one_redacted_provider_call(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
     calls: list[httpx.Request] = []
@@ -147,57 +158,50 @@ def test_vehicle_utilization_contract_does_not_retry_rate_limit(monkeypatch: pyt
 @pytest.mark.parametrize(
     ("payload", "expected_category", "expected_keys"),
     [
-        ({"error": "X-User-Id is required"}, "permission_context_required", ["error"]),
-        ({"errors": [{"message": "Required context is missing", "code": "missing_context"}]}, "unknown_provider_rejection", ["errors", "errors[].code", "errors[].message"]),
+        ({"error": "X-User-Id is required"}, "missing_user_context", ["error"]),
+        ({"error_message": "user id required"}, "missing_user_context", ["error_message"]),
+        ({"error_message": "missing start_date"}, "missing_date_parameter", ["error_message"]),
+        ({"error_message": "missing end_date"}, "missing_date_parameter", ["error_message"]),
+        ({"error_message": "invalid date range"}, "invalid_date_parameter", ["error_message"]),
+        ({"error_message": "vehicle_ids required"}, "missing_vehicle_parameter", ["error_message"]),
+        ({"error_message": "invalid vehicle id"}, "invalid_vehicle_parameter", ["error_message"]),
+        ({"error_message": "page_no parameter invalid"}, "invalid_pagination_parameter", ["error_message"]),
+        ({"error_message": "authorization context required"}, "permission_context_required", ["error_message"]),
+        ({"error_message": "provider refused the thing"}, "unknown_provider_rejection", ["error_message"]),
+        ({"errors": [{"message": "Required context is missing", "code": "missing_context"}]}, "permission_context_required", ["errors", "errors[].code", "errors[].message"]),
     ],
 )
-def test_vehicle_utilization_contract_sanitizes_json_400_diagnostics(monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any], expected_category: str, expected_keys: list[str]) -> None:
+def test_vehicle_utilization_contract_classifies_400_without_returning_provider_text(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, Any],
+    expected_category: str,
+    expected_keys: list[str],
+) -> None:
+    original_message = json.dumps(payload)
     exc = _contract_error_for_response(monkeypatch, httpx.Response(400, json=payload))
 
     diagnostics = exc.provider_diagnostics
     assert diagnostics["provider_error_keys"] == expected_keys
-    assert diagnostics["provider_error_message_category"] == expected_category
-    assert diagnostics["provider_error_message"] in {"Required context is missing", PROVIDER_400_GENERIC_MESSAGE}
-    rendered = json.dumps(diagnostics, sort_keys=True)
-    assert "X-User-Id" not in rendered
-    assert "provider-vehicle-secret" not in rendered
-    assert "fake-motive-key" not in rendered
+    _assert_fixed_diagnostic(diagnostics, category=expected_category, original_message=original_message)
 
 
-def test_vehicle_utilization_contract_sanitizes_400_identifiers(monkeypatch: pytest.MonkeyPatch) -> None:
-    exc = _contract_error_for_response(
-        monkeypatch,
-        httpx.Response(400, json={"error": "Vehicle id 123e4567-e89b-12d3-a456-426614174000 is invalid", "code": "invalid_parameter"}),
-    )
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"error_message": "Vehicle id 123e4567-e89b-12d3-a456-426614174000 is invalid", "code": "invalid_parameter"},
+        {"error_message": "User dispatcher@example.com cannot access this report"},
+        {"error_message": "Vehicle VIN 1HGCM82633A004352 is invalid"},
+        {"error_message": "Header X-API-Key fake-motive-key rejected"},
+        {"error_message": "vehicle_ids[]=123456 and start_date=2026-08-06 rejected"},
+    ],
+)
+def test_vehicle_utilization_contract_400_hostile_messages_never_return_raw_text(monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]) -> None:
+    exc = _contract_error_for_response(monkeypatch, httpx.Response(400, json=payload))
 
-    diagnostics = exc.provider_diagnostics
-    assert diagnostics["provider_error_code"] == "invalid_parameter"
-    assert diagnostics["provider_error_message_category"] == "invalid_parameter"
-    assert diagnostics["provider_error_message"] == PROVIDER_400_GENERIC_MESSAGE
-    assert "123e4567" not in json.dumps(diagnostics)
-
-
-def test_vehicle_utilization_contract_sanitizes_400_email(monkeypatch: pytest.MonkeyPatch) -> None:
-    exc = _contract_error_for_response(monkeypatch, httpx.Response(400, json={"message": "User dispatcher@example.com cannot access this report"}))
-
-    diagnostics = exc.provider_diagnostics
-    assert diagnostics["provider_error_message"] == PROVIDER_400_GENERIC_MESSAGE
-    assert "dispatcher@example.com" not in json.dumps(diagnostics)
-
-
-def test_vehicle_utilization_contract_sanitizes_400_header_and_query_echoes(monkeypatch: pytest.MonkeyPatch) -> None:
-    exc = _contract_error_for_response(
-        monkeypatch,
-        httpx.Response(400, json={"message": "Header X-User-Id missing for vehicle_ids[]=123456 and start_date=2026-08-06"}),
-    )
-
-    diagnostics = exc.provider_diagnostics
-    assert diagnostics["provider_error_message_category"] == "permission_context_required"
-    assert diagnostics["provider_error_message"] == PROVIDER_400_GENERIC_MESSAGE
-    rendered = json.dumps(diagnostics)
-    assert "123456" not in rendered
-    assert "2026-08-06" not in rendered
-    assert "X-User-Id" not in rendered
+    rendered = json.dumps(exc.provider_diagnostics, sort_keys=True)
+    for unsafe in ("123e4567", "dispatcher@example.com", "1HGCM82633A004352", "fake-motive-key", "123456", "2026-08-06", "X-API-Key"):
+        assert unsafe not in rendered
+    assert exc.provider_diagnostics["provider_error_message"] in PROVIDER_400_MESSAGE_BY_CATEGORY.values()
 
 
 @pytest.mark.parametrize("response", [httpx.Response(400, text="bad request with vehicle 123456"), httpx.Response(400, content=b"")])
@@ -225,9 +229,9 @@ def test_vehicle_utilization_contract_existing_error_behavior_unchanged(monkeypa
 def test_vehicle_utilization_contract_route_returns_sanitized_400_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
     connector_error = MotiveConnectorError("Motive vehicle utilization contract request failed with HTTP 400", code="http_400")
     connector_error.provider_diagnostics = {
-        "provider_error_keys": ["error"],
-        "provider_error_message_category": "permission_context_required",
-        "provider_error_message": PROVIDER_400_GENERIC_MESSAGE,
+        "provider_error_keys": ["error_message"],
+        "provider_error_message_category": "missing_user_context",
+        "provider_error_message": PROVIDER_400_MESSAGE_BY_CATEGORY["missing_user_context"],
     }
     monkeypatch.setattr(motive_api, "_organization", lambda session, organization_id: SimpleNamespace(id=organization_id, slug="org-a"))
     monkeypatch.setattr(motive_api, "_vehicle_for_utilization_contract", lambda session, organization_id: SimpleNamespace(provider_vehicle_id="provider-vehicle-secret"))
@@ -243,9 +247,9 @@ def test_vehicle_utilization_contract_route_returns_sanitized_400_diagnostics(mo
 
     detail = exc_info.value.detail
     assert detail["error_code"] == "http_400"
-    assert detail["provider_error_keys"] == ["error"]
-    assert detail["provider_error_message_category"] == "permission_context_required"
-    assert detail["provider_error_message"] == PROVIDER_400_GENERIC_MESSAGE
+    assert detail["provider_error_keys"] == ["error_message"]
+    assert detail["provider_error_message_category"] == "missing_user_context"
+    assert detail["provider_error_message"] == PROVIDER_400_MESSAGE_BY_CATEGORY["missing_user_context"]
     assert "provider-vehicle-secret" not in json.dumps(detail)
 
 
