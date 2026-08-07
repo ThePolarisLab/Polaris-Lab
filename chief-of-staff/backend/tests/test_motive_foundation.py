@@ -60,7 +60,8 @@ def test_api_key_status_reports_configured_unverified_when_key_exists(monkeypatc
     assert status["connection_status"] == "configured_unverified"
     assert status["key_present"] is True
     assert status["configured_by_administrator"] is True
-    assert status["credential_precedence"] == ["MOTIVE_API_KEY"]
+    assert status["credential_precedence"] == ["render_environment"]
+    assert "MOTIVE_API_KEY" not in str(status)
     assert FAKE_API_KEY not in str(status)
 
 
