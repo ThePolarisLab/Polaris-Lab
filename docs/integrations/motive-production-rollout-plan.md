@@ -27,7 +27,22 @@ Implemented scope:
 - safe Motive status metadata for last vehicle sync, pages read, records read, and records stored
 - minimal frontend `Sync Vehicles` action on the existing connector card
 
-No driver, utilization, IFTA, HOS, safety, trip, fuel, maintenance, webhook, scheduled polling, broad sync, or executive KPI ingestion is enabled.
+## Track 4C.2B: Company-User Manual Ingestion
+
+Implemented scope:
+
+- read-only company-user listing using `GET /v1/users?per_page=100&page_no=N`
+- manual backend route `POST /api/v1/motive/sync/users`
+- tenant-owned upserts for company users in the existing Motive identity persistence table
+- idempotency through organization-owned provider user identity
+- sync history for resource `users`
+- checkpoint advancement only after successful user persistence
+- safe Motive status metadata for last user sync, pages read, records read, records stored, and driver classification certification
+- minimal frontend `Sync Users` action on the existing connector card
+
+Driver classification is not certified in Track 4C.2B. The `/v1/users` endpoint returns company users, and Polaris must not treat every row as a driver until Motive documents or production samples certify the role/type discriminator.
+
+No utilization, IFTA, HOS, safety, trip, fuel, maintenance, webhook, scheduled polling, broad sync, executive KPI ingestion, or driver KPI exposure is enabled.
 
 ## Render Environment Configuration
 
@@ -66,9 +81,28 @@ X-API-Key: <secret>
 6. Confirm status metadata updates with last vehicle sync time/status, pages read, records read, and vehicle records stored.
 7. Confirm Render logs do not contain the API key, `X-API-Key` value, raw request headers, authorization headers, or raw provider payloads.
 
+## User Sync Runbook
+
+After deployment:
+
+1. Confirm `MOTIVE_API_KEY` is configured and Motive verification has succeeded.
+2. Open the executive connectors page.
+3. Click `Sync Users`.
+4. Confirm the backend performs paginated read-only requests only:
+
+```text
+GET https://api.gomotive.com/v1/users?per_page=100&page_no=1
+Accept: application/json
+X-API-Key: <secret>
+```
+
+5. Confirm status metadata updates with last user sync time/status, pages read, records read, user records stored, and `driver_classification_certified=false`.
+6. Confirm no driver count, driver KPI, HOS, safety, utilization, or broad-ingestion claim is exposed.
+7. Confirm Render logs do not contain the API key, `X-API-Key` value, raw request headers, authorization headers, or raw provider payloads.
+
 ## Pagination and Retry Boundary
 
-Vehicle ingestion starts at `page_no=1` with `per_page=100`, uses `pagination.total` when returned, stops when retrieved records reach total, stops on an empty page, and enforces a maximum-page guard to prevent infinite loops.
+Vehicle and user ingestion start at `page_no=1` with `per_page=100`, use `pagination.total` when returned, stop when retrieved records reach total, stop on an empty page, and enforce a maximum-page guard to prevent infinite loops.
 
 For retryable `429`, provider `5xx`, timeout, or network failures, Polaris uses bounded retries with exponential backoff and jitter and honors `Retry-After` when present. Polaris does not retry `401` or `403` and does not invent numeric Motive quota limits or reset windows.
 
@@ -86,7 +120,7 @@ Motive API Support case 11006147 confirmed:
 
 - broad resource synchronization
 - recurring polling
-- driver/user ingestion and driver role filtering until real provider role fields are observed or officially documented
+- driver role filtering until real provider role fields are observed or officially documented
 - vehicle utilization
 - driver utilization
 - IFTA summary
@@ -104,6 +138,6 @@ Motive API Support case 11006147 confirmed:
 
 ## Webhook Design Note
 
-Motive webhooks are available, but no webhook routes, subscriptions, or handlers are implemented in Track 4C.2A.
+Motive webhooks are available, but no webhook routes, subscriptions, or handlers are implemented in Track 4C.2B.
 
 Future webhooks should complement scheduled reconciliation sync, not replace it. Webhook ingestion will require signature or authentication validation, organization routing, event deduplication, replay protection, event persistence, retry handling, delivery audit trail, and dead-letter handling.
