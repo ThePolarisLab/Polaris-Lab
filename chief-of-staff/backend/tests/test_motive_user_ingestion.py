@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
@@ -153,8 +154,7 @@ def test_user_upsert_is_idempotent_and_org_scoped(motive_user_db):
 
     first = _user()
     same = _user()
-    changed = _user()
-    changed = MotiveDriver(**{**changed.__dict__, "email": "changed@example.com"})
+    changed = replace(_user(), email="changed@example.com")
     other_org = _user(organization_id="org-b", organization_slug="org-b")
 
     with motive_user_db() as session:
