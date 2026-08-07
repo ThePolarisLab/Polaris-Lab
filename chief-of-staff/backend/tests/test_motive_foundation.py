@@ -3,17 +3,20 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 
+from fastapi import HTTPException
 import httpx
 import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
+from app.connectors.models import ConnectorStatus
 from app.connectors.motive import MOTIVE_VEHICLES_ENDPOINT, MOTIVE_VERIFICATION_ENDPOINT, MOTIVE_VERIFICATION_PARAMS, MotiveConnector, MotiveConnectorError
 from app.database.database import Base
 from app.identity.models import Identity
 from app.models.motive import MotiveCredential, MotiveOAuthState, MotiveSyncCheckpoint, MotiveSyncHistory, MotiveVehicleRecord
 from app.organizations.models import Organization
+from app.security.models import AuthenticatedPrincipal, Permission
 
 FAKE_API_KEY = "fake-motive-company-api-key-for-tests-only"
 
@@ -38,6 +41,42 @@ def motive_db(monkeypatch, tmp_path):
         session.add(Organization(id="org-b", slug="org-b", display_name="Org B"))
         session.add(Identity(id="identity-a", email="a@example.com", display_name="User A"))
     return TestingSession
+
+
+def _principal(organization_id: str = "org-a") -> AuthenticatedPrincipal:
+    return AuthenticatedPrincipal(
+        identity_id="identity-a",
+        organization_id=organization_id,
+        membership_id=f"membership-{organization_id}",
+        role="admin",
+        permissions=frozenset({Permission.CONNECTOR_WRITE}),
+        provider="test",
+        subject="test-subject",
+    )
+
+
+class _VehicleListConnector:
+    def __init__(self, *, vehicles=None, error: MotiveConnectorError | None = None) -> None:
+        self._vehicles = vehicles or []
+        self._error = error
+
+    def list_vehicles(self, *, organization_id: str, organization_slug: str):
+        if self._error is not None:
+            raise self._error
+        return {"vehicles": self._vehicles, "pages_read": 1, "records_read": len(self._vehicles), "pagination_total": len(self._vehicles)}
+
+
+def _vehicle(organization_id: str = "org-a", organization_slug: str = "org-a", provider_vehicle_id: str = "vehicle-1"):
+    from app.connectors.motive_contracts import MotiveVehicle
+
+    return MotiveVehicle(
+        organization_id=organization_id,
+        organization_slug=organization_slug,
+        provider_vehicle_id=provider_vehicle_id,
+        source_endpoint=MOTIVE_VEHICLES_ENDPOINT,
+        unit_number="T-101",
+        vin="VIN1",
+    )
 
 
 def test_api_key_status_reports_not_configured_without_secret(monkeypatch):
@@ -415,6 +454,146 @@ def test_vehicle_sync_status_metadata_is_org_scoped(motive_db, monkeypatch):
     assert status["last_vehicle_sync_status"] == "success"
     assert status["last_vehicle_records_read"] == 17
     assert status["last_vehicle_pages_read"] == 1
+
+
+def test_vehicle_sync_success_records_counts_and_checkpoint(motive_db, monkeypatch):
+    from app.api import motive as motive_api
+
+    monkeypatch.setattr(motive_api, "_connector", lambda _organization_id: _VehicleListConnector(vehicles=[_vehicle()]))
+    with motive_db() as session:
+        response = motive_api.sync_motive_vehicles(_principal(), session)
+        history = session.query(MotiveSyncHistory).filter_by(mode="vehicle_sync", organization_id="org-a").one()
+        checkpoint = session.query(MotiveSyncCheckpoint).filter_by(organization_id="org-a", provider_resource="vehicles").one()
+        stored_vehicle = session.query(MotiveVehicleRecord).filter_by(organization_id="org-a", provider_vehicle_id="vehicle-1").one()
+
+    assert response["status"] == "success"
+    assert response["records_inserted"] == 1
+    assert response["records_upserted"] == 1
+    assert response["production_certified"] is False
+    assert history.status == "success"
+    assert history.records_read == 1
+    assert history.records_written == 1
+    assert checkpoint.checkpoint_status == "success"
+    assert checkpoint.page_number == 1
+    assert stored_vehicle.vin == "VIN1"
+
+
+def test_vehicle_sync_upsert_database_exception_records_sanitized_failure(motive_db, monkeypatch):
+    from app.api import motive as motive_api
+
+    monkeypatch.setattr(motive_api, "_connector", lambda _organization_id: _VehicleListConnector(vehicles=[_vehicle()]))
+
+    def fail_upsert(_session, _vehicles):
+        raise SQLAlchemyError("SELECT secret FROM db WHERE token='raw-db-secret' AND MOTIVE_API_KEY='leaked'")
+
+    monkeypatch.setattr(motive_api, "_upsert_vehicles", fail_upsert)
+    with motive_db() as session:
+        checkpoint = MotiveSyncCheckpoint(
+            organization_id="org-a",
+            organization_slug="org-a",
+            provider_resource="vehicles",
+            page_number=7,
+            last_successful_position={"page_number": 7},
+            checkpoint_status="success",
+            last_successful_sync_at=datetime.now(timezone.utc),
+        )
+        session.add(checkpoint)
+        session.commit()
+        with pytest.raises(HTTPException) as exc:
+            motive_api.sync_motive_vehicles(_principal(), session)
+        history = session.query(MotiveSyncHistory).filter_by(mode="vehicle_sync", organization_id="org-a").one()
+        preserved_checkpoint = session.query(MotiveSyncCheckpoint).filter_by(organization_id="org-a", provider_resource="vehicles").one()
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail["error_code"] == "database_persistence_error"
+    assert "raw-db-secret" not in str(exc.value.detail)
+    assert "MOTIVE_API_KEY" not in str(exc.value.detail)
+    assert history.status == "failed"
+    assert history.error_code == "database_persistence_error"
+    assert history.error_message_sanitized == "Motive vehicle sync failed during database persistence."
+    assert history.records_written == 0
+    assert history.checkpoint_after == history.checkpoint_before
+    assert preserved_checkpoint.page_number == 7
+    assert preserved_checkpoint.last_successful_position == {"page_number": 7}
+
+
+def test_vehicle_sync_final_commit_exception_records_sanitized_failure(motive_db, monkeypatch):
+    from app.api import motive as motive_api
+
+    monkeypatch.setattr(motive_api, "_connector", lambda _organization_id: _VehicleListConnector(vehicles=[_vehicle()]))
+    with motive_db() as session:
+        session.add(
+            MotiveSyncCheckpoint(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_resource="vehicles",
+                page_number=5,
+                last_successful_position={"page_number": 5},
+                checkpoint_status="success",
+                last_successful_sync_at=datetime.now(timezone.utc),
+            )
+        )
+        session.commit()
+        original_commit = session.commit
+        calls = {"count": 0}
+
+        def flaky_commit():
+            calls["count"] += 1
+            if calls["count"] == 2:
+                raise SQLAlchemyError("INSERT failed with password='raw-db-secret' and x-api-key header")
+            return original_commit()
+
+        monkeypatch.setattr(session, "commit", flaky_commit)
+        with pytest.raises(HTTPException) as exc:
+            motive_api.sync_motive_vehicles(_principal(), session)
+        history = session.query(MotiveSyncHistory).filter_by(mode="vehicle_sync", organization_id="org-a").one()
+        preserved_checkpoint = session.query(MotiveSyncCheckpoint).filter_by(organization_id="org-a", provider_resource="vehicles").one()
+        vehicle_count = session.query(MotiveVehicleRecord).filter_by(organization_id="org-a").count()
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == {
+        "status": "failed",
+        "resource": "vehicles",
+        "error_code": "database_persistence_error",
+        "message": "Motive vehicle sync failed during database persistence.",
+    }
+    assert history.status == "failed"
+    assert history.error_code == "database_persistence_error"
+    assert history.records_written == 0
+    assert history.checkpoint_after == history.checkpoint_before
+    assert preserved_checkpoint.page_number == 5
+    assert preserved_checkpoint.last_successful_position == {"page_number": 5}
+    assert vehicle_count == 0
+
+
+def test_vehicle_sync_motive_connector_error_behavior_is_unchanged(motive_db, monkeypatch):
+    from app.api import motive as motive_api
+
+    connector_error = MotiveConnectorError("Motive rate limited vehicle sync", status=ConnectorStatus.RATE_LIMITED, code="rate_limited", retryable=True, http_status=429)
+    monkeypatch.setattr(motive_api, "_connector", lambda _organization_id: _VehicleListConnector(error=connector_error))
+    with motive_db() as session:
+        session.add(
+            MotiveSyncCheckpoint(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_resource="vehicles",
+                page_number=3,
+                last_successful_position={"page_number": 3},
+                checkpoint_status="success",
+            )
+        )
+        session.commit()
+        with pytest.raises(HTTPException) as exc:
+            motive_api.sync_motive_vehicles(_principal(), session)
+        history = session.query(MotiveSyncHistory).filter_by(mode="vehicle_sync", organization_id="org-a").one()
+        checkpoint = session.query(MotiveSyncCheckpoint).filter_by(organization_id="org-a", provider_resource="vehicles").one()
+
+    assert exc.value.status_code == 429
+    assert exc.value.detail["error_code"] == "rate_limited"
+    assert history.status == "rate_limited"
+    assert history.error_code == "rate_limited"
+    assert history.checkpoint_after == history.checkpoint_before
+    assert checkpoint.page_number == 3
 
 
 def test_provider_specific_types_do_not_escape_internal_contracts():
