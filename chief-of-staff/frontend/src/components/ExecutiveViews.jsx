@@ -314,7 +314,7 @@ export function ConnectorsView() {
     try {
       await apiClient.post("/api/v1/motive/disconnect");
       await load();
-      setNotice({ tone: "warning", message: "Motive Company API Key is managed by backend environment configuration. Remove MOTIVE_API_KEY in Render to disconnect." });
+      setNotice({ tone: "warning", message: "Motive Company API Key is managed by backend environment configuration. Remove the backend secret in Render to disconnect." });
     } catch (requestError) {
       setError(requestError.message || "Motive disconnect failed.");
     } finally {
