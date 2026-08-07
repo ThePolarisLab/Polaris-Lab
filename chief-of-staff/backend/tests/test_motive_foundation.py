@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
-from app.connectors.motive import MOTIVE_VERIFICATION_ENDPOINT, MOTIVE_VERIFICATION_PARAMS, MotiveConnector, MotiveConnectorError
+from app.connectors.motive import MOTIVE_VEHICLES_ENDPOINT, MOTIVE_VERIFICATION_ENDPOINT, MOTIVE_VERIFICATION_PARAMS, MotiveConnector, MotiveConnectorError
 from app.database.database import Base
 from app.identity.models import Identity
 from app.models.motive import MotiveCredential, MotiveOAuthState, MotiveSyncCheckpoint, MotiveSyncHistory, MotiveVehicleRecord
@@ -61,6 +61,8 @@ def test_api_key_status_reports_configured_unverified_when_key_exists(monkeypatc
     assert status["key_present"] is True
     assert status["configured_by_administrator"] is True
     assert status["credential_precedence"] == ["render_environment"]
+    assert status["vehicle_sync_enabled"] is True
+    assert status["broad_sync_enabled"] is False
     assert "MOTIVE_API_KEY" not in str(status)
     assert FAKE_API_KEY not in str(status)
 
@@ -291,6 +293,128 @@ def test_checkpoint_preserves_previous_position_on_failure_or_rate_limit(motive_
         row = session.query(MotiveSyncCheckpoint).filter_by(organization_id="org-a", provider_resource="vehicles").one()
         assert row.page_number == 7
         assert row.last_successful_position == {"page_number": 7}
+
+
+def test_vehicle_list_paginates_until_total_and_normalizes_contract(monkeypatch):
+    monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        page_no = int(request.url.params["page_no"])
+        assert request.url.params["per_page"] == "100"
+        assert request.headers["x-api-key"] == FAKE_API_KEY
+        if page_no == 1:
+            return httpx.Response(200, json={"vehicles": [{"vehicle": {"id": "vehicle-1", "number": "T-101", "vin": "VIN1", "make": "Freightliner", "model": "Cascadia", "year": 2022, "license_plate": "ABC123", "status": "active", "updated_at": "2026-08-07T00:00:00Z"}}], "pagination": {"total": 2}})
+        return httpx.Response(200, json={"vehicles": [{"id": "vehicle-2", "unit_number": "T-102"}], "pagination": {"total": 2}})
+
+    connector = MotiveConnector(organization_id="org-a", http_client=httpx.Client(transport=httpx.MockTransport(handler)), jitter=lambda: 0)
+    result = connector.list_vehicles(organization_id="org-a", organization_slug="org-a")
+
+    assert result["pages_read"] == 2
+    assert result["records_read"] == 2
+    assert len(calls) == 2
+    assert result["vehicles"][0].provider_vehicle_id == "vehicle-1"
+    assert result["vehicles"][0].unit_number == "T-101"
+    assert result["vehicles"][0].organization_id == "org-a"
+    assert FAKE_API_KEY not in str(result)
+
+
+def test_vehicle_list_stops_on_empty_page(monkeypatch):
+    monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"vehicles": [], "pagination": {"total": 200}})
+
+    connector = MotiveConnector(organization_id="org-a", http_client=httpx.Client(transport=httpx.MockTransport(handler)), jitter=lambda: 0)
+    result = connector.list_vehicles(organization_id="org-a", organization_slug="org-a")
+
+    assert result["pages_read"] == 1
+    assert result["records_read"] == 0
+    assert len(calls) == 1
+
+
+def test_vehicle_list_max_page_guard_prevents_infinite_loop(monkeypatch):
+    monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"vehicles": [{"id": "vehicle-1"}], "pagination": {"total": 500}})
+
+    connector = MotiveConnector(organization_id="org-a", http_client=httpx.Client(transport=httpx.MockTransport(handler)), max_vehicle_pages=1, jitter=lambda: 0)
+    with pytest.raises(MotiveConnectorError) as exc:
+        connector.list_vehicles(organization_id="org-a", organization_slug="org-a")
+
+    assert exc.value.code == "provider_contract_error"
+
+
+def test_vehicle_list_fails_closed_on_malformed_contract(monkeypatch):
+    monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"vehicles": [{"number": "missing-id"}], "pagination": {"total": 1}})
+
+    connector = MotiveConnector(organization_id="org-a", http_client=httpx.Client(transport=httpx.MockTransport(handler)), jitter=lambda: 0)
+    with pytest.raises(MotiveConnectorError) as exc:
+        connector.list_vehicles(organization_id="org-a", organization_slug="org-a")
+
+    assert exc.value.code == "provider_contract_error"
+
+
+def test_vehicle_upsert_is_idempotent_and_org_scoped(motive_db):
+    from app.api import motive as motive_api
+    from app.connectors.motive_contracts import MotiveVehicle
+
+    first = MotiveVehicle(organization_id="org-a", organization_slug="org-a", provider_vehicle_id="vehicle-1", source_endpoint=MOTIVE_VEHICLES_ENDPOINT, unit_number="T-101", vin="VIN1")
+    same = MotiveVehicle(organization_id="org-a", organization_slug="org-a", provider_vehicle_id="vehicle-1", source_endpoint=MOTIVE_VEHICLES_ENDPOINT, unit_number="T-101", vin="VIN1")
+    changed = MotiveVehicle(organization_id="org-a", organization_slug="org-a", provider_vehicle_id="vehicle-1", source_endpoint=MOTIVE_VEHICLES_ENDPOINT, unit_number="T-101", vin="VIN2")
+    other_org = MotiveVehicle(organization_id="org-b", organization_slug="org-b", provider_vehicle_id="vehicle-1", source_endpoint=MOTIVE_VEHICLES_ENDPOINT, unit_number="T-201")
+
+    with motive_db() as session:
+        assert motive_api._upsert_vehicles(session, [first]) == {"records_inserted": 1, "records_updated": 0, "records_unchanged": 0, "records_upserted": 1}
+        session.commit()
+        assert motive_api._upsert_vehicles(session, [same]) == {"records_inserted": 0, "records_updated": 0, "records_unchanged": 1, "records_upserted": 0}
+        assert motive_api._upsert_vehicles(session, [changed]) == {"records_inserted": 0, "records_updated": 1, "records_unchanged": 0, "records_upserted": 1}
+        assert motive_api._upsert_vehicles(session, [other_org])["records_inserted"] == 1
+        session.commit()
+        assert session.query(MotiveVehicleRecord).filter_by(organization_id="org-a", provider_vehicle_id="vehicle-1").one().vin == "VIN2"
+        assert session.query(MotiveVehicleRecord).filter_by(provider_vehicle_id="vehicle-1").count() == 2
+
+
+def test_vehicle_sync_status_metadata_is_org_scoped(motive_db, monkeypatch):
+    from app.api import motive as motive_api
+
+    monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
+    completed_at = datetime.now(timezone.utc)
+    with motive_db.begin() as session:
+        session.add(MotiveVehicleRecord(organization_id="org-a", organization_slug="org-a", provider_vehicle_id="vehicle-1"))
+        session.add(MotiveVehicleRecord(organization_id="org-b", organization_slug="org-b", provider_vehicle_id="vehicle-1"))
+        session.add(
+            MotiveSyncHistory(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider="motive",
+                provider_resource="vehicles",
+                mode="vehicle_sync",
+                status="success",
+                run_id="vehicle-sync-a",
+                started_at=completed_at,
+                completed_at=completed_at,
+                records_read=17,
+                records_written=17,
+                checkpoint_before={},
+                checkpoint_after={"page_number": 1},
+                resource_counts={"vehicles": 17, "pages_read": 1, "records_inserted": 17, "records_updated": 0, "records_unchanged": 0, "records_upserted": 17},
+            )
+        )
+    with motive_db() as session:
+        status = motive_api._latest_motive_status(session, "org-a")
+
+    assert status["vehicle_records_stored"] == 1
+    assert status["last_vehicle_sync_status"] == "success"
+    assert status["last_vehicle_records_read"] == 17
+    assert status["last_vehicle_pages_read"] == 1
 
 
 def test_provider_specific_types_do_not_escape_internal_contracts():
