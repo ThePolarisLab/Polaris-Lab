@@ -24,6 +24,17 @@ MOTIVE_VEHICLE_UTILIZATION_CONTRACT_PARAMS = {"per_page": 1, "page_no": 1}
 MOTIVE_VEHICLE_UTILIZATION_METRICS = ("utilization", "idle_time", "idle_fuel", "driving_time", "driving_fuel")
 MOTIVE_VEHICLE_UTILIZATION_TIME_ZONE = "America/Winnipeg"
 PROVIDER_400_GENERIC_MESSAGE = "Provider rejected request parameters or required context."
+PROVIDER_400_MESSAGE_BY_CATEGORY = {
+    "missing_user_context": "Provider requires additional authorized user context.",
+    "missing_date_parameter": "Provider requires date parameters for this request.",
+    "invalid_date_parameter": "Provider rejected the supplied date parameters.",
+    "missing_vehicle_parameter": "Provider requires vehicle context for this request.",
+    "invalid_vehicle_parameter": "Provider rejected the supplied vehicle parameter.",
+    "invalid_pagination_parameter": "Provider rejected the supplied pagination parameters.",
+    "permission_context_required": "Provider requires additional authorization context.",
+    "invalid_request_parameters": "Provider rejected request parameters.",
+    "unknown_provider_rejection": PROVIDER_400_GENERIC_MESSAGE,
+}
 _SCHEMA_COMPATIBLE = "compatible"
 _SCHEMA_REQUIRES_MAPPING_REVIEW = "requires_mapping_review"
 _SCHEMA_INSUFFICIENT_IDENTITY = "insufficient_identity"
@@ -168,11 +179,10 @@ def _provider_400_diagnostics(response: httpx.Response) -> dict[str, Any]:
     keys = _safe_error_paths(payload)
     message_candidates = _message_candidates(payload)
     category = _message_category(message_candidates, keys)
-    safe_message = next((message for message in message_candidates if _is_safe_provider_message(message)), None)
     diagnostics: dict[str, Any] = {
         "provider_error_keys": keys,
         "provider_error_message_category": category,
-        "provider_error_message": safe_message or PROVIDER_400_GENERIC_MESSAGE,
+        "provider_error_message": PROVIDER_400_MESSAGE_BY_CATEGORY[category],
     }
     code = _provider_error_code(payload)
     if code is not None:
@@ -220,7 +230,7 @@ def _message_candidates(value: Any) -> list[str]:
     if isinstance(value, dict):
         for key, nested in value.items():
             lowered = str(key).lower()
-            if lowered in {"error", "message", "detail", "description"} and isinstance(nested, str):
+            if lowered in {"error", "error_message", "errormessage", "message", "detail", "description"} and isinstance(nested, str):
                 candidates.append(" ".join(nested.split()))
             elif isinstance(nested, (dict, list)):
                 candidates.extend(_message_candidates(nested))
@@ -243,18 +253,32 @@ def _provider_error_code(value: Any) -> str | None:
 
 
 def _message_category(messages: list[str], keys: list[str]) -> str:
-    text = " ".join(messages + keys).lower()
-    if "x-user-id" in text or ("user" in text and ("required" in text or "missing" in text or "fleet" in text)):
+    text = _normalized_provider_error_text(messages, keys)
+    has_required = any(marker in text for marker in ("required", "missing", "must include", "must provide", "is required"))
+    has_invalid = any(marker in text for marker in ("invalid", "not valid", "bad", "rejected", "unsupported"))
+    if any(marker in text for marker in ("x-user-id", "x user id", "user id", "fleet admin", "fleet manager", "user context")) and has_required:
+        return "missing_user_context"
+    if any(marker in text for marker in ("permission", "authorization", "authorized", "not authorized", "access", "forbidden", "context")) and any(marker in text for marker in ("required", "missing", "denied", "not authorized", "cannot access", "forbidden")):
         return "permission_context_required"
-    if "header" in text and ("required" in text or "missing" in text):
-        return "missing_required_header"
-    if any(marker in text for marker in ("parameter", "param", "vehicle_ids", "start_date", "end_date", "per_page", "page_no")) and any(marker in text for marker in ("required", "missing")):
-        return "missing_required_parameter"
-    if "invalid" in text or "not valid" in text:
-        return "invalid_parameter"
+    if any(marker in text for marker in ("start_date", "start date", "end_date", "end date", "date parameter", "date parameters")) and has_required:
+        return "missing_date_parameter"
+    if any(marker in text for marker in ("date range", "start_date", "start date", "end_date", "end date", "date")) and has_invalid:
+        return "invalid_date_parameter"
+    if any(marker in text for marker in ("vehicle_ids", "vehicle ids", "vehicle_id", "vehicle id", "vehicle")) and has_required:
+        return "missing_vehicle_parameter"
+    if any(marker in text for marker in ("vehicle_ids", "vehicle ids", "vehicle_id", "vehicle id", "vehicle")) and has_invalid:
+        return "invalid_vehicle_parameter"
+    if any(marker in text for marker in ("page_no", "page no", "page number", "per_page", "per page", "pagination")) and (has_required or has_invalid):
+        return "invalid_pagination_parameter"
+    if any(marker in text for marker in ("parameter", "parameters", "param", "request")) and (has_required or has_invalid):
+        return "invalid_request_parameters"
     if "malformed" in text or "bad request" in text:
-        return "malformed_request"
+        return "invalid_request_parameters"
     return "unknown_provider_rejection"
+
+
+def _normalized_provider_error_text(messages: list[str], keys: list[str]) -> str:
+    return " ".join(messages + keys).lower().replace("-", " ").replace("[]", "s")
 
 
 def _is_safe_provider_message(message: str) -> bool:
