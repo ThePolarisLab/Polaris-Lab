@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.connectors.motive import (
@@ -30,6 +31,8 @@ from app.security.models import AuthenticatedPrincipal, Permission
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/motive", tags=["motive"])
+_DATABASE_PERSISTENCE_ERROR_CODE = "database_persistence_error"
+_DATABASE_PERSISTENCE_ERROR_MESSAGE = "Motive vehicle sync failed during database persistence."
 
 
 def _db() -> Session:
@@ -187,6 +190,17 @@ def sync_motive_vehicles(
         history = session.query(MotiveSyncHistory).filter(MotiveSyncHistory.run_id == run_id).one()
         _mark_history_failure(session, history, exc, checkpoint_before=checkpoint_before)
         raise HTTPException(status_code=_http_status(exc), detail={"status": exc.status.value, "resource": "vehicles", "error_code": exc.code, "message": str(exc)}) from exc
+    except SQLAlchemyError as exc:
+        _mark_vehicle_persistence_failure(session, run_id=run_id, checkpoint_before=checkpoint_before)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "status": "failed",
+                "resource": "vehicles",
+                "error_code": _DATABASE_PERSISTENCE_ERROR_CODE,
+                "message": _DATABASE_PERSISTENCE_ERROR_MESSAGE,
+            },
+        ) from exc
     response = {
         "status": "success",
         "resource": "vehicles",
@@ -373,6 +387,24 @@ def _mark_history_failure(session: Session, history: MotiveSyncHistory, exc: Mot
     history.resource_counts = {"vehicles": 0}
     history.checkpoint_after = checkpoint_before
     session.commit()
+
+
+def _mark_vehicle_persistence_failure(session: Session, *, run_id: str, checkpoint_before: dict[str, Any]) -> None:
+    try:
+        session.rollback()
+        history = session.query(MotiveSyncHistory).filter(MotiveSyncHistory.run_id == run_id).one_or_none()
+        if history is None:
+            return
+        history.status = "failed"
+        history.completed_at = datetime.now(timezone.utc)
+        history.error_code = _DATABASE_PERSISTENCE_ERROR_CODE
+        history.error_message_sanitized = _DATABASE_PERSISTENCE_ERROR_MESSAGE
+        history.records_written = 0
+        history.resource_counts = {"vehicles": 0}
+        history.checkpoint_after = checkpoint_before
+        session.commit()
+    except SQLAlchemyError:
+        session.rollback()
 
 
 def _http_status(error: MotiveConnectorError) -> int:
