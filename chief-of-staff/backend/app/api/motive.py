@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import SQLAlchemyError
@@ -25,6 +26,11 @@ from app.connectors.motive import (
     MotiveConnectorError,
 )
 from app.connectors.motive_contracts import MotiveDriver, MotiveVehicle
+from app.connectors.motive_vehicle_utilization_contract import (
+    MOTIVE_VEHICLE_UTILIZATION_ENDPOINT,
+    MOTIVE_VEHICLE_UTILIZATION_TIME_ZONE,
+    run_vehicle_utilization_contract_verification,
+)
 from app.database.database import SessionLocal
 from app.models.motive import MotiveDriverRecord, MotiveSyncCheckpoint, MotiveSyncHistory, MotiveVehicleRecord
 from app.organizations.models import Organization
@@ -133,6 +139,57 @@ def verify_motive_connection(
     history.checkpoint_after = history.checkpoint_before
     session.commit()
     return {**result, "run_id": run_id}
+
+
+@router.post("/verify/vehicle-utilization-contract")
+def verify_motive_vehicle_utilization_contract(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_WRITE)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Run one temporary read-only contract probe for Motive vehicle utilization."""
+    _organization(session, principal.organization_id)
+    vehicle = _vehicle_for_utilization_contract(session, principal.organization_id)
+    if vehicle is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "status": "failed",
+                "resource": "vehicle_utilization_contract",
+                "error_code": "no_stored_vehicle",
+                "message": "Motive vehicle utilization contract verification requires one stored Motive vehicle for this organization.",
+                "secrets_exposed": False,
+            },
+        )
+    request_date = _completed_vehicle_utilization_contract_date()
+    try:
+        result = run_vehicle_utilization_contract_verification(
+            organization_id=principal.organization_id,
+            provider_vehicle_id=vehicle.provider_vehicle_id,
+            request_date=request_date,
+        )
+    except MotiveConnectorError as exc:
+        raise HTTPException(
+            status_code=_http_status(exc),
+            detail={
+                "status": exc.status.value,
+                "resource": "vehicle_utilization_contract",
+                "error_code": exc.code,
+                "message": str(exc),
+                "secrets_exposed": False,
+            },
+        ) from exc
+    logger.info(
+        "MOTIVE VEHICLE UTILIZATION CONTRACT VERIFY",
+        extra={
+            "motive_operation": "vehicle_utilization_contract_verify",
+            "organization_id": principal.organization_id,
+            "http_status": 200,
+            "response_type": result.get("top_level_type"),
+            "item_count": result.get("item_count_observed"),
+            "schema_compatibility": result.get("schema_compatibility"),
+        },
+    )
+    return result
 
 
 @router.post("/sync/vehicles")
@@ -250,6 +307,14 @@ def motive_verification_contract(principal: AuthenticatedPrincipal = Depends(req
         "verification_request": {"method": "GET", "path": MOTIVE_VERIFICATION_ENDPOINT, "params": dict(MOTIVE_VERIFICATION_PARAMS), "authentication": "company_api_key_header"},
         "vehicle_sync": {"method": "GET", "path": MOTIVE_VEHICLES_ENDPOINT, "params": {"per_page": MOTIVE_VEHICLES_PER_PAGE, "page_no": "one_based"}, "manual_route": "/api/v1/motive/sync/vehicles"},
         "user_sync": {"method": "GET", "path": MOTIVE_USERS_ENDPOINT, "params": {"per_page": MOTIVE_USERS_PER_PAGE, "page_no": "one_based"}, "manual_route": "/api/v1/motive/sync/users", "driver_classification_certified": False},
+        "vehicle_utilization_contract_verification": {
+            "method": "GET",
+            "path": MOTIVE_VEHICLE_UTILIZATION_ENDPOINT,
+            "manual_route": "/api/v1/motive/verify/vehicle-utilization-contract",
+            "params": {"vehicle_ids[]": "redacted_stored_vehicle_id", "start_date": "previous_completed_calendar_day", "end_date": "same_completed_calendar_day", "per_page": 1, "page_no": 1},
+            "max_provider_attempts": 1,
+            "persistence_enabled": False,
+        },
         "oauth_runtime_enabled": False,
         "broad_sync_enabled": False,
         "production_certified": False,
@@ -264,6 +329,20 @@ def _organization(session: Session, organization_id: str) -> Organization:
     if organization is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
     return organization
+
+
+def _vehicle_for_utilization_contract(session: Session, organization_id: str) -> MotiveVehicleRecord | None:
+    return (
+        session.query(MotiveVehicleRecord)
+        .filter(MotiveVehicleRecord.organization_id == organization_id)
+        .order_by(MotiveVehicleRecord.id.asc())
+        .first()
+    )
+
+
+def _completed_vehicle_utilization_contract_date() -> date:
+    company_today = datetime.now(ZoneInfo(MOTIVE_VEHICLE_UTILIZATION_TIME_ZONE)).date()
+    return company_today - timedelta(days=1)
 
 
 def _latest_motive_status(session: Session, organization_id: str) -> dict[str, Any] | None:

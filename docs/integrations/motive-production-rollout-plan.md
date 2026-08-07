@@ -44,6 +44,21 @@ Driver classification is not certified in Track 4C.2B. The `/v1/users` endpoint 
 
 No utilization, IFTA, HOS, safety, trip, fuel, maintenance, webhook, scheduled polling, broad sync, executive KPI ingestion, or driver KPI exposure is enabled.
 
+## Track 4C.2C0: Vehicle Utilization Contract Verification
+
+Implemented scope:
+
+- temporary engineering-only backend route `POST /api/v1/motive/verify/vehicle-utilization-contract`
+- selects exactly one existing organization-owned stored Motive vehicle inside deployed Polaris
+- performs exactly one read-only provider request to `GET /v1/vehicle_utilization`
+- uses `vehicle_ids[]`, `start_date`, `end_date`, `per_page=1`, and `page_no=1`
+- uses the previous completed calendar day in `America/Winnipeg`
+- returns only sanitized schema metadata: envelope keys, item keys, identity paths, period fields, pagination keys, metric presence/types/nullability, unit field names, and schema compatibility
+- redacts the provider vehicle ID and never returns metric values, VIN, plate, request headers, API key, or raw provider payload
+- performs no utilization persistence, checkpoint mutation, frontend activation, polling, broad sync, KPI calculation, or schema migration
+
+Track 4C.2C vehicle-utilization ingestion remains blocked until the sanitized live contract result is reviewed and the existing `motive_vehicle_utilization` identity/period mapping is certified.
+
 ## Render Environment Configuration
 
 Configure this backend environment variable in Render:
@@ -100,11 +115,33 @@ X-API-Key: <secret>
 6. Confirm no driver count, driver KPI, HOS, safety, utilization, or broad-ingestion claim is exposed.
 7. Confirm Render logs do not contain the API key, `X-API-Key` value, raw request headers, authorization headers, or raw provider payloads.
 
+## Vehicle Utilization Contract Verification Runbook
+
+After deployment:
+
+1. Confirm at least one Motive vehicle has already been stored for the active organization.
+2. Invoke `POST /api/v1/motive/verify/vehicle-utilization-contract` from an authenticated engineering context with connector-write permission.
+3. Confirm the backend performs only this provider request shape:
+
+```text
+GET https://api.gomotive.com/v1/vehicle_utilization?vehicle_ids[]=<redacted stored vehicle id>&start_date=<previous completed date>&end_date=<same date>&per_page=1&page_no=1
+Accept: application/json
+X-Time-Zone: America/Winnipeg
+X-API-Key: <secret>
+```
+
+4. Confirm the response contains only sanitized field/type/schema metadata.
+5. Confirm no row is written to `motive_vehicle_utilization` and no sync checkpoint changes.
+6. Confirm Render logs contain only `MOTIVE VEHICLE UTILIZATION CONTRACT VERIFY` with organization ID, HTTP status, response type, item count, and schema compatibility.
+7. Do not treat this endpoint as production ingestion or KPI certification.
+
 ## Pagination and Retry Boundary
 
 Vehicle and user ingestion start at `page_no=1` with `per_page=100`, use `pagination.total` when returned, stop when retrieved records reach total, stop on an empty page, and enforce a maximum-page guard to prevent infinite loops.
 
 For retryable `429`, provider `5xx`, timeout, or network failures, Polaris uses bounded retries with exponential backoff and jitter and honors `Retry-After` when present. Polaris does not retry `401` or `403` and does not invent numeric Motive quota limits or reset windows.
+
+The vehicle-utilization contract verification route is stricter than ingestion: it makes one provider request per invocation and does not retry. It returns sanitized errors for `401`, `403`, `429`, provider `5xx`, timeout/network failure, or malformed responses.
 
 ## Provider Contract Confirmed by Motive Support
 
@@ -114,6 +151,9 @@ Motive API Support case 11006147 confirmed:
 - Company API Key requests use organization-scoped access.
 - Required endpoints are `GET /v1/vehicles`, `GET /v1/users`, `GET /v1/vehicle_utilization`, `GET /v1/driver_utilization`, and `GET /v1/ifta/summary`.
 - User pagination uses `per_page` maximum 100, one-based `page_no`, and `pagination.total`.
+- Vehicle utilization query parameters are `vehicle_ids[]`, `start_date`, `end_date`, `per_page`, and `page_no`.
+- Vehicle utilization documented headers include `X-Time-Zone` and `X-Metric-Units`; Polaris sends `X-Time-Zone: America/Winnipeg` for the contract verification probe and sends `X-Metric-Units` only if explicitly configured.
+- Vehicle utilization documented metrics include `utilization`, `idle_time`, `idle_fuel`, `driving_time`, and `driving_fuel`.
 - Rate-limit handling must handle `429`, honor `Retry-After` when present, use exponential backoff with jitter, avoid immediate retry loops, avoid excessive concurrency, and use pagination, caching, batching, incremental date ranges, and multi-ID requests where supported.
 
 ## Deferred Resource List
@@ -121,7 +161,7 @@ Motive API Support case 11006147 confirmed:
 - broad resource synchronization
 - recurring polling
 - driver role filtering until real provider role fields are observed or officially documented
-- vehicle utilization
+- vehicle utilization ingestion pending 4C.2C0 live contract review
 - driver utilization
 - IFTA summary
 - HOS
@@ -138,6 +178,6 @@ Motive API Support case 11006147 confirmed:
 
 ## Webhook Design Note
 
-Motive webhooks are available, but no webhook routes, subscriptions, or handlers are implemented in Track 4C.2B.
+Motive webhooks are available, but no webhook routes, subscriptions, or handlers are implemented in Track 4C.2C0.
 
 Future webhooks should complement scheduled reconciliation sync, not replace it. Webhook ingestion will require signature or authentication validation, organization routing, event deduplication, replay protection, event persistence, retry handling, delivery audit trail, and dead-letter handling.
