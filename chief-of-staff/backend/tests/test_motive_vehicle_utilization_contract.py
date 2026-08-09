@@ -18,6 +18,18 @@ from app.models.motive import MotiveSyncCheckpoint, MotiveVehicleUtilizationReco
 from app.security.models import AuthenticatedPrincipal, Permission
 
 
+EXPECTED_SEMANTIC_FIELDS = {
+    "mentions_header",
+    "mentions_parameter",
+    "mentions_user_context",
+    "mentions_vehicle_context",
+    "mentions_date_context",
+    "mentions_permission_context",
+    "mentions_required_or_missing",
+    "mentions_invalid_or_rejected",
+}
+
+
 @dataclass
 class NoWriteSession:
     commits: int = 0
@@ -93,6 +105,8 @@ def _contract_error_for_response(monkeypatch: pytest.MonkeyPatch, response: http
 def _assert_fixed_diagnostic(diagnostics: dict[str, Any], *, category: str, original_message: str) -> None:
     assert diagnostics["provider_error_message_category"] == category
     assert diagnostics["provider_error_message"] == PROVIDER_400_MESSAGE_BY_CATEGORY[category]
+    assert set(diagnostics["provider_error_semantics"]) == EXPECTED_SEMANTIC_FIELDS
+    assert all(isinstance(value, bool) for value in diagnostics["provider_error_semantics"].values())
     rendered = json.dumps(diagnostics, sort_keys=True)
     assert original_message not in rendered
     assert "provider-vehicle-secret" not in rendered
@@ -186,12 +200,75 @@ def test_vehicle_utilization_contract_classifies_400_without_returning_provider_
 
 
 @pytest.mark.parametrize(
+    ("payload", "expected_true"),
+    [
+        ({"error_message": "user header must be present"}, {"mentions_header", "mentions_user_context", "mentions_required_or_missing"}),
+        ({"error_message": "provider could not use the vehicle argument"}, {"mentions_vehicle_context", "mentions_parameter"}),
+        ({"error_message": "Vehicle reference was not allowed"}, {"mentions_vehicle_context", "mentions_invalid_or_rejected"}),
+        ({"error_message": "report range could not be evaluated"}, {"mentions_date_context"}),
+        ({"error_message": "scope does not include this role"}, {"mentions_permission_context", "mentions_user_context"}),
+    ],
+)
+def test_vehicle_utilization_contract_400_semantics_for_unknown_provider_phrases(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, Any],
+    expected_true: set[str],
+) -> None:
+    original_message = json.dumps(payload)
+    exc = _contract_error_for_response(monkeypatch, httpx.Response(400, json=payload))
+
+    diagnostics = exc.provider_diagnostics
+    assert diagnostics["provider_error_message_category"] == "unknown_provider_rejection"
+    assert diagnostics["provider_error_message"] == PROVIDER_400_MESSAGE_BY_CATEGORY["unknown_provider_rejection"]
+    semantics = diagnostics["provider_error_semantics"]
+    assert set(semantics) == EXPECTED_SEMANTIC_FIELDS
+    assert expected_true <= {key for key, value in semantics.items() if value}
+    assert original_message not in json.dumps(diagnostics, sort_keys=True)
+
+
+def test_vehicle_utilization_contract_400_semantics_inspects_error_message_string_arrays(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {"error_message": ["user header must provide context", "vehicle query rejected"]}
+    exc = _contract_error_for_response(monkeypatch, httpx.Response(400, json=payload))
+
+    diagnostics = exc.provider_diagnostics
+    semantics = diagnostics["provider_error_semantics"]
+    assert semantics["mentions_header"] is True
+    assert semantics["mentions_user_context"] is True
+    assert semantics["mentions_required_or_missing"] is True
+    assert semantics["mentions_vehicle_context"] is True
+    assert semantics["mentions_parameter"] is True
+    assert semantics["mentions_invalid_or_rejected"] is True
+    rendered = json.dumps(diagnostics, sort_keys=True)
+    assert "user header must provide context" not in rendered
+    assert "vehicle query rejected" not in rendered
+
+
+def test_vehicle_utilization_contract_400_semantics_inspects_nested_mixed_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {"errors": [{"message": ["Fleet user role needed", "date range unsupported"], "code": "missing_context"}]}
+    exc = _contract_error_for_response(monkeypatch, httpx.Response(400, json=payload))
+
+    diagnostics = exc.provider_diagnostics
+    assert diagnostics["provider_error_keys"] == ["errors", "errors[].code", "errors[].message"]
+    semantics = diagnostics["provider_error_semantics"]
+    assert semantics["mentions_user_context"] is True
+    assert semantics["mentions_permission_context"] is True
+    assert semantics["mentions_required_or_missing"] is True
+    assert semantics["mentions_date_context"] is True
+    assert semantics["mentions_invalid_or_rejected"] is True
+    rendered = json.dumps(diagnostics, sort_keys=True)
+    assert "Fleet user role needed" not in rendered
+    assert "date range unsupported" not in rendered
+
+
+@pytest.mark.parametrize(
     "payload",
     [
         {"error_message": "Vehicle id 123e4567-e89b-12d3-a456-426614174000 is invalid", "code": "invalid_parameter"},
         {"error_message": "User dispatcher@example.com cannot access this report"},
         {"error_message": "Vehicle VIN 1HGCM82633A004352 is invalid"},
         {"error_message": "Header X-API-Key fake-motive-key rejected"},
+        {"error_message": "Authorization Bearer fake-token rejected"},
+        {"error_message": "X-User-Id value user-123 rejected"},
         {"error_message": "vehicle_ids[]=123456 and start_date=2026-08-06 rejected"},
     ],
 )
@@ -199,9 +276,25 @@ def test_vehicle_utilization_contract_400_hostile_messages_never_return_raw_text
     exc = _contract_error_for_response(monkeypatch, httpx.Response(400, json=payload))
 
     rendered = json.dumps(exc.provider_diagnostics, sort_keys=True)
-    for unsafe in ("123e4567", "dispatcher@example.com", "1HGCM82633A004352", "fake-motive-key", "123456", "2026-08-06", "X-API-Key"):
+    for unsafe in (
+        "123e4567",
+        "dispatcher@example.com",
+        "1HGCM82633A004352",
+        "fake-motive-key",
+        "fake-token",
+        "user-123",
+        "123456",
+        "2026-08-06",
+        "X-API-Key",
+        "Authorization",
+        "MOTIVE_API_KEY",
+        "provider-vehicle-secret",
+        "X-User-Id",
+        "X-User-Id value",
+    ):
         assert unsafe not in rendered
     assert exc.provider_diagnostics["provider_error_message"] in PROVIDER_400_MESSAGE_BY_CATEGORY.values()
+    assert set(exc.provider_diagnostics["provider_error_semantics"]) == EXPECTED_SEMANTIC_FIELDS
 
 
 @pytest.mark.parametrize("response", [httpx.Response(400, text="bad request with vehicle 123456"), httpx.Response(400, content=b"")])
@@ -212,6 +305,7 @@ def test_vehicle_utilization_contract_non_json_or_empty_400_is_generic(monkeypat
         "provider_error_keys": [],
         "provider_error_message_category": "unknown_provider_rejection",
         "provider_error_message": PROVIDER_400_GENERIC_MESSAGE,
+        "provider_error_semantics": {field: False for field in EXPECTED_SEMANTIC_FIELDS},
     }
 
 
@@ -232,6 +326,16 @@ def test_vehicle_utilization_contract_route_returns_sanitized_400_diagnostics(mo
         "provider_error_keys": ["error_message"],
         "provider_error_message_category": "missing_user_context",
         "provider_error_message": PROVIDER_400_MESSAGE_BY_CATEGORY["missing_user_context"],
+        "provider_error_semantics": {
+            "mentions_header": True,
+            "mentions_parameter": False,
+            "mentions_user_context": True,
+            "mentions_vehicle_context": False,
+            "mentions_date_context": False,
+            "mentions_permission_context": False,
+            "mentions_required_or_missing": True,
+            "mentions_invalid_or_rejected": False,
+        },
     }
     monkeypatch.setattr(motive_api, "_organization", lambda session, organization_id: SimpleNamespace(id=organization_id, slug="org-a"))
     monkeypatch.setattr(motive_api, "_vehicle_for_utilization_contract", lambda session, organization_id: SimpleNamespace(provider_vehicle_id="provider-vehicle-secret"))
@@ -250,6 +354,8 @@ def test_vehicle_utilization_contract_route_returns_sanitized_400_diagnostics(mo
     assert detail["provider_error_keys"] == ["error_message"]
     assert detail["provider_error_message_category"] == "missing_user_context"
     assert detail["provider_error_message"] == PROVIDER_400_MESSAGE_BY_CATEGORY["missing_user_context"]
+    assert detail["provider_error_semantics"]["mentions_header"] is True
+    assert detail["provider_error_semantics"]["mentions_user_context"] is True
     assert "provider-vehicle-secret" not in json.dumps(detail)
 
 

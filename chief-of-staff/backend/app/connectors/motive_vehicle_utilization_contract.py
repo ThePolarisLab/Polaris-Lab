@@ -35,6 +35,17 @@ PROVIDER_400_MESSAGE_BY_CATEGORY = {
     "invalid_request_parameters": "Provider rejected request parameters.",
     "unknown_provider_rejection": PROVIDER_400_GENERIC_MESSAGE,
 }
+PROVIDER_400_SEMANTIC_FIELDS = (
+    "mentions_header",
+    "mentions_parameter",
+    "mentions_user_context",
+    "mentions_vehicle_context",
+    "mentions_date_context",
+    "mentions_permission_context",
+    "mentions_required_or_missing",
+    "mentions_invalid_or_rejected",
+)
+_PROVIDER_ERROR_MESSAGE_KEYS = {"error", "error_message", "errormessage", "message", "detail", "description"}
 _SCHEMA_COMPATIBLE = "compatible"
 _SCHEMA_REQUIRES_MAPPING_REVIEW = "requires_mapping_review"
 _SCHEMA_INSUFFICIENT_IDENTITY = "insufficient_identity"
@@ -183,6 +194,7 @@ def _provider_400_diagnostics(response: httpx.Response) -> dict[str, Any]:
         "provider_error_keys": keys,
         "provider_error_message_category": category,
         "provider_error_message": PROVIDER_400_MESSAGE_BY_CATEGORY[category],
+        "provider_error_semantics": _provider_error_semantics(message_candidates, keys),
     }
     code = _provider_error_code(payload)
     if code is not None:
@@ -195,6 +207,7 @@ def _generic_provider_400_diagnostics() -> dict[str, Any]:
         "provider_error_keys": [],
         "provider_error_message_category": "unknown_provider_rejection",
         "provider_error_message": PROVIDER_400_GENERIC_MESSAGE,
+        "provider_error_semantics": _empty_provider_error_semantics(),
     }
 
 
@@ -225,18 +238,22 @@ def _safe_error_paths(value: Any, *, prefix: str = "") -> list[str]:
     return sorted(set(paths))[:20]
 
 
-def _message_candidates(value: Any) -> list[str]:
+def _message_candidates(value: Any, *, from_message_key: bool = False) -> list[str]:
     candidates: list[str] = []
+    if isinstance(value, str):
+        if from_message_key:
+            candidates.append(" ".join(value.split()))
+        return candidates
     if isinstance(value, dict):
         for key, nested in value.items():
             lowered = str(key).lower()
-            if lowered in {"error", "error_message", "errormessage", "message", "detail", "description"} and isinstance(nested, str):
-                candidates.append(" ".join(nested.split()))
+            if lowered in _PROVIDER_ERROR_MESSAGE_KEYS:
+                candidates.extend(_message_candidates(nested, from_message_key=True))
             elif isinstance(nested, (dict, list)):
                 candidates.extend(_message_candidates(nested))
     elif isinstance(value, list):
         for item in value[:5]:
-            candidates.extend(_message_candidates(item))
+            candidates.extend(_message_candidates(item, from_message_key=from_message_key))
     return candidates[:10]
 
 
@@ -277,8 +294,34 @@ def _message_category(messages: list[str], keys: list[str]) -> str:
     return "unknown_provider_rejection"
 
 
+def _provider_error_semantics(messages: list[str], keys: list[str]) -> dict[str, bool]:
+    text = _normalized_semantic_text(messages, keys)
+    return {
+        "mentions_header": _mentions_any(text, ("header", "x user id", "user header")),
+        "mentions_parameter": _mentions_any(text, ("parameter", "param", "field", "argument", "query")),
+        "mentions_user_context": _mentions_any(text, ("user", "user id", "x user id", "admin", "fleet manager", "fleet user", "role")),
+        "mentions_vehicle_context": _mentions_any(text, ("vehicle", "vehicle id", "vehicle ids")),
+        "mentions_date_context": _mentions_any(text, ("date", "start date", "end date", "start", "end", "time", "range")),
+        "mentions_permission_context": _mentions_any(text, ("permission", "unauthorized", "forbidden", "access", "scope", "role", "authorization")),
+        "mentions_required_or_missing": _mentions_any(text, ("required", "missing", "must be present", "must provide", "cannot be blank", "cannot be empty", "needed")),
+        "mentions_invalid_or_rejected": _mentions_any(text, ("invalid", "rejected", "malformed", "unsupported", "not allowed", "unrecognized", "bad request")),
+    }
+
+
+def _empty_provider_error_semantics() -> dict[str, bool]:
+    return {field: False for field in PROVIDER_400_SEMANTIC_FIELDS}
+
+
+def _mentions_any(text: str, markers: tuple[str, ...]) -> bool:
+    return any(marker in text for marker in markers)
+
+
 def _normalized_provider_error_text(messages: list[str], keys: list[str]) -> str:
     return " ".join(messages + keys).lower().replace("-", " ").replace("[]", "s")
+
+
+def _normalized_semantic_text(messages: list[str], keys: list[str]) -> str:
+    return _normalized_provider_error_text(messages, keys).replace("_", " ")
 
 
 def _is_safe_provider_message(message: str) -> bool:

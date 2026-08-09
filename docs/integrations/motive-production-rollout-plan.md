@@ -63,11 +63,13 @@ Live production verification evidence:
 - Motive returned HTTP 400
 - the latest sanitized response showed provider JSON key `error_message`
 - raw provider error text remains intentionally suppressed from API responses and logs
-- semantic classification is used only to identify the missing provider-contract requirement before a future controlled verification call
+- PR #127 confirmed no obvious code-path bug for a top-level string `error_message`; the remaining unknown category is most likely unmatched provider wording or an alternate safe shape such as string-array content
+- PR #128 adds semantic-only HTTP 400 diagnostics using fixed Polaris-owned booleans; it does not expose provider text, hashes, message length, IDs, headers, query values, or payloads
+- semantic classification and semantic flags are used only to identify the missing provider-contract requirement before a future controlled verification call
 - `X-User-Id` is documented by Motive as a possible Fleet Admin/Fleet Manager context header, but Polaris does not yet have an authoritative organization-safe provider user candidate
 - do not claim `X-User-Id` is required for Mor Logistics until a later controlled production verification proves that category
 
-Track 4C.2C vehicle-utilization ingestion remains blocked until the sanitized live contract result is reviewed and the existing `motive_vehicle_utilization` identity/period mapping is certified.
+Track 4C.2C vehicle-utilization ingestion remains on HOLD and uncertified until the sanitized live contract result is reviewed and the existing `motive_vehicle_utilization` identity/period mapping is certified.
 
 ## Render Environment Configuration
 
@@ -141,7 +143,7 @@ X-API-Key: <secret>
 ```
 
 4. Confirm the response contains only sanitized field/type/schema metadata on success.
-5. If Motive returns HTTP 400, confirm the response contains only sanitized diagnostic fields: `provider_error_keys`, `provider_error_code` when safe, `provider_error_message_category`, and a fixed Polaris-owned `provider_error_message`.
+5. If Motive returns HTTP 400, confirm the response contains only sanitized diagnostic fields: `provider_error_keys`, `provider_error_code` when safe, `provider_error_message_category`, fixed Polaris-owned `provider_error_message`, and `provider_error_semantics` booleans.
 6. Confirm raw provider error text, provider IDs, VINs, plates, emails, query values, headers, and secrets are not returned.
 7. Confirm no row is written to `motive_vehicle_utilization` and no sync checkpoint changes.
 8. Confirm Render logs contain only `MOTIVE VEHICLE UTILIZATION CONTRACT VERIFY` with organization ID, HTTP status, response type, item count, and schema compatibility.
