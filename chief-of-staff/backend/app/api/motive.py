@@ -160,12 +160,13 @@ def verify_motive_vehicle_utilization_contract(
                 "secrets_exposed": False,
             },
         )
-    request_date = _completed_vehicle_utilization_contract_date()
+    start_date, end_date = _completed_vehicle_utilization_contract_window()
     try:
         result = run_vehicle_utilization_contract_verification(
             organization_id=principal.organization_id,
             provider_vehicle_id=vehicle.provider_vehicle_id,
-            request_date=request_date,
+            start_date=start_date,
+            end_date=end_date,
         )
     except MotiveConnectorError as exc:
         detail = {
@@ -312,7 +313,13 @@ def motive_verification_contract(principal: AuthenticatedPrincipal = Depends(req
             "method": "GET",
             "path": MOTIVE_VEHICLE_UTILIZATION_ENDPOINT,
             "manual_route": "/api/v1/motive/verify/vehicle-utilization-contract",
-            "params": {"vehicle_ids[]": "redacted_stored_vehicle_id", "start_date": "previous_completed_calendar_day", "end_date": "same_completed_calendar_day", "per_page": 1, "page_no": 1},
+            "params": {
+                "vehicle_ids[]": "redacted_stored_vehicle_id",
+                "start_date": "one_calendar_day_before_previous_completed_calendar_day",
+                "end_date": "previous_completed_calendar_day",
+                "per_page": 1,
+                "page_no": 1,
+            },
             "max_provider_attempts": 1,
             "persistence_enabled": False,
         },
@@ -341,9 +348,11 @@ def _vehicle_for_utilization_contract(session: Session, organization_id: str) ->
     )
 
 
-def _completed_vehicle_utilization_contract_date() -> date:
+def _completed_vehicle_utilization_contract_window() -> tuple[date, date]:
     company_today = datetime.now(ZoneInfo(MOTIVE_VEHICLE_UTILIZATION_TIME_ZONE)).date()
-    return company_today - timedelta(days=1)
+    end_date = company_today - timedelta(days=1)
+    start_date = end_date - timedelta(days=1)
+    return start_date, end_date
 
 
 def _latest_motive_status(session: Session, organization_id: str) -> dict[str, Any] | None:

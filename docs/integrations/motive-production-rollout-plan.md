@@ -52,7 +52,7 @@ Implemented scope:
 - selects exactly one existing organization-owned stored Motive vehicle inside deployed Polaris
 - performs exactly one read-only provider request to `GET /v1/vehicle_utilization`
 - uses `vehicle_ids[]`, `start_date`, `end_date`, `per_page=1`, and `page_no=1`
-- uses the previous completed calendar day in `America/Winnipeg`
+- uses a two-completed-calendar-day window in `America/Winnipeg`
 - returns only sanitized schema metadata: envelope keys, item keys, identity paths, period fields, pagination keys, metric presence/types/nullability, unit field names, and schema compatibility
 - redacts the provider vehicle ID and never returns metric values, VIN, plate, request headers, API key, or raw provider payload
 - performs no utilization persistence, checkpoint mutation, frontend activation, polling, broad sync, KPI calculation, or schema migration
@@ -64,7 +64,9 @@ Live production verification evidence:
 - the latest sanitized response showed provider JSON key `error_message`
 - raw provider error text remains intentionally suppressed from API responses and logs
 - PR #127 confirmed no obvious code-path bug for a top-level string `error_message`; the remaining unknown category is most likely unmatched provider wording or an alternate safe shape such as string-array content
-- PR #128 adds semantic-only HTTP 400 diagnostics using fixed Polaris-owned booleans; it does not expose provider text, hashes, message length, IDs, headers, query values, or payloads
+- PR #129 adds semantic-only HTTP 400 diagnostics using fixed Polaris-owned booleans; it does not expose provider text, hashes, message length, IDs, headers, query values, or payloads
+- Post-PR #129 production evidence still returned Motive HTTP 400 with semantic flags `mentions_date_context=true` and `mentions_invalid_or_rejected=true`, while header, user, vehicle, permission, required/missing, and parameter flags remained false
+- The follow-up date-window verification experiment changes only the temporary verifier date window from a same-day completed-date probe to `start_date` one completed calendar day before `end_date`, where `end_date` is the previous completed calendar day in `America/Winnipeg`
 - semantic classification and semantic flags are used only to identify the missing provider-contract requirement before a future controlled verification call
 - `X-User-Id` is documented by Motive as a possible Fleet Admin/Fleet Manager context header, but Polaris does not yet have an authoritative organization-safe provider user candidate
 - do not claim `X-User-Id` is required for Mor Logistics until a later controlled production verification proves that category
@@ -136,7 +138,7 @@ After deployment:
 3. Confirm the backend performs only this provider request shape:
 
 ```text
-GET https://api.gomotive.com/v1/vehicle_utilization?vehicle_ids[]=<redacted stored vehicle id>&start_date=<previous completed date>&end_date=<same date>&per_page=1&page_no=1
+GET https://api.gomotive.com/v1/vehicle_utilization?vehicle_ids[]=<redacted stored vehicle id>&start_date=<one completed calendar day before end_date>&end_date=<previous completed date>&per_page=1&page_no=1
 Accept: application/json
 X-Time-Zone: America/Winnipeg
 X-API-Key: <secret>

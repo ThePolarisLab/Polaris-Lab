@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 import inspect
 import json
 from types import SimpleNamespace
@@ -95,7 +95,8 @@ def _contract_error_for_response(monkeypatch: pytest.MonkeyPatch, response: http
         verify_vehicle_utilization_contract(
             organization_id="org-a",
             provider_vehicle_id="provider-vehicle-secret",
-            request_date=date(2026, 8, 6),
+            start_date=date(2026, 8, 5),
+            end_date=date(2026, 8, 6),
             http_client=client,
         )
     assert len(calls) == 1
@@ -127,7 +128,8 @@ def test_vehicle_utilization_contract_request_is_one_redacted_provider_call(monk
     result = verify_vehicle_utilization_contract(
         organization_id="org-a",
         provider_vehicle_id="provider-vehicle-secret",
-        request_date=date(2026, 8, 6),
+        start_date=date(2026, 8, 5),
+        end_date=date(2026, 8, 6),
         http_client=client,
     )
 
@@ -135,8 +137,9 @@ def test_vehicle_utilization_contract_request_is_one_redacted_provider_call(monk
     request = calls[0]
     assert request.url.path == "/v1/vehicle_utilization"
     assert ("vehicle_ids[]", "provider-vehicle-secret") in list(request.url.params.multi_items())
-    assert request.url.params["start_date"] == "2026-08-06"
+    assert request.url.params["start_date"] == "2026-08-05"
     assert request.url.params["end_date"] == "2026-08-06"
+    assert request.url.params["start_date"] < request.url.params["end_date"]
     assert request.url.params["per_page"] == "1"
     assert request.url.params["page_no"] == "1"
     assert request.headers["X-API-Key"] == "fake-motive-key"
@@ -158,6 +161,27 @@ def test_vehicle_utilization_contract_request_is_one_redacted_provider_call(monk
     assert result["metrics"]["idle_time"] == {"present": True, "type": "null", "null": True, "paths": ["idle_time"]}
     assert result["schema_compatibility"] == "compatible"
     assert result["secrets_exposed"] is False
+
+
+def test_vehicle_utilization_contract_window_uses_completed_winnipeg_days(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed_time_zones: list[str] = []
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            observed_time_zones.append(getattr(tz, "key", str(tz)))
+            return cls(2026, 8, 9, 0, 30, tzinfo=tz)
+
+    monkeypatch.setattr(motive_api, "datetime", FixedDateTime)
+
+    start_date, end_date = motive_api._completed_vehicle_utilization_contract_window()
+
+    assert observed_time_zones == ["America/Winnipeg"]
+    assert end_date == date(2026, 8, 8)
+    assert start_date == date(2026, 8, 7)
+    assert start_date < end_date
+    assert start_date.isoformat() == "2026-08-07"
+    assert end_date.isoformat() == "2026-08-08"
 
 
 def test_vehicle_utilization_contract_does_not_retry_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -339,7 +363,7 @@ def test_vehicle_utilization_contract_route_returns_sanitized_400_diagnostics(mo
     }
     monkeypatch.setattr(motive_api, "_organization", lambda session, organization_id: SimpleNamespace(id=organization_id, slug="org-a"))
     monkeypatch.setattr(motive_api, "_vehicle_for_utilization_contract", lambda session, organization_id: SimpleNamespace(provider_vehicle_id="provider-vehicle-secret"))
-    monkeypatch.setattr(motive_api, "_completed_vehicle_utilization_contract_date", lambda: date(2026, 8, 6))
+    monkeypatch.setattr(motive_api, "_completed_vehicle_utilization_contract_window", lambda: (date(2026, 8, 5), date(2026, 8, 6)))
 
     def fake_contract_verify(**kwargs: Any) -> dict[str, Any]:
         raise connector_error
@@ -375,7 +399,7 @@ def test_vehicle_utilization_contract_route_uses_authenticated_org_vehicle(monke
             "endpoint": "/v1/vehicle_utilization",
             "provider_vehicle_selected": True,
             "vehicle_id_redacted": True,
-            "request_period": {"start_date": "2026-08-06", "end_date": "2026-08-06"},
+            "request_period": {"start_date": "2026-08-05", "end_date": "2026-08-06"},
             "top_level_type": "object",
             "item_count_observed": 1,
             "schema_compatibility": "compatible",
@@ -383,14 +407,16 @@ def test_vehicle_utilization_contract_route_uses_authenticated_org_vehicle(monke
         }
 
     monkeypatch.setattr(motive_api, "_vehicle_for_utilization_contract", fake_vehicle_for_contract)
-    monkeypatch.setattr(motive_api, "_completed_vehicle_utilization_contract_date", lambda: date(2026, 8, 6))
+    monkeypatch.setattr(motive_api, "_completed_vehicle_utilization_contract_window", lambda: (date(2026, 8, 5), date(2026, 8, 6)))
     monkeypatch.setattr(motive_api, "run_vehicle_utilization_contract_verification", fake_contract_verify)
 
     result = motive_api.verify_motive_vehicle_utilization_contract(principal=_principal("org-a"), session=NoWriteSession())
 
     assert selected["organization_id"] == "org-a"
     assert selected["provider_vehicle_id"] == "provider-vehicle-secret"
-    assert selected["request_date"] == date(2026, 8, 6)
+    assert selected["start_date"] == date(2026, 8, 5)
+    assert selected["end_date"] == date(2026, 8, 6)
+    assert selected["start_date"] < selected["end_date"]
     assert result["vehicle_id_redacted"] is True
     rendered = json.dumps(result, sort_keys=True)
     assert "provider-vehicle-secret" not in rendered
