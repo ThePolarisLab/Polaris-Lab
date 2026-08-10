@@ -67,12 +67,14 @@ Live production verification evidence:
 - PR #129 adds semantic-only HTTP 400 diagnostics using fixed Polaris-owned booleans; it does not expose provider text, hashes, message length, IDs, headers, query values, or payloads
 - Post-PR #129 production evidence still returned Motive HTTP 400 with semantic flags `mentions_date_context=true` and `mentions_invalid_or_rejected=true`, while header, user, vehicle, permission, required/missing, and parameter flags remained false
 - PR #131 tested the two-completed-calendar-day date window and Motive still returned HTTP 400 with semantic flags `mentions_date_context=true` and `mentions_invalid_or_rejected=true`; header, parameter, permission, required/missing, user, and vehicle flags remained false
-- The next controlled experiment removes `X-Time-Zone` only from the temporary utilization verifier; this is an experiment, not a confirmed fix
+- PR #132 removed `X-Time-Zone` only from the temporary utilization verifier while preserving the same provider vehicle selection, two-completed-calendar-day date window, query parameter names, `per_page=1`, `page_no=1`, backend-only `X-API-Key`, no `X-User-Id`, max provider attempts = 1, no retry, no persistence, and no checkpoint mutation
+- Post-PR #132 production evidence: exactly one controlled verification request returned HTTP 200 with sanitized `status=success`, `endpoint=/v1/vehicle_utilization`, `provider_vehicle_selected=true`, and `vehicle_id_redacted=true`
+- This verifies the tested temporary provider request contract for this exact request shape and strongly supports that `X-Time-Zone: America/Winnipeg` was incompatible with the earlier tested request shape; it does not certify every vehicle-utilization request, all date ranges, ingestion persistence, checkpointing, units, identity/period semantics, or KPI mapping
 - semantic classification and semantic flags are used only to identify the missing provider-contract requirement before a future controlled verification call
 - `X-User-Id` is documented by Motive as a possible Fleet Admin/Fleet Manager context header, but Polaris does not yet have an authoritative organization-safe provider user candidate
 - do not claim `X-User-Id` is required for Mor Logistics until a later controlled production verification proves that category
 
-Track 4C.2C vehicle-utilization ingestion remains on HOLD and uncertified until the sanitized live contract result is reviewed and the existing `motive_vehicle_utilization` identity/period mapping is certified.
+Track 4C.2C vehicle-utilization ingestion remains on HOLD and uncertified pending durable persistence mapping, identity/period semantics, unit handling, checkpoint strategy, unknown-vehicle handling, KPI interpretation, and production ingestion certification.
 
 ## Render Environment Configuration
 
@@ -145,7 +147,7 @@ X-API-Key: <secret>
 ```
 
 4. Confirm the response contains only sanitized field/type/schema metadata on success.
-5. If Motive returns HTTP 400, confirm the response contains only sanitized diagnostic fields: `provider_error_keys`, `provider_error_code` when safe, `provider_error_message_category`, fixed Polaris-owned `provider_error_message`, and `provider_error_semantics` booleans.
+5. Confirm the response contains sanitized success metadata for the verified request shape. If a future verification returns HTTP 400, confirm the response contains only sanitized diagnostic fields: `provider_error_keys`, `provider_error_code` when safe, `provider_error_message_category`, fixed Polaris-owned `provider_error_message`, and `provider_error_semantics` booleans.
 6. Confirm raw provider error text, provider IDs, VINs, plates, emails, query values, headers, and secrets are not returned.
 7. Confirm no row is written to `motive_vehicle_utilization` and no sync checkpoint changes.
 8. Confirm Render logs contain only `MOTIVE VEHICLE UTILIZATION CONTRACT VERIFY` with organization ID, HTTP status, response type, item count, and schema compatibility.
@@ -168,7 +170,7 @@ Motive API Support case 11006147 confirmed:
 - Required endpoints are `GET /v1/vehicles`, `GET /v1/users`, `GET /v1/vehicle_utilization`, `GET /v1/driver_utilization`, and `GET /v1/ifta/summary`.
 - User pagination uses `per_page` maximum 100, one-based `page_no`, and `pagination.total`.
 - Vehicle utilization query parameters are `vehicle_ids[]`, `start_date`, `end_date`, `per_page`, and `page_no`.
-- Vehicle utilization documented headers include `X-Metric-Units` and `X-User-Id`; Polaris sends `X-Metric-Units` only if explicitly configured and does not send `X-User-Id` until an authoritative Fleet Admin/Fleet Manager provider user identity is verified. The temporary verifier does not send `X-Time-Zone` while this provider-contract experiment is in progress.
+- Vehicle utilization documented headers include `X-Metric-Units` and `X-User-Id`; Polaris sends `X-Metric-Units` only if explicitly configured and does not send `X-User-Id` without evidence. PR #132 verified the temporary request shape without `X-Time-Zone`; do not reintroduce or substitute a timezone header without provider-contract evidence.
 - Vehicle utilization documented metrics include `utilization`, `idle_time`, `idle_fuel`, `driving_time`, and `driving_fuel`.
 - Rate-limit handling must handle `429`, honor `Retry-After` when present, use exponential backoff with jitter, avoid immediate retry loops, avoid excessive concurrency, and use pagination, caching, batching, incremental date ranges, and multi-ID requests where supported.
 
@@ -178,7 +180,7 @@ Motive API Support case 11006147 confirmed:
 - recurring polling
 - driver role filtering until real provider role fields are observed or officially documented
 - authoritative `X-User-Id` Fleet Admin/Fleet Manager candidate selection for vehicle utilization
-- vehicle utilization ingestion pending 4C.2C0 live contract review
+- vehicle utilization ingestion pending durable mapping and production ingestion certification
 - driver utilization
 - IFTA summary
 - HOS
