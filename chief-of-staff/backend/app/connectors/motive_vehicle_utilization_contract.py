@@ -82,7 +82,6 @@ def verify_vehicle_utilization_contract(
     start_date: date,
     end_date: date,
     http_client: httpx.Client | None = None,
-    time_zone: str = MOTIVE_VEHICLE_UTILIZATION_TIME_ZONE,
 ) -> dict[str, Any]:
     """Make exactly one read-only provider call and summarize the response schema."""
     if not provider_vehicle_id:
@@ -94,7 +93,7 @@ def verify_vehicle_utilization_contract(
         "per_page": MOTIVE_VEHICLE_UTILIZATION_CONTRACT_PARAMS["per_page"],
         "page_no": MOTIVE_VEHICLE_UTILIZATION_CONTRACT_PARAMS["page_no"],
     }
-    headers = {"Accept": "application/json", "X-API-Key": _api_key(), "X-Time-Zone": time_zone}
+    headers = {"Accept": "application/json", "X-API-Key": _api_key()}
     metric_units = os.getenv("POLARIS_MOTIVE_X_METRIC_UNITS")
     if metric_units:
         headers["X-Metric-Units"] = metric_units
@@ -145,7 +144,7 @@ def verify_vehicle_utilization_contract(
             "method": "GET",
             "path": MOTIVE_VEHICLE_UTILIZATION_ENDPOINT,
             "params": {"vehicle_ids[]": "[REDACTED]", "start_date": start_date.isoformat(), "end_date": end_date.isoformat(), "per_page": 1, "page_no": 1},
-            "headers": {"Accept": "application/json", "X-Time-Zone": time_zone, "X-Metric-Units": metric_units if metric_units else None, "X-API-Key": "[REDACTED]"},
+            "headers": {"Accept": "application/json", "X-Metric-Units": metric_units if metric_units else None, "X-API-Key": "[REDACTED]"},
             "max_provider_attempts": 1,
         },
         **summary,
