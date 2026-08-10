@@ -142,17 +142,22 @@ def test_vehicle_utilization_contract_request_is_one_redacted_provider_call(monk
     assert request.url.params["start_date"] < request.url.params["end_date"]
     assert request.url.params["per_page"] == "1"
     assert request.url.params["page_no"] == "1"
+    assert request.headers["Accept"] == "application/json"
     assert request.headers["X-API-Key"] == "fake-motive-key"
-    assert request.headers["X-Time-Zone"] == "America/Winnipeg"
+    assert "X-Time-Zone" not in request.headers
     assert "X-User-Id" not in request.headers
 
     rendered = json.dumps(result, sort_keys=True)
     assert "provider-vehicle-secret" not in rendered
     assert "fake-motive-key" not in rendered
+    assert "X-Time-Zone" not in rendered
     assert "vin-should-not-return" not in rendered
     assert "plate-should-not-return" not in rendered
     assert "83.2" not in rendered
     assert result["request_shape"]["max_provider_attempts"] == 1
+    assert result["request_shape"]["headers"]["Accept"] == "application/json"
+    assert result["request_shape"]["headers"]["X-API-Key"] == "[REDACTED]"
+    assert result["request_shape"]["headers"]["X-Metric-Units"] is None
     assert result["item_container_key"] == "vehicle_utilization"
     assert result["pagination_keys"] == ["page_no", "per_page", "total"]
     assert result["pagination_total_present"] is True
@@ -161,6 +166,32 @@ def test_vehicle_utilization_contract_request_is_one_redacted_provider_call(monk
     assert result["metrics"]["idle_time"] == {"present": True, "type": "null", "null": True, "paths": ["idle_time"]}
     assert result["schema_compatibility"] == "compatible"
     assert result["secrets_exposed"] is False
+
+
+def test_vehicle_utilization_contract_preserves_optional_metric_units_without_time_zone(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    monkeypatch.setenv("POLARIS_MOTIVE_X_METRIC_UNITS", "true")
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json=_successful_payload())
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    result = verify_vehicle_utilization_contract(
+        organization_id="org-a",
+        provider_vehicle_id="provider-vehicle-secret",
+        start_date=date(2026, 8, 5),
+        end_date=date(2026, 8, 6),
+        http_client=client,
+    )
+
+    assert len(calls) == 1
+    assert calls[0].headers["X-Metric-Units"] == "true"
+    assert "X-Time-Zone" not in calls[0].headers
+    assert "X-User-Id" not in calls[0].headers
+    assert result["request_shape"]["headers"]["X-Metric-Units"] == "true"
+    assert "X-Time-Zone" not in json.dumps(result["request_shape"], sort_keys=True)
 
 
 def test_vehicle_utilization_contract_window_uses_completed_winnipeg_days(monkeypatch: pytest.MonkeyPatch) -> None:

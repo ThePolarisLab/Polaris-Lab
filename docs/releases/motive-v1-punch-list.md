@@ -15,7 +15,7 @@
 - User upserts are tenant-owned and idempotent through organization-owned provider user identity.
 - User checkpoints advance only after successful durable persistence.
 - Driver classification is not certified; Polaris does not expose a driver count or driver KPI from `/v1/users` records.
-- Temporary vehicle-utilization contract verification reached Motive and received HTTP 400 with provider JSON key `error_message`; PR #127 confirmed no obvious code-path bug for top-level string `error_message`, PR #129 added semantic-only fixed boolean diagnostics without raw provider text exposure, and post-PR #129 production evidence points only to a date/range invalid-or-rejected concept.
+- Temporary vehicle-utilization contract verification reached Motive and received HTTP 400 with provider JSON key `error_message`; PR #127 confirmed no obvious code-path bug for top-level string `error_message`, PR #129 added semantic-only fixed boolean diagnostics without raw provider text exposure, post-PR #129 production evidence pointed only to a date/range invalid-or-rejected concept, and PR #131 confirmed the two-completed-calendar-day date window did not change that semantic evidence.
 - System Health is Healthy only after successful API-key verification.
 - Evidence is Available only after successful verification and does not claim broad ingestion.
 - Existing OAuth runtime routes are disabled for active production behavior.
@@ -24,7 +24,7 @@
 
 ## v1.1 Candidate Work
 
-- Keep vehicle-utilization ingestion on HOLD and uncertified while the temporary verifier tests a two-completed-calendar-day date window; then complete broad sync design for vehicle utilization, driver utilization, and IFTA summary only after the provider contract is certified.
+- Keep vehicle-utilization ingestion on HOLD and uncertified while the temporary verifier tests removing `X-Time-Zone`; this is an experiment, not a confirmed fix. Complete broad sync design for vehicle utilization, driver utilization, and IFTA summary only after the provider contract is certified.
 - Resolve vehicle-utilization `X-User-Id` requirements only after an authoritative Fleet Admin/Fleet Manager provider user identity contract is verified.
 - Define driver filtering only from real provider role fields observed in sanitized production responses or official documentation.
 - Implement durable resource sync with checkpoint advancement only after successful persistence.

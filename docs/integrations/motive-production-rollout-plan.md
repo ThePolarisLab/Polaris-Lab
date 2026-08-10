@@ -66,7 +66,8 @@ Live production verification evidence:
 - PR #127 confirmed no obvious code-path bug for a top-level string `error_message`; the remaining unknown category is most likely unmatched provider wording or an alternate safe shape such as string-array content
 - PR #129 adds semantic-only HTTP 400 diagnostics using fixed Polaris-owned booleans; it does not expose provider text, hashes, message length, IDs, headers, query values, or payloads
 - Post-PR #129 production evidence still returned Motive HTTP 400 with semantic flags `mentions_date_context=true` and `mentions_invalid_or_rejected=true`, while header, user, vehicle, permission, required/missing, and parameter flags remained false
-- The follow-up date-window verification experiment changes only the temporary verifier date window from a same-day completed-date probe to `start_date` one completed calendar day before `end_date`, where `end_date` is the previous completed calendar day in `America/Winnipeg`
+- PR #131 tested the two-completed-calendar-day date window and Motive still returned HTTP 400 with semantic flags `mentions_date_context=true` and `mentions_invalid_or_rejected=true`; header, parameter, permission, required/missing, user, and vehicle flags remained false
+- The next controlled experiment removes `X-Time-Zone` only from the temporary utilization verifier; this is an experiment, not a confirmed fix
 - semantic classification and semantic flags are used only to identify the missing provider-contract requirement before a future controlled verification call
 - `X-User-Id` is documented by Motive as a possible Fleet Admin/Fleet Manager context header, but Polaris does not yet have an authoritative organization-safe provider user candidate
 - do not claim `X-User-Id` is required for Mor Logistics until a later controlled production verification proves that category
@@ -140,7 +141,6 @@ After deployment:
 ```text
 GET https://api.gomotive.com/v1/vehicle_utilization?vehicle_ids[]=<redacted stored vehicle id>&start_date=<one completed calendar day before end_date>&end_date=<previous completed date>&per_page=1&page_no=1
 Accept: application/json
-X-Time-Zone: America/Winnipeg
 X-API-Key: <secret>
 ```
 
@@ -168,7 +168,7 @@ Motive API Support case 11006147 confirmed:
 - Required endpoints are `GET /v1/vehicles`, `GET /v1/users`, `GET /v1/vehicle_utilization`, `GET /v1/driver_utilization`, and `GET /v1/ifta/summary`.
 - User pagination uses `per_page` maximum 100, one-based `page_no`, and `pagination.total`.
 - Vehicle utilization query parameters are `vehicle_ids[]`, `start_date`, `end_date`, `per_page`, and `page_no`.
-- Vehicle utilization documented headers include `X-Time-Zone`, `X-Metric-Units`, and `X-User-Id`; Polaris sends `X-Time-Zone: America/Winnipeg` for the contract verification probe, sends `X-Metric-Units` only if explicitly configured, and does not send `X-User-Id` until an authoritative Fleet Admin/Fleet Manager provider user identity is verified.
+- Vehicle utilization documented headers include `X-Metric-Units` and `X-User-Id`; Polaris sends `X-Metric-Units` only if explicitly configured and does not send `X-User-Id` until an authoritative Fleet Admin/Fleet Manager provider user identity is verified. The temporary verifier does not send `X-Time-Zone` while this provider-contract experiment is in progress.
 - Vehicle utilization documented metrics include `utilization`, `idle_time`, `idle_fuel`, `driving_time`, and `driving_fuel`.
 - Rate-limit handling must handle `429`, honor `Retry-After` when present, use exponential backoff with jitter, avoid immediate retry loops, avoid excessive concurrency, and use pagination, caching, batching, incremental date ranges, and multi-ID requests where supported.
 
