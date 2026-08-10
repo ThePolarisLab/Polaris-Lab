@@ -30,10 +30,13 @@
 
 ## 4C.2C+: Provider Contract Completion and Sync Design
 
+Track 4C.2C0 verified the temporary `GET /v1/vehicle_utilization` provider request contract after PR #132 removed `X-Time-Zone`. The successful controlled production request used one stored provider vehicle ID, the two-completed-calendar-day window introduced by PR #131, `per_page=1`, `page_no=1`, backend-only `X-API-Key`, no `X-User-Id`, exactly one provider attempt, no retry, no persistence, and no checkpoint mutation. This verifies only that exact temporary request shape and strongly supports that `X-Time-Zone: America/Winnipeg` caused the earlier provider rejection.
+
 Before broader sync is implemented, Polaris must complete design and verification for:
 
+- durable vehicle-utilization persistence mapping, identity/period semantics, units, checkpoint strategy, unknown vehicle handling, KPI interpretation, and production ingestion certification
 - driver filtering based on real provider role fields observed in sanitized provider data or official documentation
-- durable ingestion for vehicle utilization, driver utilization, and IFTA summary
+- durable ingestion for driver utilization and IFTA summary
 - production-safe batching and incremental date ranges per resource
 - webhook authentication/signature contract
 - production evidence certification criteria beyond vehicle/user-only persistence
