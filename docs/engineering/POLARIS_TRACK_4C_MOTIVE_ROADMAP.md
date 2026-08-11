@@ -32,6 +32,8 @@
 
 Track 4C.2C0 verified the temporary `GET /v1/vehicle_utilization` provider request contract after PR #132 removed `X-Time-Zone`. The successful controlled production request used one stored provider vehicle ID, the two-completed-calendar-day window introduced by PR #131, `per_page=1`, `page_no=1`, backend-only `X-API-Key`, no `X-User-Id`, exactly one provider attempt, no retry, no persistence, and no checkpoint mutation. This verifies only that exact temporary request shape and strongly supports that `X-Time-Zone: America/Winnipeg` caused the earlier provider rejection.
 
+The subsequent controlled schema capture returned `top_level_type=object`, `top_level_keys=["pagination","vehicle_idle_rollups"]`, `item_container_key=vehicle_idle_rollups`, `item_count_observed=0`, and `pagination_keys=["page_no","per_page","total"]`. This partially verifies the production envelope, disproves relying on the old `vehicle_utilization` fixture key as production-certified for success responses, and leaves item identity, period, metric, and unit schema unknown because zero items were returned. The bounded follow-up experiment sends up to three existing organization-owned stored vehicle IDs in one provider request solely to obtain a non-empty sanitized `vehicle_idle_rollups` item schema; it is not utilization ingestion or multi-vehicle production certification.
+
 Before broader sync is implemented, Polaris must complete design and verification for:
 
 - durable vehicle-utilization persistence mapping, identity/period semantics, units, checkpoint strategy, unknown vehicle handling, KPI interpretation, and production ingestion certification

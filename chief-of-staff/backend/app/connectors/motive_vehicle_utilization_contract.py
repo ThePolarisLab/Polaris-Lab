@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections.abc import Sequence
 from datetime import date
 from typing import Any
 
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 MOTIVE_VEHICLE_UTILIZATION_ENDPOINT = "/v1/vehicle_utilization"
 MOTIVE_VEHICLE_UTILIZATION_CONTRACT_PARAMS = {"per_page": 1, "page_no": 1}
+MOTIVE_VEHICLE_UTILIZATION_CONTRACT_MAX_VEHICLES = 3
 MOTIVE_VEHICLE_UTILIZATION_METRICS = ("utilization", "idle_time", "idle_fuel", "driving_time", "driving_fuel")
 MOTIVE_VEHICLE_UTILIZATION_TIME_ZONE = "America/Winnipeg"
 PROVIDER_400_GENERIC_MESSAGE = "Provider rejected request parameters or required context."
@@ -78,21 +80,28 @@ _SHORT_CODE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 def verify_vehicle_utilization_contract(
     *,
     organization_id: str,
-    provider_vehicle_id: str,
+    provider_vehicle_ids: Sequence[str],
     start_date: date,
     end_date: date,
     http_client: httpx.Client | None = None,
 ) -> dict[str, Any]:
     """Make exactly one read-only provider call and summarize the response schema."""
-    if not provider_vehicle_id:
+    selected_provider_vehicle_ids = [provider_vehicle_id for provider_vehicle_id in provider_vehicle_ids if provider_vehicle_id]
+    if not selected_provider_vehicle_ids:
         raise MotiveConnectorError("Motive vehicle utilization contract verification requires a stored vehicle id", status=ConnectorStatus.FAILED, code="provider_contract_error")
-    params: dict[str, Any] = {
-        "vehicle_ids[]": provider_vehicle_id,
-        "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
-        "per_page": MOTIVE_VEHICLE_UTILIZATION_CONTRACT_PARAMS["per_page"],
-        "page_no": MOTIVE_VEHICLE_UTILIZATION_CONTRACT_PARAMS["page_no"],
-    }
+    if len(selected_provider_vehicle_ids) > MOTIVE_VEHICLE_UTILIZATION_CONTRACT_MAX_VEHICLES:
+        raise MotiveConnectorError("Motive vehicle utilization contract verification is limited to three stored vehicle ids", status=ConnectorStatus.FAILED, code="provider_contract_error")
+    params: list[tuple[str, str]] = [
+        ("vehicle_ids[]", provider_vehicle_id) for provider_vehicle_id in selected_provider_vehicle_ids
+    ]
+    params.extend(
+        [
+            ("start_date", start_date.isoformat()),
+            ("end_date", end_date.isoformat()),
+            ("per_page", str(MOTIVE_VEHICLE_UTILIZATION_CONTRACT_PARAMS["per_page"])),
+            ("page_no", str(MOTIVE_VEHICLE_UTILIZATION_CONTRACT_PARAMS["page_no"])),
+        ]
+    )
     headers = {"Accept": "application/json", "X-API-Key": _api_key()}
     metric_units = os.getenv("POLARIS_MOTIVE_X_METRIC_UNITS")
     if metric_units:
@@ -138,6 +147,7 @@ def verify_vehicle_utilization_contract(
         "status": "success",
         "endpoint": MOTIVE_VEHICLE_UTILIZATION_ENDPOINT,
         "provider_vehicle_selected": True,
+        "provider_vehicle_selected_count": len(selected_provider_vehicle_ids),
         "vehicle_id_redacted": True,
         "request_period": {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
         "request_shape": {

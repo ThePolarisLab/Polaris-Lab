@@ -10,11 +10,19 @@ from typing import Any
 from fastapi import HTTPException
 import httpx
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from app.api import motive as motive_api
 from app.connectors.motive import MotiveConnectorError
-from app.connectors.motive_vehicle_utilization_contract import PROVIDER_400_GENERIC_MESSAGE, PROVIDER_400_MESSAGE_BY_CATEGORY, verify_vehicle_utilization_contract
-from app.models.motive import MotiveSyncCheckpoint, MotiveVehicleUtilizationRecord
+from app.connectors.motive_vehicle_utilization_contract import (
+    MOTIVE_VEHICLE_UTILIZATION_CONTRACT_MAX_VEHICLES,
+    PROVIDER_400_GENERIC_MESSAGE,
+    PROVIDER_400_MESSAGE_BY_CATEGORY,
+    verify_vehicle_utilization_contract,
+)
+from app.database.database import Base
+from app.models.motive import MotiveSyncCheckpoint, MotiveVehicleRecord, MotiveVehicleUtilizationRecord
 from app.security.models import AuthenticatedPrincipal, Permission
 
 
@@ -82,6 +90,13 @@ def _successful_payload() -> dict[str, Any]:
     }
 
 
+def _empty_vehicle_idle_rollups_payload() -> dict[str, Any]:
+    return {
+        "vehicle_idle_rollups": [],
+        "pagination": {"total": 0, "page_no": 1, "per_page": 1},
+    }
+
+
 def _contract_error_for_response(monkeypatch: pytest.MonkeyPatch, response: httpx.Response) -> MotiveConnectorError:
     monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
     calls: list[httpx.Request] = []
@@ -94,7 +109,7 @@ def _contract_error_for_response(monkeypatch: pytest.MonkeyPatch, response: http
     with pytest.raises(MotiveConnectorError) as exc_info:
         verify_vehicle_utilization_contract(
             organization_id="org-a",
-            provider_vehicle_id="provider-vehicle-secret",
+            provider_vehicle_ids=["provider-vehicle-secret"],
             start_date=date(2026, 8, 5),
             end_date=date(2026, 8, 6),
             http_client=client,
@@ -127,7 +142,7 @@ def test_vehicle_utilization_contract_request_is_one_redacted_provider_call(monk
     client = httpx.Client(transport=httpx.MockTransport(handler))
     result = verify_vehicle_utilization_contract(
         organization_id="org-a",
-        provider_vehicle_id="provider-vehicle-secret",
+        provider_vehicle_ids=["provider-vehicle-secret"],
         start_date=date(2026, 8, 5),
         end_date=date(2026, 8, 6),
         http_client=client,
@@ -137,6 +152,7 @@ def test_vehicle_utilization_contract_request_is_one_redacted_provider_call(monk
     request = calls[0]
     assert request.url.path == "/v1/vehicle_utilization"
     assert ("vehicle_ids[]", "provider-vehicle-secret") in list(request.url.params.multi_items())
+    assert [value for key, value in request.url.params.multi_items() if key == "vehicle_ids[]"] == ["provider-vehicle-secret"]
     assert request.url.params["start_date"] == "2026-08-05"
     assert request.url.params["end_date"] == "2026-08-06"
     assert request.url.params["start_date"] < request.url.params["end_date"]
@@ -158,6 +174,7 @@ def test_vehicle_utilization_contract_request_is_one_redacted_provider_call(monk
     assert result["request_shape"]["headers"]["Accept"] == "application/json"
     assert result["request_shape"]["headers"]["X-API-Key"] == "[REDACTED]"
     assert result["request_shape"]["headers"]["X-Metric-Units"] is None
+    assert result["provider_vehicle_selected_count"] == 1
     assert result["item_container_key"] == "vehicle_utilization"
     assert result["pagination_keys"] == ["page_no", "per_page", "total"]
     assert result["pagination_total_present"] is True
@@ -166,6 +183,78 @@ def test_vehicle_utilization_contract_request_is_one_redacted_provider_call(monk
     assert result["metrics"]["idle_time"] == {"present": True, "type": "null", "null": True, "paths": ["idle_time"]}
     assert result["schema_compatibility"] == "compatible"
     assert result["secrets_exposed"] is False
+
+
+def test_vehicle_utilization_contract_encodes_up_to_three_vehicle_ids_in_one_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json=_empty_vehicle_idle_rollups_payload())
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    result = verify_vehicle_utilization_contract(
+        organization_id="org-a",
+        provider_vehicle_ids=["provider-vehicle-a", "provider-vehicle-b", "provider-vehicle-c"],
+        start_date=date(2026, 8, 5),
+        end_date=date(2026, 8, 6),
+        http_client=client,
+    )
+
+    assert len(calls) == 1
+    request = calls[0]
+    assert [value for key, value in request.url.params.multi_items() if key == "vehicle_ids[]"] == [
+        "provider-vehicle-a",
+        "provider-vehicle-b",
+        "provider-vehicle-c",
+    ]
+    assert request.url.params["per_page"] == "1"
+    assert request.url.params["page_no"] == "1"
+    assert request.url.params["start_date"] == "2026-08-05"
+    assert request.url.params["end_date"] == "2026-08-06"
+    assert request.headers["Accept"] == "application/json"
+    assert request.headers["X-API-Key"] == "fake-motive-key"
+    assert "X-Time-Zone" not in request.headers
+    assert "X-User-Id" not in request.headers
+    assert result["provider_vehicle_selected_count"] == 3
+    assert result["top_level_type"] == "object"
+    assert result["top_level_keys"] == ["pagination", "vehicle_idle_rollups"]
+    assert result["item_container_key"] == "vehicle_idle_rollups"
+    assert result["item_count_observed"] == 0
+    assert result["pagination_keys"] == ["page_no", "per_page", "total"]
+    assert result["pagination_total_present"] is True
+    assert result["pagination_page_no_present"] is True
+    assert result["pagination_per_page_present"] is True
+    assert result["schema_compatibility"] == "insufficient_identity"
+    assert result["period_source_candidate"] == "request_window_requires_review"
+    rendered = json.dumps(result, sort_keys=True)
+    assert "provider-vehicle-a" not in rendered
+    assert "provider-vehicle-b" not in rendered
+    assert "provider-vehicle-c" not in rendered
+    assert "fake-motive-key" not in rendered
+
+
+def test_vehicle_utilization_contract_rejects_more_than_three_vehicle_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json=_successful_payload())
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(MotiveConnectorError) as exc_info:
+        verify_vehicle_utilization_contract(
+            organization_id="org-a",
+            provider_vehicle_ids=["vehicle-a", "vehicle-b", "vehicle-c", "vehicle-d"],
+            start_date=date(2026, 8, 5),
+            end_date=date(2026, 8, 6),
+            http_client=client,
+        )
+
+    assert exc_info.value.code == "provider_contract_error"
+    assert calls == []
 
 
 def test_vehicle_utilization_contract_preserves_optional_metric_units_without_time_zone(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -180,7 +269,7 @@ def test_vehicle_utilization_contract_preserves_optional_metric_units_without_ti
     client = httpx.Client(transport=httpx.MockTransport(handler))
     result = verify_vehicle_utilization_contract(
         organization_id="org-a",
-        provider_vehicle_id="provider-vehicle-secret",
+        provider_vehicle_ids=["provider-vehicle-secret"],
         start_date=date(2026, 8, 5),
         end_date=date(2026, 8, 6),
         http_client=client,
@@ -393,7 +482,7 @@ def test_vehicle_utilization_contract_route_returns_sanitized_400_diagnostics(mo
         },
     }
     monkeypatch.setattr(motive_api, "_organization", lambda session, organization_id: SimpleNamespace(id=organization_id, slug="org-a"))
-    monkeypatch.setattr(motive_api, "_vehicle_for_utilization_contract", lambda session, organization_id: SimpleNamespace(provider_vehicle_id="provider-vehicle-secret"))
+    monkeypatch.setattr(motive_api, "_vehicles_for_utilization_contract", lambda session, organization_id: [SimpleNamespace(provider_vehicle_id="provider-vehicle-secret")])
     monkeypatch.setattr(motive_api, "_completed_vehicle_utilization_contract_window", lambda: (date(2026, 8, 5), date(2026, 8, 6)))
 
     def fake_contract_verify(**kwargs: Any) -> dict[str, Any]:
@@ -414,14 +503,40 @@ def test_vehicle_utilization_contract_route_returns_sanitized_400_diagnostics(mo
     assert "provider-vehicle-secret" not in json.dumps(detail)
 
 
-def test_vehicle_utilization_contract_route_uses_authenticated_org_vehicle(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_vehicle_utilization_contract_selects_up_to_three_org_vehicles_in_internal_order() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    TestingSession = sessionmaker(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    with TestingSession() as session:
+        session.add(MotiveVehicleRecord(id=30, organization_id="org-a", organization_slug="org-a", provider_vehicle_id="provider-vehicle-c"))
+        session.add(MotiveVehicleRecord(id=10, organization_id="org-a", organization_slug="org-a", provider_vehicle_id="provider-vehicle-a"))
+        session.add(MotiveVehicleRecord(id=25, organization_id="org-b", organization_slug="org-b", provider_vehicle_id="provider-vehicle-other"))
+        session.add(MotiveVehicleRecord(id=40, organization_id="org-a", organization_slug="org-a", provider_vehicle_id="provider-vehicle-d"))
+        session.add(MotiveVehicleRecord(id=20, organization_id="org-a", organization_slug="org-a", provider_vehicle_id="provider-vehicle-b"))
+        session.commit()
+
+        vehicles = motive_api._vehicles_for_utilization_contract(session, "org-a")
+
+    assert MOTIVE_VEHICLE_UTILIZATION_CONTRACT_MAX_VEHICLES == 3
+    assert [vehicle.provider_vehicle_id for vehicle in vehicles] == [
+        "provider-vehicle-a",
+        "provider-vehicle-b",
+        "provider-vehicle-c",
+    ]
+
+
+def test_vehicle_utilization_contract_route_uses_authenticated_org_vehicles(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     selected: dict[str, Any] = {}
 
     monkeypatch.setattr(motive_api, "_organization", lambda session, organization_id: SimpleNamespace(id=organization_id, slug="org-a"))
 
-    def fake_vehicle_for_contract(session: Any, organization_id: str) -> Any:
+    def fake_vehicles_for_contract(session: Any, organization_id: str) -> list[Any]:
         selected["organization_id"] = organization_id
-        return SimpleNamespace(provider_vehicle_id="provider-vehicle-secret")
+        return [
+            SimpleNamespace(provider_vehicle_id="provider-vehicle-a"),
+            SimpleNamespace(provider_vehicle_id="provider-vehicle-b"),
+        ]
 
     def fake_contract_verify(**kwargs: Any) -> dict[str, Any]:
         selected.update(kwargs)
@@ -429,6 +544,7 @@ def test_vehicle_utilization_contract_route_uses_authenticated_org_vehicle(monke
             "status": "success",
             "endpoint": "/v1/vehicle_utilization",
             "provider_vehicle_selected": True,
+            "provider_vehicle_selected_count": 2,
             "vehicle_id_redacted": True,
             "request_period": {"start_date": "2026-08-05", "end_date": "2026-08-06"},
             "top_level_type": "object",
@@ -437,21 +553,24 @@ def test_vehicle_utilization_contract_route_uses_authenticated_org_vehicle(monke
             "secrets_exposed": False,
         }
 
-    monkeypatch.setattr(motive_api, "_vehicle_for_utilization_contract", fake_vehicle_for_contract)
+    monkeypatch.setattr(motive_api, "_vehicles_for_utilization_contract", fake_vehicles_for_contract)
     monkeypatch.setattr(motive_api, "_completed_vehicle_utilization_contract_window", lambda: (date(2026, 8, 5), date(2026, 8, 6)))
     monkeypatch.setattr(motive_api, "run_vehicle_utilization_contract_verification", fake_contract_verify)
 
     result = motive_api.verify_motive_vehicle_utilization_contract(principal=_principal("org-a"), session=NoWriteSession())
 
     assert selected["organization_id"] == "org-a"
-    assert selected["provider_vehicle_id"] == "provider-vehicle-secret"
+    assert selected["provider_vehicle_ids"] == ["provider-vehicle-a", "provider-vehicle-b"]
     assert selected["start_date"] == date(2026, 8, 5)
     assert selected["end_date"] == date(2026, 8, 6)
     assert selected["start_date"] < selected["end_date"]
     assert result["vehicle_id_redacted"] is True
+    assert result["provider_vehicle_selected_count"] == 2
     rendered = json.dumps(result, sort_keys=True)
-    assert "provider-vehicle-secret" not in rendered
-    assert "provider-vehicle-secret" not in caplog.text
+    assert "provider-vehicle-a" not in rendered
+    assert "provider-vehicle-b" not in rendered
+    assert "provider-vehicle-a" not in caplog.text
+    assert "provider-vehicle-b" not in caplog.text
 
 
 def test_vehicle_utilization_contract_route_has_no_client_vehicle_parameter_or_persistence() -> None:
@@ -472,7 +591,7 @@ def test_vehicle_utilization_contract_route_has_no_client_vehicle_parameter_or_p
 
 def test_vehicle_utilization_contract_route_fails_safely_without_stored_vehicle(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(motive_api, "_organization", lambda session, organization_id: SimpleNamespace(id=organization_id, slug="org-a"))
-    monkeypatch.setattr(motive_api, "_vehicle_for_utilization_contract", lambda session, organization_id: None)
+    monkeypatch.setattr(motive_api, "_vehicles_for_utilization_contract", lambda session, organization_id: [])
 
     with pytest.raises(HTTPException) as exc_info:
         motive_api.verify_motive_vehicle_utilization_contract(principal=_principal("org-a"), session=NoWriteSession())
