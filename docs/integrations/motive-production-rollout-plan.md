@@ -49,9 +49,9 @@ No utilization, IFTA, HOS, safety, trip, fuel, maintenance, webhook, scheduled p
 Implemented scope:
 
 - temporary engineering-only backend route `POST /api/v1/motive/verify/vehicle-utilization-contract`
-- selects exactly one existing organization-owned stored Motive vehicle inside deployed Polaris
+- selects up to three existing organization-owned stored Motive vehicles inside deployed Polaris, ordered by internal vehicle row ID
 - performs exactly one read-only provider request to `GET /v1/vehicle_utilization`
-- uses `vehicle_ids[]`, `start_date`, `end_date`, `per_page=1`, and `page_no=1`
+- uses repeated `vehicle_ids[]`, `start_date`, `end_date`, `per_page=1`, and `page_no=1`
 - uses a two-completed-calendar-day window in `America/Winnipeg`
 - returns only sanitized schema metadata: envelope keys, item keys, identity paths, period fields, pagination keys, metric presence/types/nullability, unit field names, and schema compatibility
 - redacts the provider vehicle ID and never returns metric values, VIN, plate, request headers, API key, or raw provider payload
@@ -69,6 +69,9 @@ Live production verification evidence:
 - PR #131 tested the two-completed-calendar-day date window and Motive still returned HTTP 400 with semantic flags `mentions_date_context=true` and `mentions_invalid_or_rejected=true`; header, parameter, permission, required/missing, user, and vehicle flags remained false
 - PR #132 removed `X-Time-Zone` only from the temporary utilization verifier while preserving the same provider vehicle selection, two-completed-calendar-day date window, query parameter names, `per_page=1`, `page_no=1`, backend-only `X-API-Key`, no `X-User-Id`, max provider attempts = 1, no retry, no persistence, and no checkpoint mutation
 - Post-PR #132 production evidence: exactly one controlled verification request returned HTTP 200 with sanitized `status=success`, `endpoint=/v1/vehicle_utilization`, `provider_vehicle_selected=true`, and `vehicle_id_redacted=true`
+- Subsequent controlled schema capture returned `top_level_type=object`, `top_level_keys=["pagination","vehicle_idle_rollups"]`, `item_container_key=vehicle_idle_rollups`, `item_count_observed=0`, and `pagination_keys=["page_no","per_page","total"]`
+- This partially verifies the production response envelope. The previous fixture collection key `vehicle_utilization` is not production-certified for the successful response; production observed `vehicle_idle_rollups`. Item identity, period, metric, and unit schema remains unknown because zero items were returned.
+- The bounded follow-up experiment sends up to three existing organization-owned stored vehicle IDs in one provider request solely to increase the probability of observing one non-empty sanitized item schema. It does not certify multi-vehicle behavior until a later controlled production request verifies it.
 - This verifies the tested temporary provider request contract for this exact request shape and strongly supports that `X-Time-Zone: America/Winnipeg` was incompatible with the earlier tested request shape; it does not certify every vehicle-utilization request, all date ranges, ingestion persistence, checkpointing, units, identity/period semantics, or KPI mapping
 - semantic classification and semantic flags are used only to identify the missing provider-contract requirement before a future controlled verification call
 - `X-User-Id` is documented by Motive as a possible Fleet Admin/Fleet Manager context header, but Polaris does not yet have an authoritative organization-safe provider user candidate
@@ -141,7 +144,7 @@ After deployment:
 3. Confirm the backend performs only this provider request shape:
 
 ```text
-GET https://api.gomotive.com/v1/vehicle_utilization?vehicle_ids[]=<redacted stored vehicle id>&start_date=<one completed calendar day before end_date>&end_date=<previous completed date>&per_page=1&page_no=1
+GET https://api.gomotive.com/v1/vehicle_utilization?vehicle_ids[]=<redacted stored vehicle id>&vehicle_ids[]=<redacted stored vehicle id>&vehicle_ids[]=<redacted stored vehicle id>&start_date=<one completed calendar day before end_date>&end_date=<previous completed date>&per_page=1&page_no=1
 Accept: application/json
 X-API-Key: <secret>
 ```

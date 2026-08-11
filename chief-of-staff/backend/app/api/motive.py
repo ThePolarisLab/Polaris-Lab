@@ -28,6 +28,7 @@ from app.connectors.motive import (
 from app.connectors.motive_contracts import MotiveDriver, MotiveVehicle
 from app.connectors.motive_vehicle_utilization_contract import (
     MOTIVE_VEHICLE_UTILIZATION_ENDPOINT,
+    MOTIVE_VEHICLE_UTILIZATION_CONTRACT_MAX_VEHICLES,
     MOTIVE_VEHICLE_UTILIZATION_TIME_ZONE,
     run_vehicle_utilization_contract_verification,
 )
@@ -148,8 +149,8 @@ def verify_motive_vehicle_utilization_contract(
 ) -> dict[str, Any]:
     """Run one temporary read-only contract probe for Motive vehicle utilization."""
     _organization(session, principal.organization_id)
-    vehicle = _vehicle_for_utilization_contract(session, principal.organization_id)
-    if vehicle is None:
+    vehicles = _vehicles_for_utilization_contract(session, principal.organization_id)
+    if not vehicles:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
@@ -164,7 +165,7 @@ def verify_motive_vehicle_utilization_contract(
     try:
         result = run_vehicle_utilization_contract_verification(
             organization_id=principal.organization_id,
-            provider_vehicle_id=vehicle.provider_vehicle_id,
+            provider_vehicle_ids=[vehicle.provider_vehicle_id for vehicle in vehicles],
             start_date=start_date,
             end_date=end_date,
         )
@@ -314,13 +315,14 @@ def motive_verification_contract(principal: AuthenticatedPrincipal = Depends(req
             "path": MOTIVE_VEHICLE_UTILIZATION_ENDPOINT,
             "manual_route": "/api/v1/motive/verify/vehicle-utilization-contract",
             "params": {
-                "vehicle_ids[]": "redacted_stored_vehicle_id",
+                "vehicle_ids[]": "up_to_three_redacted_stored_vehicle_ids",
                 "start_date": "one_calendar_day_before_previous_completed_calendar_day",
                 "end_date": "previous_completed_calendar_day",
                 "per_page": 1,
                 "page_no": 1,
             },
             "max_provider_attempts": 1,
+            "max_provider_vehicles": MOTIVE_VEHICLE_UTILIZATION_CONTRACT_MAX_VEHICLES,
             "persistence_enabled": False,
         },
         "oauth_runtime_enabled": False,
@@ -339,12 +341,13 @@ def _organization(session: Session, organization_id: str) -> Organization:
     return organization
 
 
-def _vehicle_for_utilization_contract(session: Session, organization_id: str) -> MotiveVehicleRecord | None:
+def _vehicles_for_utilization_contract(session: Session, organization_id: str) -> list[MotiveVehicleRecord]:
     return (
         session.query(MotiveVehicleRecord)
         .filter(MotiveVehicleRecord.organization_id == organization_id)
         .order_by(MotiveVehicleRecord.id.asc())
-        .first()
+        .limit(MOTIVE_VEHICLE_UTILIZATION_CONTRACT_MAX_VEHICLES)
+        .all()
     )
 
 
