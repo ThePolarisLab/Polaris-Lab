@@ -24,6 +24,24 @@ MOTIVE_VEHICLE_UTILIZATION_ENDPOINT = "/v1/vehicle_utilization"
 MOTIVE_VEHICLE_UTILIZATION_CONTRACT_PARAMS = {"per_page": 1, "page_no": 1}
 MOTIVE_VEHICLE_UTILIZATION_CONTRACT_MAX_VEHICLES = 3
 MOTIVE_VEHICLE_UTILIZATION_METRICS = ("utilization", "idle_time", "idle_fuel", "driving_time", "driving_fuel")
+MOTIVE_VEHICLE_UTILIZATION_PERIOD_KEYS = {
+    "date",
+    "end",
+    "end_date",
+    "end_time",
+    "end_timestamp",
+    "period_end",
+    "period_start",
+    "reporting_end",
+    "reporting_period_end",
+    "reporting_period_start",
+    "reporting_start",
+    "start",
+    "start_date",
+    "start_time",
+    "start_timestamp",
+    "timestamp",
+}
 MOTIVE_VEHICLE_UTILIZATION_TIME_ZONE = "America/Winnipeg"
 PROVIDER_400_GENERIC_MESSAGE = "Provider rejected request parameters or required context."
 PROVIDER_400_MESSAGE_BY_CATEGORY = {
@@ -399,11 +417,13 @@ def _item_container(payload: Any) -> tuple[str | None, list[Any]]:
         if isinstance(value, list):
             return key, value
     for key, value in payload.items():
-        if isinstance(value, list):
-            return str(key), value
+        key_text = str(key)
+        if isinstance(value, list) and _safe_schema_key(key_text):
+            return key_text, value
     for key, value in payload.items():
-        if isinstance(value, dict) and key != "pagination":
-            return str(key), [value]
+        key_text = str(key)
+        if isinstance(value, dict) and key != "pagination" and _safe_schema_key(key_text):
+            return key_text, [value]
     return None, []
 
 
@@ -419,7 +439,8 @@ def _item_wrapper_key(item: dict[str, Any]) -> str | None:
         return None
     key, value = next(iter(item.items()))
     if isinstance(value, dict):
-        return str(key)
+        key_text = str(key)
+        return key_text if _safe_schema_key(key_text) else None
     return None
 
 
@@ -481,7 +502,16 @@ def _is_provider_record_identity_key(key: str, path: str) -> bool:
 
 def _is_period_key(key: str, path: str) -> bool:
     lowered = key.lower()
-    return any(marker in lowered for marker in ("start", "end", "date", "time", "timestamp", "period"))
+    if lowered in MOTIVE_VEHICLE_UTILIZATION_METRICS:
+        return False
+    if lowered in MOTIVE_VEHICLE_UTILIZATION_PERIOD_KEYS:
+        return True
+    return (
+        lowered.endswith("_date")
+        or lowered.endswith("_timestamp")
+        or lowered.startswith("period_")
+        or lowered.startswith("reporting_")
+    )
 
 
 def _is_unit_key(key: str, path: str) -> bool:
