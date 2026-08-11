@@ -71,6 +71,32 @@ def _principal(org_id: str = "org-a") -> AuthenticatedPrincipal:
 
 def _successful_payload() -> dict[str, Any]:
     return {
+        "vehicle_idle_rollups": [
+            {
+                "vehicle_idle_rollup": {
+                    "driving_fuel": 19.47,
+                    "driving_time": 240.25,
+                    "idle_fuel": 1.75,
+                    "idle_time": 38.5,
+                    "utilization": 83.23,
+                    "vehicle": {
+                        "id": "provider-vehicle-secret",
+                        "make": "SyntheticMake",
+                        "metric_units": "metric-value-should-not-return",
+                        "model": "SyntheticModel",
+                        "number": "unit-should-not-return",
+                        "vin": "vin-should-not-return",
+                        "year": 2024,
+                    },
+                }
+            }
+        ],
+        "pagination": {"total": 1, "page_no": 1, "per_page": 1},
+    }
+
+
+def _legacy_payload_with_provider_period_fields() -> dict[str, Any]:
+    return {
         "vehicle_utilization": [
             {
                 "vehicle": {"id": "provider-vehicle-secret", "number": "unit-should-not-return"},
@@ -168,21 +194,90 @@ def test_vehicle_utilization_contract_request_is_one_redacted_provider_call(monk
     assert "fake-motive-key" not in rendered
     assert "X-Time-Zone" not in rendered
     assert "vin-should-not-return" not in rendered
-    assert "plate-should-not-return" not in rendered
-    assert "83.2" not in rendered
+    assert "unit-should-not-return" not in rendered
+    assert "metric-value-should-not-return" not in rendered
+    assert "83.23" not in rendered
+    assert "38.5" not in rendered
+    assert "240.25" not in rendered
+    assert "19.47" not in rendered
+    assert "1.75" not in rendered
     assert result["request_shape"]["max_provider_attempts"] == 1
     assert result["request_shape"]["headers"]["Accept"] == "application/json"
     assert result["request_shape"]["headers"]["X-API-Key"] == "[REDACTED]"
     assert result["request_shape"]["headers"]["X-Metric-Units"] is None
     assert result["provider_vehicle_selected_count"] == 1
-    assert result["item_container_key"] == "vehicle_utilization"
+    assert result["top_level_type"] == "object"
+    assert result["top_level_keys"] == ["pagination", "vehicle_idle_rollups"]
+    assert result["item_container_key"] == "vehicle_idle_rollups"
+    assert result["item_wrapper_key"] == "vehicle_idle_rollup"
+    assert result["item_count_observed"] == 1
+    assert result["item_keys"] == ["driving_fuel", "driving_time", "idle_fuel", "idle_time", "utilization", "vehicle"]
+    assert result["nested_object_keys"] == {"vehicle": ["id", "make", "metric_units", "model", "number", "vin", "year"]}
     assert result["pagination_keys"] == ["page_no", "per_page", "total"]
     assert result["pagination_total_present"] is True
+    assert result["pagination_page_no_present"] is True
+    assert result["pagination_per_page_present"] is True
     assert result["vehicle_identity_paths"] == ["vehicle.id"]
-    assert result["metrics"]["utilization"] == {"present": True, "type": "number", "null": False, "paths": ["utilization"]}
-    assert result["metrics"]["idle_time"] == {"present": True, "type": "null", "null": True, "paths": ["idle_time"]}
-    assert result["schema_compatibility"] == "compatible"
+    assert result["provider_utilization_record_id_paths"] == []
+    for metric in ("utilization", "idle_time", "idle_fuel", "driving_time", "driving_fuel"):
+        assert result["metrics"][metric] == {"present": True, "type": "number", "null": False, "paths": [metric]}
+    assert result["period_fields"] == []
+    assert "driving_time" not in result["period_fields"]
+    assert "idle_time" not in result["period_fields"]
+    assert result["period_source_candidate"] == "request_window_requires_review"
+    assert result["schema_compatibility"] == "requires_mapping_review"
+    assert result["unit_fields"] == ["vehicle_idle_rollups[].vehicle_idle_rollup.vehicle.metric_units"]
     assert result["secrets_exposed"] is False
+
+
+def test_vehicle_utilization_contract_preserves_provider_period_and_nullability_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_legacy_payload_with_provider_period_fields())
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    result = verify_vehicle_utilization_contract(
+        organization_id="org-a",
+        provider_vehicle_ids=["provider-vehicle-secret"],
+        start_date=date(2026, 8, 5),
+        end_date=date(2026, 8, 6),
+        http_client=client,
+    )
+
+    assert result["item_container_key"] == "vehicle_utilization"
+    assert result["period_fields"] == ["end_date", "start_date"]
+    assert result["period_source_candidate"] == "provider_fields"
+    assert result["schema_compatibility"] == "compatible"
+    assert result["metrics"]["idle_time"] == {"present": True, "type": "null", "null": True, "paths": ["idle_time"]}
+
+
+def test_vehicle_utilization_contract_filters_unsafe_container_and_wrapper_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    payload = {
+        "api_key_results": [{"vehicle": {"id": "provider-vehicle-secret"}}],
+        "vehicle_idle_rollups": [{"secret_wrapper": {"vehicle": {"id": "provider-vehicle-secret"}}}],
+        "pagination": {"total": 1, "page_no": 1, "per_page": 1},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    result = verify_vehicle_utilization_contract(
+        organization_id="org-a",
+        provider_vehicle_ids=["provider-vehicle-secret"],
+        start_date=date(2026, 8, 5),
+        end_date=date(2026, 8, 6),
+        http_client=client,
+    )
+
+    rendered = json.dumps(result, sort_keys=True)
+    assert result["item_container_key"] == "vehicle_idle_rollups"
+    assert result["item_wrapper_key"] is None
+    assert "api_key_results" not in rendered
+    assert "secret_wrapper" not in rendered
+    assert "provider-vehicle-secret" not in rendered
 
 
 def test_vehicle_utilization_contract_encodes_up_to_three_vehicle_ids_in_one_request(monkeypatch: pytest.MonkeyPatch) -> None:
