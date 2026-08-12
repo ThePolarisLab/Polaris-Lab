@@ -36,6 +36,8 @@ The subsequent zero-item controlled schema capture returned `top_level_type=obje
 
 The non-empty item schema observed keys `driving_fuel`, `driving_time`, `idle_fuel`, `idle_time`, `utilization`, and `vehicle`; nested vehicle schema keys `id`, `make`, `metric_units`, `model`, `number`, `vin`, and `year`; vehicle identity path `vehicle.id`; pagination keys `page_no`, `per_page`, and `total`; unit metadata path `vehicle_idle_rollups[].vehicle_idle_rollup.vehicle.metric_units`; and no provider utilization record ID path. This disproves relying on the old `vehicle_utilization` fixture key as production-certified for success responses. It also shows the production item does not expose true reporting-period start/end fields; the earlier generic period detector incorrectly treated `driving_time` and `idle_time` metric fields as provider period fields. Request-window period identity still requires design review, and broad utilization ingestion remains HOLD/uncertified.
 
+The next non-persistent implementation layer parses the production-observed `vehicle_idle_rollups` envelope into an internal contract and performs read-only association from `vehicle.id` to an existing organization-owned Motive vehicle. It does not write utilization rows, create vehicles, mutate checkpoints, add a sync route, or treat request dates as authoritative reporting periods while Motive Support clarification remains pending.
+
 Before broader sync is implemented, Polaris must complete design and verification for:
 
 - durable vehicle-utilization persistence mapping, identity/period semantics, units, checkpoint strategy, unknown vehicle handling, KPI interpretation, and production ingestion certification
