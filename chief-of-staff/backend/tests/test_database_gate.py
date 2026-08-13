@@ -73,6 +73,9 @@ def test_clean_sqlite_upgrade_head_starts_and_has_expected_schema(tmp_path: Path
             'motive_vehicle_utilization',
             'motive_driver_utilization',
             'motive_ifta_summaries',
+            'ace_inbond_movements',
+            'ace_inbond_events',
+            'ace_import_runs',
         ]:
             assert table in tables
         with engine.connect() as connection:
@@ -123,7 +126,7 @@ def test_tenant_table_inventories_are_complete() -> None:
     _run_python(
         """
         import importlib
-        from app.database.validate_schema import LEGACY_OPTIONAL_TABLES, MOTIVE_TENANT_TABLES, TENANT_TABLES as validator_tables
+        from app.database.validate_schema import ACE_TENANT_TABLES, LEGACY_OPTIONAL_TABLES, MOTIVE_TENANT_TABLES, TENANT_TABLES as validator_tables
 
         add_columns = importlib.import_module('migrations.versions.202607290002_add_nullable_tenant_columns')
         backfill = importlib.import_module('migrations.versions.202607290003_backfill_and_require_tenant_ownership')
@@ -165,11 +168,17 @@ def test_tenant_table_inventories_are_complete() -> None:
             'motive_driver_utilization',
             'motive_ifta_summaries',
         }
+        ace_expected = {
+            'ace_inbond_movements',
+            'ace_inbond_events',
+            'ace_import_runs',
+        }
         assert set(add_columns.TENANT_TABLES) == phase1_expected
         assert set(backfill.TENANT_TABLES) == phase1_expected
         assert set(MOTIVE_TENANT_TABLES) == motive_expected
-        assert set(validator_tables) == phase1_expected | post_baseline_tenant_tables | motive_expected
-        assert (post_baseline_tenant_tables | motive_expected).issubset(set(LEGACY_OPTIONAL_TABLES))
+        assert set(ACE_TENANT_TABLES) == ace_expected
+        assert set(validator_tables) == phase1_expected | post_baseline_tenant_tables | motive_expected | ace_expected
+        assert (post_baseline_tenant_tables | motive_expected | ace_expected).issubset(set(LEGACY_OPTIONAL_TABLES))
         """,
         db_url,
     )

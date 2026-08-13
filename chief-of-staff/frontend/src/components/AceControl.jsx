@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, FileDown, Search, ShieldCheck, XCircle } from "lucide-react";
+import { AlertTriangle, FileDown, RefreshCw, Search, ShieldCheck, XCircle } from "lucide-react";
 import { apiClient } from "../apiClient";
 import "./AceControl.css";
 
@@ -70,7 +70,7 @@ function DetailDrawer({ movement, onClose }) {
         <div><span>Create / Depart / Arrival / Export</span><strong>{movement.create_date || "—"} · {movement.departure_date || "—"} · {movement.arrival_date || "—"} · {movement.export_date || "—"}</strong></div>
         <div><span>Late / Overdue</span><strong>{movement.days_late || 0} / {movement.days_overdue_for_export || 0} days</strong></div>
         <div><span>Transfer of liability</span><strong>{movement.transfer_of_liability_at || "—"}</strong></div>
-        <div><span>Penalty</span><strong>{movement.penalty_indicator ? "Yes" : "No"}</strong></div>
+        <div><span>Penalty</span><strong>{movement.penalty_indicator == null ? "Unreported" : movement.penalty_indicator ? "Yes" : "No"}</strong></div>
         <div><span>Authorization</span><strong>{movement.authorization_status || "—"}</strong></div>
         <div><span>Authorization notes</span><strong>{movement.authorization_notes || "—"}</strong></div>
         <div><span>Review reason</span><strong>{movement.review_reason || "None"}</strong></div>
@@ -102,6 +102,8 @@ export default function AceControl() {
   const [activeOnly, setActiveOnly] = useState(false);
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
   const [error, setError] = useState("");
 
   const query = useMemo(() => qs({ search, ...filters, active_only: activeOnly, limit: 250 }), [search, filters, activeOnly]);
@@ -150,12 +152,40 @@ export default function AceControl() {
     URL.revokeObjectURL(url);
   }
 
+  async function importLatestReport() {
+    try {
+      setImporting(true);
+      setError("");
+      const result = await apiClient.post("/ace/import/outlook-latest");
+      setImportResult(result);
+      await load();
+    } catch (requestError) {
+      setError(requestError.message || "Unable to import latest ACE report.");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  function importMessage(result) {
+    if (!result) return "";
+    const counts = `${result.records_read || 0} read · ${result.records_inserted || 0} inserted · ${result.records_updated || 0} updated · ${result.exceptions_created || 0} exceptions`;
+    if (result.status === "import_success") return `Success: ${counts}`;
+    if (result.status === "already_processed") return `Already processed: ${counts}`;
+    if (result.status === "no_source_found") return "No report found.";
+    if (result.status === "source_contract_error") return "Source contract error.";
+    return "Import failed.";
+  }
+
   return (
     <section className="ace-control-page">
       <div className="ace-page-heading">
         <div><span className="ace-eyebrow"><ShieldCheck size={16} /> ACE CONTROL</span><h1>In-Bond / Bond Control</h1><p>Search, monitor, resolve, and report on scheduled ACE In-Bond Bills of Lading activity. Manifest is a separate source not connected yet.</p></div>
-        <button type="button" className="ace-export-button" onClick={exportCsv}><FileDown size={17} /> Export filtered report</button>
+        <div className="ace-action-stack">
+          <button type="button" className="ace-export-button" onClick={importLatestReport} disabled={importing}><RefreshCw size={17} className={importing ? "spin" : ""} /> {importing ? "Importing..." : "Import Latest ACE Report"}</button>
+          <button type="button" className="ace-export-button" onClick={exportCsv}><FileDown size={17} /> Export filtered report</button>
+        </div>
       </div>
+      {importResult && <div className="ace-import-result">{importMessage(importResult)}</div>}
 
       {summary && (
         <div className="ace-kpis">

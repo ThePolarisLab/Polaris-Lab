@@ -183,6 +183,13 @@ class OutlookConnector(BaseConnector):
             params={"$top": "100", "$select": "id,name,contentType,size,isInline,lastModifiedDateTime"},
         )
 
+    def get_attachment_content(self, message_id: str, attachment_id: str) -> bytes:
+        return self._request_bytes(
+            "GET",
+            f"/me/messages/{_quote_segment(message_id)}/attachments/{_quote_segment(attachment_id)}/$value",
+            operation="attachment content",
+        )
+
     def safe_status(self) -> dict[str, Any]:
         store = self._store_or_none()
         metadata = store.metadata() if store else {"authorized": False}
@@ -225,6 +232,55 @@ class OutlookConnector(BaseConnector):
 
     def _request_json(self, method: str, path: str, *, operation: str, params: dict[str, str] | None = None, prefer_text_body: bool = False) -> dict[str, Any]:
         return self._request_absolute_json(method, f"{self._graph_base_url()}{path}", operation=operation, params=params, prefer_text_body=prefer_text_body)
+
+    def _request_bytes(self, method: str, path: str, *, operation: str) -> bytes:
+        safe_url = self._validated_graph_url(f"{self._graph_base_url()}{path}", operation)
+        last_error: OutlookConnectorError | None = None
+        for attempt in range(1, self._max_attempts() + 1):
+            self.authenticate()
+            correlation_id = _correlation_id()
+            headers = {
+                "Accept": "application/octet-stream",
+                "Authorization": f"Bearer {self._access_token}",
+                "client-request-id": correlation_id,
+                "X-Polaris-Correlation": correlation_id,
+            }
+            try:
+                response = self._http().request(method, safe_url, headers=headers)
+                if response.status_code == 401 and attempt < self._max_attempts():
+                    self._access_token = None
+                    self._refresh_access_token()
+                    continue
+                if response.status_code >= 400:
+                    details = _graph_error_details(response)
+                    _log_graph_error(operation, response, details)
+                if response.status_code == 429:
+                    raise OutlookConnectorError(_graph_failure_message(operation, response, details, fallback="is rate limited"), status=ConnectorStatus.RATE_LIMITED, retryable=True)
+                if response.status_code in _GRAPH_AUTH_CODES:
+                    message = _graph_failure_message(operation, response, details, fallback="authorization failed")
+                    self._store().record_refresh_failure(message, reauthorization_required=response.status_code == 401)
+                    raise OutlookConnectorError(message, status=ConnectorStatus.REAUTHORIZATION_REQUIRED)
+                if response.status_code >= 500:
+                    raise OutlookConnectorError(_graph_failure_message(operation, response, details), status=ConnectorStatus.DEGRADED, retryable=True)
+                if response.status_code >= 400:
+                    raise OutlookConnectorError(_graph_failure_message(operation, response, details), status=ConnectorStatus.DEGRADED)
+                return response.content
+            except OutlookConnectorError as exc:
+                last_error = exc
+                if not exc.retryable or attempt == self._max_attempts():
+                    raise
+                self._sleep(self._retry_delay(attempt))
+            except httpx.TimeoutException as exc:
+                last_error = OutlookConnectorError(f"Outlook {operation} timed out", status=ConnectorStatus.DEGRADED, retryable=True)
+                if attempt == self._max_attempts():
+                    raise last_error from exc
+                self._sleep(self._retry_delay(attempt))
+            except httpx.HTTPError as exc:
+                last_error = OutlookConnectorError(f"Outlook {operation} failed", status=ConnectorStatus.DEGRADED, retryable=True)
+                if attempt == self._max_attempts():
+                    raise last_error from exc
+                self._sleep(self._retry_delay(attempt))
+        raise last_error or OutlookConnectorError(f"Outlook {operation} failed")
 
     def _request_absolute_json(self, method: str, url: str, *, operation: str, params: dict[str, str] | None = None, prefer_text_body: bool = False) -> dict[str, Any]:
         safe_url = self._validated_graph_url(url, operation)

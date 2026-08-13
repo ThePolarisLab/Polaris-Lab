@@ -56,7 +56,7 @@ class AceInBondMovement(Base):
     days_overdue_for_export: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     late_in_transit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     overdue_for_export: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
-    penalty_indicator: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    penalty_indicator: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None, index=True)
 
     authorization_status: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     authorization_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
