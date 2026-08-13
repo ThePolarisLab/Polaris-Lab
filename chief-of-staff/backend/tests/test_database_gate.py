@@ -76,6 +76,7 @@ def test_clean_sqlite_upgrade_head_starts_and_has_expected_schema(tmp_path: Path
             'ace_inbond_movements',
             'ace_inbond_events',
             'ace_import_runs',
+            'ace_feed_runs',
         ]:
             assert table in tables
         with engine.connect() as connection:
@@ -172,6 +173,7 @@ def test_tenant_table_inventories_are_complete() -> None:
             'ace_inbond_movements',
             'ace_inbond_events',
             'ace_import_runs',
+            'ace_feed_runs',
         }
         assert set(add_columns.TENANT_TABLES) == phase1_expected
         assert set(backfill.TENANT_TABLES) == phase1_expected

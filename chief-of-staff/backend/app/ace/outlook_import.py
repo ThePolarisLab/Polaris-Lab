@@ -267,8 +267,10 @@ def _configured_folders(connector: OutlookConnector) -> list[dict[str, str]]:
 
 
 def _message_candidate(connector: OutlookConnector, message: dict[str, Any]) -> AceOutlookCandidate | None:
-    if _clean_text(message.get("subject")) != ACE_REPORT_SUBJECT or not bool(message.get("hasAttachments")):
+    if _clean_text(message.get("subject")) != ACE_REPORT_SUBJECT:
         return None
+    if not bool(message.get("hasAttachments")):
+        raise AceOutlookImportError("source_contract_error")
     message_id = str(message.get("id") or "")
     if not message_id:
         return None

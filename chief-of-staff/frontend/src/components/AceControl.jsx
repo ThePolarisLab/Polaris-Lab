@@ -104,6 +104,7 @@ export default function AceControl() {
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
+  const [feedHealth, setFeedHealth] = useState(null);
   const [error, setError] = useState("");
 
   const query = useMemo(() => qs({ search, ...filters, active_only: activeOnly, limit: 250 }), [search, filters, activeOnly]);
@@ -119,6 +120,7 @@ export default function AceControl() {
       setSummary(summaryPayload);
       setItems(movementPayload.items || []);
       setTotal(movementPayload.total || 0);
+      apiClient.get("/ace/feed-health").then(setFeedHealth).catch(() => setFeedHealth(null));
     } catch (requestError) {
       setError(requestError.message || "Unable to load ACE data.");
     } finally {
@@ -176,6 +178,18 @@ export default function AceControl() {
     return "Import failed.";
   }
 
+  function feedStatusLabel(status) {
+    if (status === "healthy") return "Healthy";
+    if (status === "no_new_report_yet") return "No new report yet";
+    if (status === "warning") return "Watch";
+    if (status === "error") return "Import failed";
+    return "Unknown";
+  }
+
+  function dateText(value) {
+    return value ? new Date(value).toLocaleString() : "Not yet recorded";
+  }
+
   return (
     <section className="ace-control-page">
       <div className="ace-page-heading">
@@ -186,6 +200,18 @@ export default function AceControl() {
         </div>
       </div>
       {importResult && <div className="ace-import-result">{importMessage(importResult)}</div>}
+      {feedHealth && (
+        <section className={`ace-feed-health ace-feed-${feedHealth.status || "unknown"}`} aria-label="ACE daily feed health">
+          <div>
+            <span className="ace-eyebrow"><RefreshCw size={15} /> ACE DAILY FEED</span>
+            <strong>{feedStatusLabel(feedHealth.status)}</strong>
+          </div>
+          <div><span>Last successful import</span><strong>{dateText(feedHealth.latest_successful_import_at)}</strong></div>
+          <div><span>Source</span><strong>{feedHealth.source || "Outlook scheduled report"}</strong></div>
+          <div><span>Mode</span><strong>{feedHealth.latest_successful_mode || "—"}</strong></div>
+          <div><span>Rows processed</span><strong>{feedHealth.records_read || 0}</strong></div>
+        </section>
+      )}
 
       {summary && (
         <div className="ace-kpis">

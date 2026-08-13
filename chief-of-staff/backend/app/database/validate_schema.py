@@ -33,6 +33,7 @@ ACE_EXPECTED_COLUMNS: dict[str, set[str]] = {
     "ace_inbond_movements": {"id", "organization_id", "inbond_number", "bill_of_lading_number", "inbond_type_code", "inbond_type_description", "source_type_description", "record_status", "inbond_carrier_code", "inbond_carrier_name", "bonded_carrier_code", "bonded_carrier_name", "manifest_carrier_code", "manifest_carrier_name", "qp_filer_code", "qp_filer_name", "shipper_name", "consignee_name", "origination_port_name", "destination_port_name", "create_date", "arrival_date", "export_date", "transfer_of_liability_at", "days_late", "days_overdue_for_export", "late_in_transit", "overdue_for_export", "penalty_indicator", "authorization_status", "authorization_notes", "evidence_reference", "review_status", "review_reason", "resolved_at", "resolution_notes", "first_seen_at", "last_seen_at", "created_at", "updated_at"},
     "ace_inbond_events": {"id", "organization_id", "movement_id", "event_type", "field_name", "old_value", "new_value", "detail", "occurred_at"},
     "ace_import_runs": {"id", "organization_id", "source_message_id", "source_filename", "source_received_at", "status", "records_read", "records_inserted", "records_updated", "exceptions_created", "error_message", "started_at", "completed_at"},
+    "ace_feed_runs": {"id", "organization_id", "mode", "status", "source_found", "replayed", "records_read", "records_inserted", "records_updated", "exceptions_created", "error_category", "started_at", "completed_at"},
 }
 
 EXPECTED_COLUMNS: dict[str, set[str]] = {

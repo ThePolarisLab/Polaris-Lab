@@ -16,7 +16,7 @@ from app.connectors.quickbooks_credentials import (  # noqa: F401
 )
 from app.identity.models import Identity, OrganizationMembership  # noqa: F401
 from app.missions.models import Mission, MissionTask, Workflow  # noqa: F401
-from app.models.ace import AceImportRun, AceInBondEvent, AceInBondMovement  # noqa: F401
+from app.models.ace import AceFeedRun, AceImportRun, AceInBondEvent, AceInBondMovement  # noqa: F401
 from app.models.company import Company  # noqa: F401
 from app.models.financial_snapshot import (  # noqa: F401
     FinancialAccount,

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.ace.outlook_import import import_latest_ace_outlook_report
+from app.ace.feed_runner import ace_feed_health, run_ace_daily_import
 from app.ace.service import AceImportValidationError, SAFE_IMPORT_ERROR, import_rows, movement_query, refresh_review_state, summary
 from app.connectors.outlook import OutlookConnector
 from app.connectors.outlook_credentials import OutlookCredentialStore
@@ -238,7 +238,28 @@ def import_latest_outlook_report(
     db: Session = Depends(get_db),
 ):
     connector = OutlookConnector(credential_store=OutlookCredentialStore(principal.organization_id))
-    return import_latest_ace_outlook_report(db, principal.organization_id, connector=connector)
+    result = run_ace_daily_import(db, principal.organization_id, connector=connector, mode="manual")
+    return {
+        "status": result.status,
+        "source_found": result.source_found,
+        "replayed": result.replayed,
+        "records_read": result.records_read,
+        "records_inserted": result.records_inserted,
+        "records_updated": result.records_updated,
+        "records_unchanged": 0,
+        "exceptions_created": result.exceptions_created,
+        "import_status": result.status,
+        "completed_at": result.completed_at,
+        "secrets_exposed": False,
+    }
+
+
+@router.get("/feed-health")
+def get_feed_health(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.EXECUTIVE_READ)),
+    db: Session = Depends(get_db),
+):
+    return ace_feed_health(db, principal.organization_id)
 
 
 @router.patch("/movements/{movement_id}/authorization")
