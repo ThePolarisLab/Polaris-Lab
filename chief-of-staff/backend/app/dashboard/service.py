@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
+from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 from app.dashboard.models import DashboardItem, DashboardPriority, ExecutiveDashboard
+from app.models.ace import AceInBondMovement
 from app.models.team_note import TeamNote
 from app.models.truck import Truck
 from app.missions.models import Mission
@@ -23,11 +25,12 @@ def build_executive_dashboard(db: Session, *, organization_id: str, user_name: s
     )
     total_trucks = db.query(Truck).filter(Truck.organization_id == organization_id).count()
     q2 = analyze_q2_compliance_risk(db, organization_id)
-    needs = _attention(open_notes, q2)
+    ace_attention = _ace_attention(db, organization_id)
+    needs = (_attention(open_notes, q2) + ace_attention)[:8]
     carry = _carry(open_notes, active_missions, now)
     plan = _plan(needs, carry)
     upcoming = _upcoming(open_notes, now)
-    watch = _watch(open_notes, q2)
+    watch = (_watch(open_notes, q2) + _ace_watch(db, organization_id))[:6]
     recommendation = q2.recommendation if plan and "Q2" in plan[0].title else (f"Start with '{plan[0].title}'. Reason: {plan[0].reason}" if plan else "Review current operations and confirm today's priorities.")
     critical = sum(1 for x in needs if x.severity == "CRITICAL")
     status = "ATTENTION REQUIRED" if critical >= 2 else ("WATCH" if critical == 1 or needs else "RUNNING NORMALLY")
@@ -43,6 +46,48 @@ def _attention(notes, q2):
     if q2.risk.value in {"MEDIUM","HIGH"}:
         items.append(DashboardItem("Complete Q2 Compliance",f"Risk {q2.risk.value}; {q2.evidence_count} connected evidence item(s).","CRITICAL" if q2.risk.value=="HIGH" else "HIGH","Polaris Reasoning",q2.mission_id))
     return items[:8]
+
+
+def _ace_table_available(db: Session) -> bool:
+    """Allow mixed-schema test/rollout environments to render the dashboard safely."""
+    try:
+        return "ace_inbond_movements" in inspect(db.get_bind()).get_table_names()
+    except Exception:
+        return False
+
+
+def _ace_attention(db, organization_id):
+    if not _ace_table_available(db):
+        return []
+    rows = (
+        db.query(AceInBondMovement)
+        .filter(
+            AceInBondMovement.organization_id == organization_id,
+            AceInBondMovement.resolved_at.is_(None),
+            AceInBondMovement.review_status.in_(["review", "critical"]),
+        )
+        .order_by(AceInBondMovement.review_status.desc(), AceInBondMovement.last_seen_at.desc())
+        .limit(6)
+        .all()
+    )
+    items=[]
+    for movement in rows:
+        reason=(movement.review_reason or "ACE movement requires review").replace("_", " ")
+        label=f"ACE In-Bond {movement.inbond_number}"
+        if movement.bill_of_lading_number:
+            label += f" / {movement.bill_of_lading_number}"
+        items.append(DashboardItem(
+            label,
+            reason,
+            "CRITICAL" if movement.review_status == "critical" else "HIGH",
+            "ACE Bond Control",
+            f"ace.{movement.id}",
+        ))
+    return items
+
+
+def _ace_watch(db, organization_id):
+    return []
 
 
 def _carry(notes, missions, now):

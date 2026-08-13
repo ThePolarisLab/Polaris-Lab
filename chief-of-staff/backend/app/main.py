@@ -8,6 +8,7 @@ from app.security.dependencies import require_permission
 from app.security.models import Permission
 
 # API Routers
+from app.api.ace import router as ace_router
 from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.api.code_understanding import router as code_understanding_router
@@ -77,6 +78,7 @@ app.include_router(motive_router)
 app.include_router(outlook_router)
 app.include_router(quickbooks_oauth_router)
 app.include_router(quickbooks_financials_router)
+app.include_router(ace_router)
 app.include_router(events_router, dependencies=organization_read)
 app.include_router(organizations_router)
 app.include_router(identity_router)
