@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, FileDown, Search, ShieldCheck, XCircle } from "lucide-react";
 import { apiClient } from "../apiClient";
+import "./AceControl.css";
 
 const FILTERS = {
   status: "",
