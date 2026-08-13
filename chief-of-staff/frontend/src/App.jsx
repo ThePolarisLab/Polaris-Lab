@@ -14,6 +14,7 @@ import {
   LogOut,
   Menu,
   Settings,
+  ShieldCheck,
   X,
 } from "lucide-react";
 import {
@@ -23,6 +24,7 @@ import {
   loginWithPassword,
   logoutSession,
 } from "./apiClient";
+import AceControl from "./components/AceControl";
 import BuilderConsole from "./components/BuilderConsole";
 import ExecutiveDashboard from "./components/ExecutiveDashboard";
 import { ExecutiveRouteView } from "./components/ExecutiveViews";
@@ -32,6 +34,7 @@ import "./App.css";
 const EXECUTIVE_ROUTES = Object.freeze([
   { key: "dashboard", label: "Dashboard", description: "Current priorities and operating position", icon: LayoutDashboard },
   { key: "daily-brief", label: "Daily Brief", description: "The most important changes and next actions", icon: BookOpenText },
+  { key: "ace", label: "ACE", description: "Manifest, in-bond, exceptions, search, and reports", icon: ShieldCheck },
   { key: "evidence", label: "Evidence", description: "Trace facts, sources, and supporting records", icon: FileSearch },
   { key: "decisions", label: "Decision Center", description: "Review decisions, recommendations, and approvals", icon: Compass },
   { key: "connectors", label: "Connectors", description: "Monitor enterprise data connections", icon: Cable },
@@ -115,28 +118,16 @@ function LoginScreen({ reason, onAuthenticated }) {
         </div>
         <form className="login-form" onSubmit={handleSubmit}>
           <h1 id="login-title">Sign in</h1>
-          <label>
-            Email
-            <input value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" type="email" required />
-          </label>
-          <label>
-            Password
-            <input value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" type="password" required />
-          </label>
+          <label>Email<input value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" type="email" required /></label>
+          <label>Password<input value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" type="password" required /></label>
           {error && <div className="auth-message" role="alert">{error}</div>}
           <button type="submit" className="primary-button" disabled={submitting}>{submitting ? "Signing in..." : "Sign In"}</button>
         </form>
         {!checkingBootstrap && bootstrapAvailable && (
           <form className="login-form bootstrap-form" onSubmit={handleBootstrap}>
             <h2>First administrator bootstrap</h2>
-            <label>
-              One-time bootstrap secret
-              <input value={bootstrapSecret} onChange={(event) => setBootstrapSecret(event.target.value)} autoComplete="one-time-code" type="password" required />
-            </label>
-            <label>
-              Admin password
-              <input value={bootstrapPassword} onChange={(event) => setBootstrapPassword(event.target.value)} autoComplete="new-password" type="password" minLength={12} required />
-            </label>
+            <label>One-time bootstrap secret<input value={bootstrapSecret} onChange={(event) => setBootstrapSecret(event.target.value)} autoComplete="one-time-code" type="password" required /></label>
+            <label>Admin password<input value={bootstrapPassword} onChange={(event) => setBootstrapPassword(event.target.value)} autoComplete="new-password" type="password" minLength={12} required /></label>
             {bootstrapMessage && <div className="auth-message" role="status">{bootstrapMessage}</div>}
             <button type="submit" className="primary-button secondary" disabled={submitting}>{submitting ? "Creating..." : "Create First Admin"}</button>
           </form>
@@ -164,7 +155,7 @@ function ExecutiveWorkspace({ page, session, forbiddenMessage, onOpenMenu, onLog
         </div>
       </header>
       {forbiddenMessage && <div className="forbidden-banner" role="alert">{forbiddenMessage}</div>}
-      <main className="workspace-main">{page === "dashboard" ? <ExecutiveDashboard /> : <ExecutiveRouteView page={page} />}</main>
+      <main className="workspace-main">{page === "dashboard" ? <ExecutiveDashboard /> : page === "ace" ? <AceControl /> : <ExecutiveRouteView page={page} />}</main>
       <footer className="workspace-statusbar"><span><span className="status-dot" aria-hidden="true" />{runtimeConfig.workspace.workspaceName}</span><span>Evidence · Intelligence · Action</span></footer>
     </div>
   );
@@ -207,10 +198,7 @@ export default function App() {
 
   useEffect(() => {
     const handleHashChange = () => { setRoute(parseHash()); setMobileOpen(false); };
-    const handleAuthChange = (event) => {
-      setSession(getAuthSession());
-      setAuthReason(event.detail?.reason || "");
-    };
+    const handleAuthChange = (event) => { setSession(getAuthSession()); setAuthReason(event.detail?.reason || ""); };
     const handleForbidden = (event) => setForbiddenMessage(event.detail?.message || "You do not have permission to access that resource.");
     window.addEventListener("hashchange", handleHashChange);
     window.addEventListener("polaris-auth-changed", handleAuthChange);
@@ -228,10 +216,7 @@ export default function App() {
   }
 
   const content = useMemo(() => {
-    if (!session.authenticated) {
-      return <LoginScreen reason={authReason} onAuthenticated={setSession} />;
-    }
-
+    if (!session.authenticated) return <LoginScreen reason={authReason} onAuthenticated={setSession} />;
     if (route.workspace === "builder") {
       return (
         <div className="builder-workspace">
@@ -254,6 +239,5 @@ export default function App() {
   }, [route, session, authReason, forbiddenMessage]);
 
   if (!session.authenticated) return content;
-
   return <div className="polaris-app-shell"><WorkspaceSidebar route={route} mobileOpen={mobileOpen} onClose={() => setMobileOpen(false)} />{content}</div>;
 }
