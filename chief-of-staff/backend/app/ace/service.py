@@ -5,10 +5,11 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Iterable
 
-from sqlalchemy import and_, func, or_
+from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.ace import AceInBondEvent, AceInBondMovement
+from app.models.ace import AceImportRun, AceInBondEvent, AceInBondMovement
 
 TRACKED_FIELDS = (
     "record_status", "arrival_date", "export_date", "days_late", "days_overdue_for_export",
@@ -17,6 +18,11 @@ TRACKED_FIELDS = (
 )
 
 MANUAL_AUTHORIZATION_STATUSES = {"UNAUTHORIZED - NO MOR PERMISSION", "AUTHORIZED", "AUTHORIZED - THIRD PARTY"}
+SAFE_IMPORT_ERROR = "ACE import failed validation."
+
+
+class AceImportValidationError(ValueError):
+    """Controlled validation failure for normalized ACE source rows."""
 
 
 def utcnow() -> datetime:
@@ -30,41 +36,64 @@ def _text(value) -> str | None:
     return value or None
 
 
-def _bool(value) -> bool:
+def _bool(value, field_name: str) -> bool:
+    if value in (None, ""):
+        return False
     if isinstance(value, bool):
         return value
-    return str(value or "").strip().upper() in {"Y", "YES", "TRUE", "1"}
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().upper()
+        if text in {"Y", "YES", "TRUE", "1"}:
+            return True
+        if text in {"N", "NO", "FALSE", "0"}:
+            return False
+    raise AceImportValidationError(f"invalid boolean field: {field_name}")
 
 
-def _int(value) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
+def _int(value, field_name: str) -> int:
+    if value in (None, ""):
         return 0
+    if isinstance(value, bool):
+        raise AceImportValidationError(f"invalid integer field: {field_name}")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise AceImportValidationError(f"invalid integer field: {field_name}") from exc
 
 
-def _date(value) -> date | None:
+def _date(value, field_name: str) -> date | None:
     if value in (None, ""):
         return None
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, date):
         return value
-    return date.fromisoformat(str(value)[:10])
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError as exc:
+        raise AceImportValidationError(f"invalid date field: {field_name}") from exc
 
 
-def _datetime(value) -> datetime | None:
+def _datetime(value, field_name: str) -> datetime | None:
     if value in (None, ""):
         return None
     if isinstance(value, datetime):
         return value
-    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise AceImportValidationError(f"invalid datetime field: {field_name}") from exc
 
 
 def normalized_payload(row: dict) -> dict:
     """Map a normalized ACE row into the persisted movement schema."""
+    inbond_number = str(row.get("inbond_number") or "").strip()
+    if not inbond_number:
+        raise AceImportValidationError("missing inbond_number")
     return {
-        "inbond_number": str(row.get("inbond_number") or "").strip(),
+        "inbond_number": inbond_number,
         "bill_of_lading_number": str(row.get("bill_of_lading_number") or "").strip(),
         "inbond_type_code": _text(row.get("inbond_type_code")),
         "inbond_type_description": _text(row.get("inbond_type_description")),
@@ -82,15 +111,15 @@ def normalized_payload(row: dict) -> dict:
         "consignee_name": _text(row.get("consignee_name")),
         "origination_port_name": _text(row.get("origination_port_name")),
         "destination_port_name": _text(row.get("destination_port_name")),
-        "create_date": _date(row.get("create_date")),
-        "arrival_date": _date(row.get("arrival_date")),
-        "export_date": _date(row.get("export_date")),
-        "transfer_of_liability_at": _datetime(row.get("transfer_of_liability_at")),
-        "days_late": _int(row.get("days_late")),
-        "days_overdue_for_export": _int(row.get("days_overdue_for_export")),
-        "late_in_transit": _bool(row.get("late_in_transit")),
-        "overdue_for_export": _bool(row.get("overdue_for_export")),
-        "penalty_indicator": _bool(row.get("penalty_indicator")),
+        "create_date": _date(row.get("create_date"), "create_date"),
+        "arrival_date": _date(row.get("arrival_date"), "arrival_date"),
+        "export_date": _date(row.get("export_date"), "export_date"),
+        "transfer_of_liability_at": _datetime(row.get("transfer_of_liability_at"), "transfer_of_liability_at"),
+        "days_late": _int(row.get("days_late"), "days_late"),
+        "days_overdue_for_export": _int(row.get("days_overdue_for_export"), "days_overdue_for_export"),
+        "late_in_transit": _bool(row.get("late_in_transit"), "late_in_transit"),
+        "overdue_for_export": _bool(row.get("overdue_for_export"), "overdue_for_export"),
+        "penalty_indicator": _bool(row.get("penalty_indicator"), "penalty_indicator"),
     }
 
 
@@ -98,8 +127,6 @@ def review_reasons(movement: AceInBondMovement) -> list[str]:
     reasons: list[str] = []
     if movement.authorization_status == "UNAUTHORIZED - NO MOR PERMISSION":
         reasons.append("unauthorized")
-    if (movement.record_status or "").lower() == "open":
-        reasons.append("open")
     if movement.overdue_for_export:
         reasons.append("overdue_for_export")
     if movement.late_in_transit:
@@ -124,14 +151,22 @@ def refresh_review_state(movement: AceInBondMovement) -> tuple[str, str | None]:
     return "clear", None
 
 
-def reconcile_rows(db: Session, organization_id: str, rows: Iterable[dict]) -> dict:
+def _record_exception_event(db: Session, *, organization_id: str, movement: AceInBondMovement, occurred_at: datetime) -> None:
+    db.add(AceInBondEvent(
+        organization_id=organization_id,
+        movement_id=movement.id,
+        event_type="exception_opened",
+        detail=movement.review_reason,
+        occurred_at=occurred_at,
+    ))
+
+
+def _reconcile_rows_no_commit(db: Session, organization_id: str, rows: Iterable[dict]) -> dict:
     inserted = updated = exceptions = 0
     now = utcnow()
 
     for raw in rows:
         payload = normalized_payload(raw)
-        if not payload["inbond_number"]:
-            continue
         movement = (
             db.query(AceInBondMovement)
             .filter(
@@ -154,6 +189,7 @@ def reconcile_rows(db: Session, organization_id: str, rows: Iterable[dict]) -> d
             inserted += 1
             if movement.review_status in {"review", "critical"}:
                 exceptions += 1
+                _record_exception_event(db, organization_id=organization_id, movement=movement, occurred_at=now)
             continue
 
         old_review = movement.review_status
@@ -179,19 +215,116 @@ def reconcile_rows(db: Session, organization_id: str, rows: Iterable[dict]) -> d
             updated += 1
         if old_review not in {"review", "critical"} and movement.review_status in {"review", "critical"}:
             exceptions += 1
-            db.add(AceInBondEvent(
-                organization_id=organization_id, movement_id=movement.id,
-                event_type="exception_opened", detail=movement.review_reason, occurred_at=now,
-            ))
+            _record_exception_event(db, organization_id=organization_id, movement=movement, occurred_at=now)
 
-    db.commit()
     return {"inserted": inserted, "updated": updated, "exceptions_created": exceptions}
+
+
+def reconcile_rows(db: Session, organization_id: str, rows: Iterable[dict]) -> dict:
+    result = _reconcile_rows_no_commit(db, organization_id, rows)
+    db.commit()
+    return result
+
+
+def _import_run_response(run: AceImportRun, *, replay: bool = False) -> dict:
+    return {
+        "import_run_id": run.id,
+        "status": "idempotent_replay" if replay and run.status == "completed" else run.status,
+        "source_message_id": run.source_message_id,
+        "source_filename": run.source_filename,
+        "source_received_at": run.source_received_at,
+        "records_read": run.records_read,
+        "inserted": run.records_inserted,
+        "updated": run.records_updated,
+        "exceptions_created": run.exceptions_created,
+        "error_message": run.error_message,
+        "started_at": run.started_at,
+        "completed_at": run.completed_at,
+    }
+
+
+def import_rows(
+    db: Session,
+    organization_id: str,
+    *,
+    source_message_id: str,
+    source_filename: str | None,
+    source_received_at: datetime | None,
+    rows: Iterable[dict],
+) -> dict:
+    source_message_id = str(source_message_id or "").strip()
+    if not source_message_id:
+        raise AceImportValidationError("missing source_message_id")
+    existing = (
+        db.query(AceImportRun)
+        .filter(AceImportRun.organization_id == organization_id, AceImportRun.source_message_id == source_message_id)
+        .one_or_none()
+    )
+    if existing is not None:
+        return _import_run_response(existing, replay=True)
+
+    rows_list = list(rows)
+    now = utcnow()
+    run = AceImportRun(
+        organization_id=organization_id,
+        source_message_id=source_message_id,
+        source_filename=_text(source_filename),
+        source_received_at=source_received_at,
+        status="processing",
+        records_read=len(rows_list),
+        started_at=now,
+    )
+    try:
+        db.add(run)
+        db.flush()
+        result = _reconcile_rows_no_commit(db, organization_id, rows_list)
+        run.records_inserted = result["inserted"]
+        run.records_updated = result["updated"]
+        run.exceptions_created = result["exceptions_created"]
+        run.status = "completed"
+        run.completed_at = utcnow()
+        db.commit()
+        db.refresh(run)
+        return _import_run_response(run)
+    except IntegrityError:
+        db.rollback()
+        existing = (
+            db.query(AceImportRun)
+            .filter(AceImportRun.organization_id == organization_id, AceImportRun.source_message_id == source_message_id)
+            .one_or_none()
+        )
+        if existing is not None:
+            return _import_run_response(existing, replay=True)
+        raise
+    except Exception:
+        db.rollback()
+        failed = AceImportRun(
+            organization_id=organization_id,
+            source_message_id=source_message_id,
+            source_filename=_text(source_filename),
+            source_received_at=source_received_at,
+            status="failed",
+            records_read=len(rows_list),
+            error_message=SAFE_IMPORT_ERROR,
+            started_at=now,
+            completed_at=utcnow(),
+        )
+        db.add(failed)
+        db.commit()
+        db.refresh(failed)
+        return _import_run_response(failed)
 
 
 def movement_query(db: Session, organization_id: str, *, search: str | None = None, status: str | None = None,
                    shipper: str | None = None, qp_filer: str | None = None, inbond_carrier: str | None = None,
                    bonded_carrier: str | None = None, manifest_carrier: str | None = None,
-                   start_date: date | None = None, end_date: date | None = None, active_only: bool = False):
+                   start_date: date | None = None, end_date: date | None = None, active_only: bool = False,
+                   inbond_number: str | None = None, bol: str | None = None, consignee: str | None = None,
+                   origin_port: str | None = None, destination_port: str | None = None,
+                   inbond_type: str | None = None, authorization_status: str | None = None,
+                   exception_type: str | None = None, open_closed: str | None = None,
+                   late: bool | None = None, overdue: bool | None = None, penalty: bool | None = None,
+                   transfer_of_liability: bool | None = None):
     query = db.query(AceInBondMovement).filter(AceInBondMovement.organization_id == organization_id)
     if search:
         token = f"%{search.strip()}%"
@@ -213,8 +346,14 @@ def movement_query(db: Session, organization_id: str, *, search: str | None = No
         ))
     if status:
         query = query.filter(AceInBondMovement.record_status == status)
+    if inbond_number:
+        query = query.filter(AceInBondMovement.inbond_number.ilike(f"%{inbond_number}%"))
+    if bol:
+        query = query.filter(AceInBondMovement.bill_of_lading_number.ilike(f"%{bol}%"))
     if shipper:
         query = query.filter(AceInBondMovement.shipper_name.ilike(f"%{shipper}%"))
+    if consignee:
+        query = query.filter(AceInBondMovement.consignee_name.ilike(f"%{consignee}%"))
     if qp_filer:
         query = query.filter(or_(AceInBondMovement.qp_filer_code.ilike(f"%{qp_filer}%"), AceInBondMovement.qp_filer_name.ilike(f"%{qp_filer}%")))
     if inbond_carrier:
@@ -223,6 +362,30 @@ def movement_query(db: Session, organization_id: str, *, search: str | None = No
         query = query.filter(or_(AceInBondMovement.bonded_carrier_code.ilike(f"%{bonded_carrier}%"), AceInBondMovement.bonded_carrier_name.ilike(f"%{bonded_carrier}%")))
     if manifest_carrier:
         query = query.filter(or_(AceInBondMovement.manifest_carrier_code.ilike(f"%{manifest_carrier}%"), AceInBondMovement.manifest_carrier_name.ilike(f"%{manifest_carrier}%")))
+    if origin_port:
+        query = query.filter(AceInBondMovement.origination_port_name.ilike(f"%{origin_port}%"))
+    if destination_port:
+        query = query.filter(AceInBondMovement.destination_port_name.ilike(f"%{destination_port}%"))
+    if inbond_type:
+        query = query.filter(or_(AceInBondMovement.inbond_type_code.ilike(f"%{inbond_type}%"), AceInBondMovement.inbond_type_description.ilike(f"%{inbond_type}%")))
+    if authorization_status:
+        query = query.filter(AceInBondMovement.authorization_status == authorization_status)
+    if exception_type:
+        query = query.filter(AceInBondMovement.review_reason.ilike(f"%{exception_type}%"))
+    if open_closed == "open":
+        query = query.filter(AceInBondMovement.resolved_at.is_(None))
+    if open_closed == "closed":
+        query = query.filter(AceInBondMovement.resolved_at.is_not(None))
+    if late is not None:
+        query = query.filter(AceInBondMovement.late_in_transit.is_(late))
+    if overdue is not None:
+        query = query.filter(AceInBondMovement.overdue_for_export.is_(overdue))
+    if penalty is not None:
+        query = query.filter(AceInBondMovement.penalty_indicator.is_(penalty))
+    if transfer_of_liability is True:
+        query = query.filter(AceInBondMovement.transfer_of_liability_at.is_not(None))
+    if transfer_of_liability is False:
+        query = query.filter(AceInBondMovement.transfer_of_liability_at.is_(None))
     if start_date:
         query = query.filter(AceInBondMovement.create_date >= start_date)
     if end_date:

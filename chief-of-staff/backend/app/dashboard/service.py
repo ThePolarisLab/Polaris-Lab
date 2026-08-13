@@ -87,27 +87,7 @@ def _ace_attention(db, organization_id):
 
 
 def _ace_watch(db, organization_id):
-    if not _ace_table_available(db):
-        return []
-    active = (
-        db.query(AceInBondMovement)
-        .filter(
-            AceInBondMovement.organization_id == organization_id,
-            AceInBondMovement.resolved_at.is_(None),
-            AceInBondMovement.record_status == "Open",
-            ~AceInBondMovement.review_status.in_(["review", "critical"]),
-        )
-        .order_by(AceInBondMovement.last_seen_at.desc())
-        .limit(3)
-        .all()
-    )
-    return [DashboardItem(
-        f"Active In-Bond {movement.inbond_number}",
-        f"{movement.origination_port_name or 'Unknown origin'} → {movement.destination_port_name or 'Unknown destination'}; current status Open.",
-        "LOW",
-        "ACE Bond Control",
-        f"ace.{movement.id}",
-    ) for movement in active]
+    return []
 
 
 def _carry(notes, missions, now):

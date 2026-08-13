@@ -5,11 +5,24 @@ import "./AceControl.css";
 
 const FILTERS = {
   status: "",
+  inbond_number: "",
+  bol: "",
   shipper: "",
+  consignee: "",
   qp_filer: "",
   inbond_carrier: "",
   bonded_carrier: "",
   manifest_carrier: "",
+  origin_port: "",
+  destination_port: "",
+  inbond_type: "",
+  authorization_status: "",
+  exception_type: "",
+  open_closed: "",
+  late: "",
+  overdue: "",
+  penalty: "",
+  transfer_of_liability: "",
   start_date: "",
   end_date: "",
 };
@@ -54,9 +67,16 @@ function DetailDrawer({ movement, onClose }) {
         <div><span>Bonded Carrier</span><strong>{movement.bonded_carrier?.code || "—"} · {movement.bonded_carrier?.name || "—"}</strong></div>
         <div><span>Manifest Carrier</span><strong>{movement.manifest_carrier?.code || "—"} · {movement.manifest_carrier?.name || "—"}</strong></div>
         <div><span>Route</span><strong>{movement.origination_port_name || "—"} → {movement.destination_port_name || "—"}</strong></div>
-        <div><span>Create / Arrival / Export</span><strong>{movement.create_date || "—"} · {movement.arrival_date || "—"} · {movement.export_date || "—"}</strong></div>
+        <div><span>Create / Depart / Arrival / Export</span><strong>{movement.create_date || "—"} · {movement.departure_date || "—"} · {movement.arrival_date || "—"} · {movement.export_date || "—"}</strong></div>
         <div><span>Late / Overdue</span><strong>{movement.days_late || 0} / {movement.days_overdue_for_export || 0} days</strong></div>
+        <div><span>Transfer of liability</span><strong>{movement.transfer_of_liability_at || "—"}</strong></div>
+        <div><span>Penalty</span><strong>{movement.penalty_indicator ? "Yes" : "No"}</strong></div>
+        <div><span>Authorization</span><strong>{movement.authorization_status || "—"}</strong></div>
+        <div><span>Authorization notes</span><strong>{movement.authorization_notes || "—"}</strong></div>
         <div><span>Review reason</span><strong>{movement.review_reason || "None"}</strong></div>
+        <div><span>Resolution</span><strong>{movement.resolved_at ? `${movement.resolved_at} · ${movement.resolution_notes || "Resolved"}` : "Open"}</strong></div>
+        <div><span>Evidence</span><strong>{movement.evidence_reference || "—"}</strong></div>
+        <div><span>First / Last seen</span><strong>{movement.first_seen_at || "—"} · {movement.last_seen_at || "—"}</strong></div>
       </div>
       <section className="ace-timeline">
         <h3>Movement history</h3>
@@ -133,7 +153,7 @@ export default function AceControl() {
   return (
     <section className="ace-control-page">
       <div className="ace-page-heading">
-        <div><span className="ace-eyebrow"><ShieldCheck size={16} /> ACE CONTROL</span><h1>Manifest & Bond Shipments</h1><p>Search, monitor, resolve, and report on ACE movement activity.</p></div>
+        <div><span className="ace-eyebrow"><ShieldCheck size={16} /> ACE CONTROL</span><h1>In-Bond / Bond Control</h1><p>Search, monitor, resolve, and report on scheduled ACE In-Bond Bills of Lading activity. Manifest is a separate source not connected yet.</p></div>
         <button type="button" className="ace-export-button" onClick={exportCsv}><FileDown size={17} /> Export filtered report</button>
       </div>
 
@@ -152,11 +172,24 @@ export default function AceControl() {
 
       <div className="ace-filter-grid">
         <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">All statuses</option><option>Open</option><option>Fully Closed</option></select>
+        <input placeholder="In-Bond Number" value={filters.inbond_number} onChange={(event) => setFilters({ ...filters, inbond_number: event.target.value })} />
+        <input placeholder="BOL / PAPS" value={filters.bol} onChange={(event) => setFilters({ ...filters, bol: event.target.value })} />
         <input placeholder="Shipper" value={filters.shipper} onChange={(event) => setFilters({ ...filters, shipper: event.target.value })} />
+        <input placeholder="Consignee" value={filters.consignee} onChange={(event) => setFilters({ ...filters, consignee: event.target.value })} />
         <input placeholder="QP Filer" value={filters.qp_filer} onChange={(event) => setFilters({ ...filters, qp_filer: event.target.value })} />
         <input placeholder="In-Bond Carrier" value={filters.inbond_carrier} onChange={(event) => setFilters({ ...filters, inbond_carrier: event.target.value })} />
         <input placeholder="Bonded Carrier" value={filters.bonded_carrier} onChange={(event) => setFilters({ ...filters, bonded_carrier: event.target.value })} />
         <input placeholder="Manifest Carrier" value={filters.manifest_carrier} onChange={(event) => setFilters({ ...filters, manifest_carrier: event.target.value })} />
+        <input placeholder="Origin Port" value={filters.origin_port} onChange={(event) => setFilters({ ...filters, origin_port: event.target.value })} />
+        <input placeholder="Destination Port" value={filters.destination_port} onChange={(event) => setFilters({ ...filters, destination_port: event.target.value })} />
+        <input placeholder="In-Bond Type" value={filters.inbond_type} onChange={(event) => setFilters({ ...filters, inbond_type: event.target.value })} />
+        <input placeholder="Authorization Status" value={filters.authorization_status} onChange={(event) => setFilters({ ...filters, authorization_status: event.target.value })} />
+        <input placeholder="Exception Type" value={filters.exception_type} onChange={(event) => setFilters({ ...filters, exception_type: event.target.value })} />
+        <select value={filters.open_closed} onChange={(event) => setFilters({ ...filters, open_closed: event.target.value })}><option value="">Open + closed</option><option value="open">Open management view</option><option value="closed">Resolved historical</option></select>
+        <select value={filters.late} onChange={(event) => setFilters({ ...filters, late: event.target.value })}><option value="">Late: Any</option><option value="true">Late only</option><option value="false">Not late</option></select>
+        <select value={filters.overdue} onChange={(event) => setFilters({ ...filters, overdue: event.target.value })}><option value="">Overdue: Any</option><option value="true">Overdue only</option><option value="false">Not overdue</option></select>
+        <select value={filters.penalty} onChange={(event) => setFilters({ ...filters, penalty: event.target.value })}><option value="">Penalty: Any</option><option value="true">Penalty only</option><option value="false">No penalty</option></select>
+        <select value={filters.transfer_of_liability} onChange={(event) => setFilters({ ...filters, transfer_of_liability: event.target.value })}><option value="">Liability: Any</option><option value="true">Transfer present</option><option value="false">No transfer</option></select>
         <label>From<input type="date" value={filters.start_date} onChange={(event) => setFilters({ ...filters, start_date: event.target.value })} /></label>
         <label>To<input type="date" value={filters.end_date} onChange={(event) => setFilters({ ...filters, end_date: event.target.value })} /></label>
         <button type="button" onClick={() => { setFilters(FILTERS); setSearch(""); setActiveOnly(false); }}>Clear filters</button>

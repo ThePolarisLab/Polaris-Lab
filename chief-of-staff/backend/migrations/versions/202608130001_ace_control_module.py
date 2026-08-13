@@ -105,4 +105,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise RuntimeError("Unsafe destructive downgrade is intentionally disabled for ACE compliance/audit data")
+    raise RuntimeError("unsafe destructive downgrade is intentionally disabled for ACE compliance/audit data")

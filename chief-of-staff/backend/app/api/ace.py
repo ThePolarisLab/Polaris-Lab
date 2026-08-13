@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.ace.service import movement_query, reconcile_rows, refresh_review_state, summary
+from app.ace.service import AceImportValidationError, SAFE_IMPORT_ERROR, import_rows, movement_query, refresh_review_state, summary
 from app.database.database import SessionLocal
 from app.models.ace import AceInBondEvent, AceInBondMovement
 from app.security.dependencies import require_permission
@@ -56,6 +56,9 @@ class AceRow(BaseModel):
 
 
 class AceImportRequest(BaseModel):
+    source_message_id: str
+    source_filename: str | None = None
+    source_received_at: datetime | None = None
     rows: list[AceRow]
 
 
@@ -87,6 +90,7 @@ def serialize_movement(m: AceInBondMovement, *, include_events: bool = False) ->
         "origination_port_name": m.origination_port_name,
         "destination_port_name": m.destination_port_name,
         "create_date": m.create_date,
+        "departure_date": None,
         "arrival_date": m.arrival_date,
         "export_date": m.export_date,
         "days_late": m.days_late,
@@ -134,10 +138,23 @@ def list_movements(
     search: str | None = Query(default=None),
     status: str | None = Query(default=None),
     shipper: str | None = Query(default=None),
+    inbond_number: str | None = Query(default=None),
+    bol: str | None = Query(default=None),
+    consignee: str | None = Query(default=None),
     qp_filer: str | None = Query(default=None),
     inbond_carrier: str | None = Query(default=None),
     bonded_carrier: str | None = Query(default=None),
     manifest_carrier: str | None = Query(default=None),
+    origin_port: str | None = Query(default=None),
+    destination_port: str | None = Query(default=None),
+    inbond_type: str | None = Query(default=None),
+    authorization_status: str | None = Query(default=None),
+    exception_type: str | None = Query(default=None),
+    open_closed: str | None = Query(default=None),
+    late: bool | None = Query(default=None),
+    overdue: bool | None = Query(default=None),
+    penalty: bool | None = Query(default=None),
+    transfer_of_liability: bool | None = Query(default=None),
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
     active_only: bool = Query(default=False),
@@ -150,7 +167,10 @@ def list_movements(
         db, principal.organization_id, search=search, status=status, shipper=shipper,
         qp_filer=qp_filer, inbond_carrier=inbond_carrier, bonded_carrier=bonded_carrier,
         manifest_carrier=manifest_carrier, start_date=start_date, end_date=end_date,
-        active_only=active_only,
+        active_only=active_only, inbond_number=inbond_number, bol=bol, consignee=consignee,
+        origin_port=origin_port, destination_port=destination_port, inbond_type=inbond_type,
+        authorization_status=authorization_status, exception_type=exception_type, open_closed=open_closed,
+        late=late, overdue=overdue, penalty=penalty, transfer_of_liability=transfer_of_liability,
     )
     total = query.count()
     rows = query.order_by(AceInBondMovement.create_date.desc(), AceInBondMovement.id.desc()).offset(offset).limit(limit).all()
@@ -196,7 +216,17 @@ def import_movements(
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.ORGANIZATION_WRITE)),
     db: Session = Depends(get_db),
 ):
-    return reconcile_rows(db, principal.organization_id, [row.model_dump() for row in payload.rows])
+    try:
+        return import_rows(
+            db,
+            principal.organization_id,
+            source_message_id=payload.source_message_id,
+            source_filename=payload.source_filename,
+            source_received_at=payload.source_received_at,
+            rows=[row.model_dump() for row in payload.rows],
+        )
+    except AceImportValidationError as exc:
+        raise HTTPException(status_code=400, detail=SAFE_IMPORT_ERROR) from exc
 
 
 @router.patch("/movements/{movement_id}/authorization")

@@ -34,7 +34,7 @@ import "./App.css";
 const EXECUTIVE_ROUTES = Object.freeze([
   { key: "dashboard", label: "Dashboard", description: "Current priorities and operating position", icon: LayoutDashboard },
   { key: "daily-brief", label: "Daily Brief", description: "The most important changes and next actions", icon: BookOpenText },
-  { key: "ace", label: "ACE", description: "Manifest, in-bond, exceptions, search, and reports", icon: ShieldCheck },
+  { key: "ace", label: "ACE", description: "In-bond, bond, exceptions, search, and reports", icon: ShieldCheck },
   { key: "evidence", label: "Evidence", description: "Trace facts, sources, and supporting records", icon: FileSearch },
   { key: "decisions", label: "Decision Center", description: "Review decisions, recommendations, and approvals", icon: Compass },
   { key: "connectors", label: "Connectors", description: "Monitor enterprise data connections", icon: Cable },
