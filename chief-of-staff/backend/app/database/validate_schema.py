@@ -29,6 +29,12 @@ MOTIVE_EXPECTED_COLUMNS: dict[str, set[str]] = {
     "motive_ifta_summaries": {"id", "organization_id", "organization_slug", "provider", "provider_vehicle_id", "jurisdiction", "source_endpoint", "reporting_period_start", "reporting_period_end", "distance", "fuel_volume", "observed_at", "provider_payload_metadata", "created_at", "updated_at"},
 }
 
+ACE_EXPECTED_COLUMNS: dict[str, set[str]] = {
+    "ace_inbond_movements": {"id", "organization_id", "inbond_number", "bill_of_lading_number", "inbond_type_code", "inbond_type_description", "source_type_description", "record_status", "inbond_carrier_code", "inbond_carrier_name", "bonded_carrier_code", "bonded_carrier_name", "manifest_carrier_code", "manifest_carrier_name", "qp_filer_code", "qp_filer_name", "shipper_name", "consignee_name", "origination_port_name", "destination_port_name", "create_date", "arrival_date", "export_date", "transfer_of_liability_at", "days_late", "days_overdue_for_export", "late_in_transit", "overdue_for_export", "penalty_indicator", "authorization_status", "authorization_notes", "evidence_reference", "review_status", "review_reason", "resolved_at", "resolution_notes", "first_seen_at", "last_seen_at", "created_at", "updated_at"},
+    "ace_inbond_events": {"id", "organization_id", "movement_id", "event_type", "field_name", "old_value", "new_value", "detail", "occurred_at"},
+    "ace_import_runs": {"id", "organization_id", "source_message_id", "source_filename", "source_received_at", "status", "records_read", "records_inserted", "records_updated", "exceptions_created", "error_message", "started_at", "completed_at"},
+}
+
 EXPECTED_COLUMNS: dict[str, set[str]] = {
     "organizations": {"id", "slug", "display_name", "legal_name", "status", "created_at", "updated_at"},
     "identities": {"id", "email", "display_name", "status", "created_at", "updated_at"},
@@ -59,9 +65,11 @@ EXPECTED_COLUMNS: dict[str, set[str]] = {
     "outlook_message_classifications": {"id", "organization_id", "organization_slug", "message_id", "category", "confidence", "reason", "rule", "created_at"},
     "outlook_sync_history": {"id", "organization_id", "organization_slug", "connector", "sync_mode", "status", "run_id", "folders_scanned", "messages_discovered", "messages_inserted", "messages_updated", "messages_unchanged", "messages_removed", "attachments_indexed", "checkpoint_before", "checkpoint_after", "started_at", "completed_at", "duration_ms", "error_category", "error_message"},
     **MOTIVE_EXPECTED_COLUMNS,
+    **ACE_EXPECTED_COLUMNS,
 }
 
 MOTIVE_TENANT_TABLES = set(MOTIVE_EXPECTED_COLUMNS)
+ACE_TENANT_TABLES = set(ACE_EXPECTED_COLUMNS)
 
 TENANT_TABLES = {
     "production_auth_sessions",
@@ -87,7 +95,7 @@ TENANT_TABLES = {
     "outlook_attachments",
     "outlook_message_classifications",
     "outlook_sync_history",
-} | MOTIVE_TENANT_TABLES
+} | MOTIVE_TENANT_TABLES | ACE_TENANT_TABLES
 
 LEGACY_OPTIONAL_TABLES = {
     "production_password_credentials",
@@ -102,7 +110,7 @@ LEGACY_OPTIONAL_TABLES = {
     "outlook_attachments",
     "outlook_message_classifications",
     "outlook_sync_history",
-} | MOTIVE_TENANT_TABLES
+} | MOTIVE_TENANT_TABLES | ACE_TENANT_TABLES
 LEGACY_TENANT_OPTIONAL = {"organization_id"}
 LEGACY_TABLE_OPTIONAL_COLUMNS: dict[str, set[str]] = {
     "financial_accounts": {"organization_slug"},

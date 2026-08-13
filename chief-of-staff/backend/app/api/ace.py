@@ -8,7 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.ace.outlook_import import import_latest_ace_outlook_report
 from app.ace.service import AceImportValidationError, SAFE_IMPORT_ERROR, import_rows, movement_query, refresh_review_state, summary
+from app.connectors.outlook import OutlookConnector
+from app.connectors.outlook_credentials import OutlookCredentialStore
 from app.database.database import SessionLocal
 from app.models.ace import AceInBondEvent, AceInBondMovement
 from app.security.dependencies import require_permission
@@ -52,7 +55,7 @@ class AceRow(BaseModel):
     days_overdue_for_export: int = 0
     late_in_transit: bool = False
     overdue_for_export: bool = False
-    penalty_indicator: bool = False
+    penalty_indicator: bool | None = None
 
 
 class AceImportRequest(BaseModel):
@@ -227,6 +230,15 @@ def import_movements(
         )
     except AceImportValidationError as exc:
         raise HTTPException(status_code=400, detail=SAFE_IMPORT_ERROR) from exc
+
+
+@router.post("/import/outlook-latest")
+def import_latest_outlook_report(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.ORGANIZATION_WRITE)),
+    db: Session = Depends(get_db),
+):
+    connector = OutlookConnector(credential_store=OutlookCredentialStore(principal.organization_id))
+    return import_latest_ace_outlook_report(db, principal.organization_id, connector=connector)
 
 
 @router.patch("/movements/{movement_id}/authorization")

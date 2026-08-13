@@ -36,9 +36,9 @@ def _text(value) -> str | None:
     return value or None
 
 
-def _bool(value, field_name: str) -> bool:
+def _bool(value, field_name: str, *, missing_default: bool | None = False) -> bool | None:
     if value in (None, ""):
-        return False
+        return missing_default
     if isinstance(value, bool):
         return value
     if isinstance(value, int) and value in {0, 1}:
@@ -119,7 +119,7 @@ def normalized_payload(row: dict) -> dict:
         "days_overdue_for_export": _int(row.get("days_overdue_for_export"), "days_overdue_for_export"),
         "late_in_transit": _bool(row.get("late_in_transit"), "late_in_transit"),
         "overdue_for_export": _bool(row.get("overdue_for_export"), "overdue_for_export"),
-        "penalty_indicator": _bool(row.get("penalty_indicator"), "penalty_indicator"),
+        "penalty_indicator": _bool(row.get("penalty_indicator"), "penalty_indicator", missing_default=None),
     }
 
 
