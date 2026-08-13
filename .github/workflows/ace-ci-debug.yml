@@ -1,0 +1,38 @@
+name: ACE CI Debug
+
+on:
+  push:
+    branches:
+      - feature/ace-control-module
+  workflow_dispatch:
+
+jobs:
+  pytest-debug:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chief-of-staff/backend
+    env:
+      POLARIS_ENV: test
+      POLARIS_AUTH_SECRET: database-gate-ci-secret-value
+      POLARIS_QBO_TOKEN_ENCRYPTION_KEY: uPlZqC60CQaQGFL-kQo-xUOyEE5uNUAyxKmwbzfdiVo=
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements.txt
+      - name: Capture pytest diagnostics
+        run: |
+          set +e
+          python -m pytest -q --tb=short > ace-pytest-output.txt 2>&1
+          code=$?
+          cat ace-pytest-output.txt
+          echo "$code" > ace-pytest-exit-code.txt
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ace-pytest-diagnostics
+          path: |
+            chief-of-staff/backend/ace-pytest-output.txt
+            chief-of-staff/backend/ace-pytest-exit-code.txt
