@@ -1,0 +1,84 @@
+name: ACE Daily Feed
+
+on:
+  schedule:
+    - cron: "17 13 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ace-daily-feed-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    name: Trigger ACE daily feed
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      POLARIS_PRODUCTION_API_URL: ${{ vars.POLARIS_PRODUCTION_API_URL }}
+      POLARIS_ACE_CRON_TRIGGER_SECRET: ${{ secrets.POLARIS_ACE_CRON_TRIGGER_SECRET }}
+    steps:
+      - name: Trigger Polaris ACE scheduled import
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${POLARIS_PRODUCTION_API_URL}" ]; then
+            echo "POLARIS_PRODUCTION_API_URL is not configured."
+            exit 1
+          fi
+          if [ -z "${POLARIS_ACE_CRON_TRIGGER_SECRET}" ]; then
+            echo "POLARIS_ACE_CRON_TRIGGER_SECRET is not configured."
+            exit 1
+          fi
+
+          timestamp="$(date +%s)"
+          path="/api/v1/internal/ace/daily-feed/run"
+          base_url="${POLARIS_PRODUCTION_API_URL%/}"
+          trigger_url="${base_url}${path}"
+          signature="$(
+            CANONICAL_METHOD="POST" \
+            CANONICAL_PATH="${path}" \
+            CANONICAL_TIMESTAMP="${timestamp}" \
+            POLARIS_ACE_CRON_TRIGGER_SECRET="${POLARIS_ACE_CRON_TRIGGER_SECRET}" \
+            python -c 'import hashlib,hmac,os; body=hashlib.sha256(b"").hexdigest(); canonical="\n".join([os.environ["CANONICAL_METHOD"], os.environ["CANONICAL_PATH"], os.environ["CANONICAL_TIMESTAMP"], body]); print(hmac.new(os.environ["POLARIS_ACE_CRON_TRIGGER_SECRET"].encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest())'
+          )"
+
+          trigger_once() {
+            local output_file="$1"
+            local status_file="$2"
+            curl --silent --show-error \
+              --output "${output_file}" \
+              --write-out "%{http_code}" \
+              --max-time 240 \
+              --request POST \
+              --header "X-Polaris-Job-Timestamp: ${timestamp}" \
+              --header "X-Polaris-Job-Signature: ${signature}" \
+              "${trigger_url}" > "${status_file}" || echo "000" > "${status_file}"
+          }
+
+          trigger_once response.json status.txt
+          status="$(cat status.txt)"
+          if [ "${status}" = "000" ] || { [ "${status}" -ge 500 ] && [ "${status}" -le 599 ]; }; then
+            sleep 60
+            timestamp="$(date +%s)"
+            signature="$(
+              CANONICAL_METHOD="POST" \
+              CANONICAL_PATH="${path}" \
+              CANONICAL_TIMESTAMP="${timestamp}" \
+              POLARIS_ACE_CRON_TRIGGER_SECRET="${POLARIS_ACE_CRON_TRIGGER_SECRET}" \
+              python -c 'import hashlib,hmac,os; body=hashlib.sha256(b"").hexdigest(); canonical="\n".join([os.environ["CANONICAL_METHOD"], os.environ["CANONICAL_PATH"], os.environ["CANONICAL_TIMESTAMP"], body]); print(hmac.new(os.environ["POLARIS_ACE_CRON_TRIGGER_SECRET"].encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest())'
+          )"
+            trigger_once response.json status.txt
+            status="$(cat status.txt)"
+          fi
+
+          if [ "${status}" -lt 200 ] || [ "${status}" -ge 300 ]; then
+            echo "ACE daily feed trigger failed with HTTP ${status}."
+            exit 1
+          fi
+
+          echo "ACE daily feed trigger completed with HTTP ${status}."

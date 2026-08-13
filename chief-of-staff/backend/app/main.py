@@ -18,6 +18,7 @@ from app.api.dashboard import router as dashboard_router
 from app.api.events import router as events_router
 from app.api.github_engine import router as github_engine_router
 from app.api.identity import router as identity_router
+from app.api.internal_ace import router as internal_ace_router
 from app.api.memory import router as memory_router
 from app.api.memory_search import router as memory_search_router
 from app.api.missions import router as missions_router
@@ -83,6 +84,7 @@ app.include_router(events_router, dependencies=organization_read)
 app.include_router(organizations_router)
 app.include_router(identity_router)
 app.include_router(auth_router)
+app.include_router(internal_ace_router)
 
 
 @app.get("/")

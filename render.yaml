@@ -29,24 +29,9 @@ services:
         generateValue: true
       - key: POLARIS_QBO_TOKEN_ENCRYPTION_KEY
         sync: false
-  - type: cron
-    name: polaris-ace-daily-import
-    runtime: python
-    plan: starter
-    rootDir: chief-of-staff/backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m app.jobs.ace_daily_import
-    schedule: "0 13 * * *"
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.12.8
-      - key: POLARIS_ENV
-        value: staging
-      - key: DATABASE_URL
-        fromDatabase:
-          name: polaris-staging-db
-          property: connectionString
       - key: POLARIS_ACE_DAILY_IMPORT_ORGANIZATION_SLUG
+        sync: false
+      - key: POLARIS_ACE_CRON_TRIGGER_SECRET
         sync: false
       - key: POLARIS_ACE_FEED_FRESHNESS_HOURS
         value: "36"
