@@ -9,6 +9,8 @@ test("ACE workspace exposes manual daily report import without manifest automati
   assert.match(ace, /\/ace\/import\/outlook-latest/);
   assert.match(ace, /No report found/);
   assert.match(ace, /Source contract error/);
+  assert.match(ace, /ACE DAILY FEED/);
+  assert.match(ace, /\/ace\/feed-health/);
   assert.match(ace, /Manifest is a separate source not connected yet/);
   assert.doesNotMatch(ace, /automatic import/i);
 });

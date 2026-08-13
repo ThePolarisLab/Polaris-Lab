@@ -108,3 +108,21 @@ class AceImportRun(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AceFeedRun(Base):
+    __tablename__ = "ace_feed_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String, ForeignKey("organizations.id"), nullable=False, index=True)
+    mode: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    source_found: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    replayed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    records_read: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    records_inserted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    records_updated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    exceptions_created: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_category: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
