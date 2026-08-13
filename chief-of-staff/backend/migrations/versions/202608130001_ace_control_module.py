@@ -105,6 +105,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("ace_import_runs")
-    op.drop_table("ace_inbond_events")
-    op.drop_table("ace_inbond_movements")
+    raise RuntimeError("Destructive downgrade is intentionally disabled for ACE compliance/audit data")
