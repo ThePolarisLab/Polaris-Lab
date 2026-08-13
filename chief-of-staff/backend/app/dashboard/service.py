@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 from app.dashboard.models import DashboardItem, DashboardPriority, ExecutiveDashboard
 from app.models.ace import AceInBondMovement
@@ -47,7 +48,17 @@ def _attention(notes, q2):
     return items[:8]
 
 
+def _ace_table_available(db: Session) -> bool:
+    """Allow mixed-schema test/rollout environments to render the dashboard safely."""
+    try:
+        return "ace_inbond_movements" in inspect(db.get_bind()).get_table_names()
+    except Exception:
+        return False
+
+
 def _ace_attention(db, organization_id):
+    if not _ace_table_available(db):
+        return []
     rows = (
         db.query(AceInBondMovement)
         .filter(
@@ -76,6 +87,8 @@ def _ace_attention(db, organization_id):
 
 
 def _ace_watch(db, organization_id):
+    if not _ace_table_available(db):
+        return []
     active = (
         db.query(AceInBondMovement)
         .filter(
