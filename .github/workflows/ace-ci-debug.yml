@@ -22,10 +22,10 @@ jobs:
         with:
           python-version: "3.13"
       - run: pip install -r requirements.txt
-      - name: Capture pytest diagnostics
+      - name: Capture database gate pytest diagnostics
         run: |
           set +e
-          python -m pytest -q --tb=short > ace-pytest-output.txt 2>&1
+          timeout 180 python -m pytest tests/test_database_gate.py -vv --tb=short > ace-pytest-output.txt 2>&1
           code=$?
           cat ace-pytest-output.txt
           echo "$code" > ace-pytest-exit-code.txt
