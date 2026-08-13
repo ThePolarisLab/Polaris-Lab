@@ -1,4 +1,5 @@
 import os
+import time
 
 import pytest
 
@@ -18,7 +19,8 @@ from app.database.database import Base, SessionLocal, engine
 from app.identity.models import Identity, OrganizationMembership
 from app.main import app
 from app.models.ace import AceFeedRun, AceImportRun, AceInBondEvent, AceInBondMovement
-from app.organizations.models import Organization
+from app.organizations.models import Organization, OrganizationStatus
+from app.security.job_auth import JobAuthenticationError, sign_job_request, verify_job_signature
 from app.security.providers import LocalTokenProvider
 from test_ace_outlook_import import ACE_REPORT_SUBJECT, FakeAceOutlookConnector, _attachment, _message, _raw_row, _xlsx
 
@@ -198,3 +200,216 @@ def test_no_mutating_outlook_scope_or_daily_brief_success_noise():
         feed_run = session.query(AceFeedRun).one()
         assert feed_run.status == "import_success"
         assert session.query(AceInBondMovement).count() == 1
+
+
+def _scheduled_headers(secret="scheduled-secret", *, timestamp=None, path="/api/v1/internal/ace/daily-feed/run", body=b""):
+    timestamp = str(int(time.time())) if timestamp is None else str(timestamp)
+    return {
+        "X-Polaris-Job-Timestamp": timestamp,
+        "X-Polaris-Job-Signature": sign_job_request(method="POST", path=path, body=body, timestamp=timestamp, secret=secret),
+    }
+
+
+def test_job_hmac_authentication_rejects_missing_config_and_bad_headers(monkeypatch):
+    monkeypatch.delenv("POLARIS_ACE_CRON_TRIGGER_SECRET", raising=False)
+    with pytest.raises(JobAuthenticationError, match="machine authentication unavailable"):
+        verify_job_signature(method="POST", path="/api/v1/internal/ace/daily-feed/run", body=b"", timestamp="1", signature="0" * 64, now=1)
+
+    monkeypatch.setenv("POLARIS_ACE_CRON_TRIGGER_SECRET", "scheduled-secret")
+    with pytest.raises(JobAuthenticationError):
+        verify_job_signature(method="POST", path="/api/v1/internal/ace/daily-feed/run", body=b"", timestamp=None, signature="0" * 64, now=1)
+    with pytest.raises(JobAuthenticationError):
+        verify_job_signature(method="POST", path="/api/v1/internal/ace/daily-feed/run", body=b"", timestamp="not-a-time", signature="0" * 64, now=1)
+    with pytest.raises(JobAuthenticationError):
+        verify_job_signature(method="POST", path="/api/v1/internal/ace/daily-feed/run", body=b"", timestamp="1", signature=None, now=1)
+    with pytest.raises(JobAuthenticationError):
+        verify_job_signature(method="POST", path="/api/v1/internal/ace/daily-feed/run", body=b"", timestamp="1", signature="not-hex", now=1)
+    with pytest.raises(JobAuthenticationError):
+        verify_job_signature(method="POST", path="/api/v1/internal/ace/daily-feed/run", body=b"", timestamp="1", signature="0" * 64, now=1)
+
+
+def test_job_hmac_authentication_rejects_stale_and_future_timestamps(monkeypatch):
+    monkeypatch.setenv("POLARIS_ACE_CRON_TRIGGER_SECRET", "scheduled-secret")
+    old_headers = _scheduled_headers(timestamp=100)
+    with pytest.raises(JobAuthenticationError):
+        verify_job_signature(
+            method="POST",
+            path="/api/v1/internal/ace/daily-feed/run",
+            body=b"",
+            timestamp=old_headers["X-Polaris-Job-Timestamp"],
+            signature=old_headers["X-Polaris-Job-Signature"],
+            now=401,
+        )
+
+    future_headers = _scheduled_headers(timestamp=701)
+    with pytest.raises(JobAuthenticationError):
+        verify_job_signature(
+            method="POST",
+            path="/api/v1/internal/ace/daily-feed/run",
+            body=b"",
+            timestamp=future_headers["X-Polaris-Job-Timestamp"],
+            signature=future_headers["X-Polaris-Job-Signature"],
+            now=400,
+        )
+
+
+def test_scheduled_trigger_resolves_configured_org_and_records_scheduled_mode(client, monkeypatch):
+    monkeypatch.setenv("POLARIS_ACE_CRON_TRIGGER_SECRET", "scheduled-secret")
+    monkeypatch.setenv("POLARIS_ACE_DAILY_IMPORT_ORGANIZATION_SLUG", "mor")
+
+    import app.api.internal_ace as internal_ace_api
+
+    internal_ace_api.OutlookConnector = None
+    original = internal_ace_api.run_ace_daily_import
+    internal_ace_api.run_ace_daily_import = lambda db, organization_id, mode="automatic": run_ace_daily_import(
+        db, organization_id, connector=_connector(), mode=mode
+    )
+    try:
+        response = client.post("/api/v1/internal/ace/daily-feed/run", headers=_scheduled_headers())
+    finally:
+        internal_ace_api.run_ace_daily_import = original
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload == {
+        "status": "import_success",
+        "source_found": True,
+        "replayed": False,
+        "records_read": 1,
+        "records_inserted": 1,
+        "records_updated": 0,
+        "exceptions_created": 1,
+        "secrets_exposed": False,
+    }
+    serialized = response.text.lower()
+    assert "message-1" not in serialized
+    assert "inbond" not in serialized
+    assert "bol" not in serialized
+    assert "scheduled-secret" not in serialized
+    with SessionLocal() as session:
+        feed = session.query(AceFeedRun).one()
+        assert feed.mode == "scheduled"
+        assert feed.organization_id == "org-1"
+
+
+def test_scheduled_trigger_accepts_no_tenant_selector_and_ignores_request_body(client, monkeypatch):
+    monkeypatch.setenv("POLARIS_ACE_CRON_TRIGGER_SECRET", "scheduled-secret")
+    monkeypatch.setenv("POLARIS_ACE_DAILY_IMPORT_ORGANIZATION_SLUG", "mor")
+    body = b'{"organization_id":"org-2","organization_slug":"other"}'
+
+    import app.api.internal_ace as internal_ace_api
+
+    observed = {}
+    original = internal_ace_api.run_ace_daily_import
+
+    def fake_runner(db, organization_id, mode="automatic"):
+        observed["organization_id"] = organization_id
+        return run_ace_daily_import(db, organization_id, connector=_connector(), mode=mode)
+
+    internal_ace_api.run_ace_daily_import = fake_runner
+    try:
+        response = client.post(
+            "/api/v1/internal/ace/daily-feed/run",
+            headers=_scheduled_headers(body=body),
+            content=body,
+        )
+    finally:
+        internal_ace_api.run_ace_daily_import = original
+
+    assert response.status_code == 200
+    assert observed["organization_id"] == "org-1"
+    with SessionLocal() as session:
+        assert session.query(AceInBondMovement).filter_by(organization_id="org-2").count() == 0
+
+
+def test_scheduled_trigger_fails_closed_for_missing_unknown_and_inactive_org(client, monkeypatch):
+    monkeypatch.setenv("POLARIS_ACE_CRON_TRIGGER_SECRET", "scheduled-secret")
+    monkeypatch.delenv("POLARIS_ACE_DAILY_IMPORT_ORGANIZATION_SLUG", raising=False)
+    assert client.post("/api/v1/internal/ace/daily-feed/run", headers=_scheduled_headers()).status_code == 503
+
+    monkeypatch.setenv("POLARIS_ACE_DAILY_IMPORT_ORGANIZATION_SLUG", "missing")
+    assert client.post("/api/v1/internal/ace/daily-feed/run", headers=_scheduled_headers()).status_code == 503
+
+    with SessionLocal.begin() as session:
+        session.query(Organization).filter_by(id="org-1").one().status = OrganizationStatus.SUSPENDED.value
+    monkeypatch.setenv("POLARIS_ACE_DAILY_IMPORT_ORGANIZATION_SLUG", "mor")
+    assert client.post("/api/v1/internal/ace/daily-feed/run", headers=_scheduled_headers()).status_code == 503
+
+
+def test_scheduled_trigger_rejects_bad_authentication(client, monkeypatch):
+    monkeypatch.setenv("POLARIS_ACE_CRON_TRIGGER_SECRET", "scheduled-secret")
+    monkeypatch.setenv("POLARIS_ACE_DAILY_IMPORT_ORGANIZATION_SLUG", "mor")
+
+    assert client.post("/api/v1/internal/ace/daily-feed/run").status_code == 401
+    assert client.post(
+        "/api/v1/internal/ace/daily-feed/run",
+        headers={"X-Polaris-Job-Timestamp": str(int(time.time())), "X-Polaris-Job-Signature": "0" * 64},
+    ).status_code == 401
+
+
+def test_scheduled_trigger_no_report_replay_and_source_failure_are_safe(client, monkeypatch):
+    monkeypatch.setenv("POLARIS_ACE_CRON_TRIGGER_SECRET", "scheduled-secret")
+    monkeypatch.setenv("POLARIS_ACE_DAILY_IMPORT_ORGANIZATION_SLUG", "mor")
+
+    import app.api.internal_ace as internal_ace_api
+
+    original = internal_ace_api.run_ace_daily_import
+    internal_ace_api.run_ace_daily_import = lambda db, organization_id, mode="automatic": run_ace_daily_import(
+        db, organization_id, connector=FakeAceOutlookConnector(messages=[], attachments={}, content={}), mode=mode
+    )
+    try:
+        no_report = client.post("/api/v1/internal/ace/daily-feed/run", headers=_scheduled_headers())
+    finally:
+        internal_ace_api.run_ace_daily_import = original
+    assert no_report.status_code == 200
+    assert no_report.json()["status"] == "no_source_found"
+
+    internal_ace_api.run_ace_daily_import = lambda db, organization_id, mode="automatic": run_ace_daily_import(
+        db,
+        organization_id,
+        connector=FakeAceOutlookConnector(messages=[_message("bad", subject=ACE_REPORT_SUBJECT, has_attachments=False)], attachments={}, content={}),
+        mode=mode,
+    )
+    try:
+        failed = client.post("/api/v1/internal/ace/daily-feed/run", headers=_scheduled_headers())
+    finally:
+        internal_ace_api.run_ace_daily_import = original
+    assert failed.status_code == 502
+    assert failed.json()["status"] == "source_contract_error"
+    assert "bad" not in failed.text
+
+
+def test_duplicate_scheduled_and_manual_replay_do_not_duplicate_movements_or_events(client, monkeypatch):
+    monkeypatch.setenv("POLARIS_ACE_CRON_TRIGGER_SECRET", "scheduled-secret")
+    monkeypatch.setenv("POLARIS_ACE_DAILY_IMPORT_ORGANIZATION_SLUG", "mor")
+
+    import app.api.ace as ace_api
+    import app.api.internal_ace as internal_ace_api
+
+    original_scheduled = internal_ace_api.run_ace_daily_import
+    internal_ace_api.run_ace_daily_import = lambda db, organization_id, mode="automatic": run_ace_daily_import(
+        db, organization_id, connector=_connector(), mode=mode
+    )
+    try:
+        first = client.post("/api/v1/internal/ace/daily-feed/run", headers=_scheduled_headers())
+        second = client.post("/api/v1/internal/ace/daily-feed/run", headers=_scheduled_headers())
+    finally:
+        internal_ace_api.run_ace_daily_import = original_scheduled
+    assert first.json()["status"] == "import_success"
+    assert second.json()["status"] == "already_processed"
+
+    headers = _headers()
+    original_manual = ace_api.OutlookConnector
+    ace_api.OutlookConnector = lambda credential_store=None: _connector()
+    try:
+        manual = client.post("/ace/import/outlook-latest", headers=headers)
+    finally:
+        ace_api.OutlookConnector = original_manual
+
+    assert manual.status_code == 200
+    assert manual.json()["status"] == "already_processed"
+    with SessionLocal() as session:
+        assert session.query(AceImportRun).count() == 1
+        assert session.query(AceInBondMovement).count() == 1
+        assert session.query(AceInBondEvent).filter_by(event_type="first_seen").count() == 1
+        assert session.query(AceInBondEvent).filter_by(event_type="exception_opened").count() == 1
