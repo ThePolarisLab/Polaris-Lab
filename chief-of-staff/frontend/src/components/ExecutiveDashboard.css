@@ -246,6 +246,19 @@ button:disabled {
   color: #929aac;
 }
 
+.dashboard-item-link {
+  display: inline-flex;
+  margin-top: 8px;
+  color: #1664d9;
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.dashboard-item-link:hover {
+  text-decoration: underline;
+}
+
 .severity {
   flex-shrink: 0;
   padding: 5px 9px;

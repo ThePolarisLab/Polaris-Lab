@@ -18,3 +18,9 @@ test("Executive Dashboard derives user and organization from runtime context", (
   assert.doesNotMatch(dashboardSource, /user_name=Surinder/);
   assert.doesNotMatch(dashboardSource, /author:\s*"Surinder"/);
 });
+
+test("Executive Dashboard can link ACE attention into the ACE workspace", () => {
+  assert.match(dashboardSource, /dashboard-item-link/);
+  assert.match(dashboardSource, /Open in ACE/);
+  assert.match(dashboardSource, /item\.entity_id\.startsWith\("#"\)/);
+});

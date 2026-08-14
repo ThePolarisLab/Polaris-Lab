@@ -26,3 +26,10 @@ test("ACE movement table stacks create and arrival dates and gives exceptions a 
   assert.match(ace, /ace-col-exception/);
   assert.doesNotMatch(ace, /<th>Shipper → Consignee<\/th>/);
 });
+test("ACE KPI cards drive focused movement filters", () => {
+  assert.match(ace, /counter_filter: counterFilter/);
+  assert.match(ace, /setCounterFilter\("exceptions"\)/);
+  assert.match(ace, /setCounterFilter\("unauthorized"\)/);
+  assert.match(ace, /setActiveOnly\(true\)/);
+  assert.match(ace, /<button type="button" key=\{label\} onClick=\{\(\) => applyCounterFilter\(label\)\}/);
+});

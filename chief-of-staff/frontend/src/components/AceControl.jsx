@@ -35,6 +35,17 @@ function qs(params) {
   return search.toString();
 }
 
+function filtersFromHash() {
+  const [, queryString = ""] = window.location.hash.split("?");
+  if (!queryString) return { filters: FILTERS, activeOnly: false, counterFilter: "" };
+  const params = new URLSearchParams(queryString);
+  const filters = { ...FILTERS };
+  Object.keys(filters).forEach((key) => {
+    if (params.has(key)) filters[key] = params.get(key) || "";
+  });
+  return { filters, activeOnly: params.get("active_only") === "true", counterFilter: params.get("counter_filter") || "" };
+}
+
 function StatusPill({ movement }) {
   const tone = movement.review_status === "critical" ? "critical" : movement.review_status === "review" ? "review" : movement.record_status === "Open" ? "open" : "clear";
   const label = movement.authorization_status === "UNAUTHORIZED - NO MOR PERMISSION"
@@ -94,12 +105,14 @@ function DetailDrawer({ movement, onClose }) {
 }
 
 export default function AceControl() {
+  const initialView = filtersFromHash();
   const [summary, setSummary] = useState(null);
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState("");
-  const [filters, setFilters] = useState(FILTERS);
-  const [activeOnly, setActiveOnly] = useState(false);
+  const [filters, setFilters] = useState(initialView.filters);
+  const [activeOnly, setActiveOnly] = useState(initialView.activeOnly);
+  const [counterFilter, setCounterFilter] = useState(initialView.counterFilter);
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
@@ -107,7 +120,7 @@ export default function AceControl() {
   const [feedHealth, setFeedHealth] = useState(null);
   const [error, setError] = useState("");
 
-  const query = useMemo(() => qs({ search, ...filters, active_only: activeOnly, limit: 250 }), [search, filters, activeOnly]);
+  const query = useMemo(() => qs({ search, ...filters, active_only: activeOnly, counter_filter: counterFilter, limit: 250 }), [search, filters, activeOnly, counterFilter]);
 
   async function load() {
     try {
@@ -136,6 +149,25 @@ export default function AceControl() {
     } catch (requestError) {
       setError(requestError.message || "Unable to load movement details.");
     }
+  }
+
+  function applyCounterFilter(label) {
+    setSearch("");
+    setFilters(FILTERS);
+    setActiveOnly(false);
+    setCounterFilter("");
+    if (label === "Active") {
+      setActiveOnly(true);
+      setCounterFilter("active");
+      return;
+    }
+    const next = { ...FILTERS };
+    if (label === "Open") next.status = "Open";
+    if (label === "Exceptions") setCounterFilter("exceptions");
+    if (label === "Overdue") next.overdue = "true";
+    if (label === "Late") next.late = "true";
+    if (label === "Unauthorized") setCounterFilter("unauthorized");
+    setFilters(next);
   }
 
   function exportCsv() {
@@ -223,7 +255,7 @@ export default function AceControl() {
       {summary && (
         <div className="ace-kpis">
           {[['Active', summary.active], ['Open', summary.open], ['Exceptions', summary.exceptions], ['Overdue', summary.overdue], ['Late', summary.late], ['Unauthorized', summary.unauthorized]].map(([label, value]) => (
-            <div key={label}><span>{label}</span><strong>{value}</strong></div>
+            <button type="button" key={label} onClick={() => applyCounterFilter(label)}><span>{label}</span><strong>{value}</strong></button>
           ))}
         </div>
       )}
@@ -255,7 +287,7 @@ export default function AceControl() {
         <select value={filters.transfer_of_liability} onChange={(event) => setFilters({ ...filters, transfer_of_liability: event.target.value })}><option value="">Liability: Any</option><option value="true">Transfer present</option><option value="false">No transfer</option></select>
         <label>From<input type="date" value={filters.start_date} onChange={(event) => setFilters({ ...filters, start_date: event.target.value })} /></label>
         <label>To<input type="date" value={filters.end_date} onChange={(event) => setFilters({ ...filters, end_date: event.target.value })} /></label>
-        <button type="button" onClick={() => { setFilters(FILTERS); setSearch(""); setActiveOnly(false); }}>Clear filters</button>
+        <button type="button" onClick={() => { setFilters(FILTERS); setSearch(""); setActiveOnly(false); setCounterFilter(""); }}>Clear filters</button>
       </div>
 
       {error && <div className="ace-error"><AlertTriangle size={17} /> {error}</div>}

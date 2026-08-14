@@ -33,6 +33,9 @@ function ItemList({ items = [] }) {
             <strong>{item.title}</strong>
             <p>{item.detail}</p>
             <small>{item.source}</small>
+            {typeof item.entity_id === "string" && item.entity_id.startsWith("#") && (
+              <a className="dashboard-item-link" href={item.entity_id}>Open in ACE</a>
+            )}
           </div>
           <span className={`severity severity-${item.severity.toLowerCase()}`}>{item.severity}</span>
         </article>

@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,7 +18,7 @@ from app.dashboard.service import build_executive_dashboard
 from app.database.database import Base, SessionLocal, engine
 from app.identity.models import Identity, OrganizationMembership
 from app.main import app
-from app.models.ace import AceImportRun, AceInBondEvent, AceInBondMovement
+from app.models.ace import AceFeedRun, AceImportRun, AceInBondEvent, AceInBondMovement
 from app.organizations.models import Organization
 from app.security.providers import LocalTokenProvider
 
@@ -198,6 +198,81 @@ def test_ordinary_open_movement_stays_out_of_daily_brief_attention(client):
     assert not [item for item in dashboard.watch_items if item.source == "ACE Bond Control"]
 
 
+def test_unresolved_ace_exceptions_are_aggregated_in_daily_brief_without_raw_shipments(client):
+    headers = seed_principal()
+    response = client.post(
+        "/ace/movements/import",
+        headers=headers,
+        json=import_request("message-1", [ace_row(), ace_row(bill_of_lading_number="BOL-101")]),
+    )
+    assert response.status_code == 200
+
+    with SessionLocal() as session:
+        dashboard = build_executive_dashboard(session, organization_id="org-1")
+
+    ace_items = [item for item in dashboard.needs_attention if item.source == "ACE Bond Control"]
+    assert len(ace_items) == 1
+    assert ace_items[0].title == "ACE / Bond Control requires attention"
+    assert ace_items[0].severity == "HIGH"
+    assert "2 Overdue" in ace_items[0].detail
+    assert "2 Carrier review" in ace_items[0].detail
+    assert ace_items[0].entity_id == "#executive/ace?counter_filter=exceptions"
+    serialized = " ".join([ace_items[0].title, ace_items[0].detail, ace_items[0].entity_id or ""])
+    assert "IB-100" not in serialized
+    assert "BOL-100" not in serialized
+    assert "BOL-101" not in serialized
+
+
+def test_resolved_ace_exception_disappears_from_daily_brief_and_reopen_returns(client):
+    headers = seed_principal()
+    client.post("/ace/movements/import", headers=headers, json=import_request("message-1", [ace_row()]))
+    movement_id = client.get("/ace/movements", headers=headers).json()["items"][0]["id"]
+
+    with SessionLocal() as session:
+        assert [item for item in build_executive_dashboard(session, organization_id="org-1").needs_attention if item.source == "ACE Bond Control"]
+
+    resolved = client.post(f"/ace/movements/{movement_id}/resolve", headers=headers, json={"resolution_notes": "managed"})
+    assert resolved.status_code == 200
+    with SessionLocal() as session:
+        assert not [item for item in build_executive_dashboard(session, organization_id="org-1").needs_attention if item.source == "ACE Bond Control"]
+
+    reopened = client.post(f"/ace/movements/{movement_id}/reopen", headers=headers)
+    assert reopened.status_code == 200
+    with SessionLocal() as session:
+        assert [item for item in build_executive_dashboard(session, organization_id="org-1").needs_attention if item.source == "ACE Bond Control"]
+
+
+def test_continuing_ace_exception_does_not_duplicate_daily_brief_attention_or_events(client):
+    headers = seed_principal()
+    client.post("/ace/movements/import", headers=headers, json=import_request("message-1", [ace_row()]))
+    client.post("/ace/movements/import", headers=headers, json=import_request("message-2", [ace_row(days_overdue_for_export=4)]))
+
+    with SessionLocal() as session:
+        dashboard = build_executive_dashboard(session, organization_id="org-1")
+        ace_items = [item for item in dashboard.needs_attention if item.source == "ACE Bond Control"]
+        assert len(ace_items) == 1
+        assert session.query(AceInBondEvent).filter_by(event_type="exception_opened").count() == 1
+
+
+def test_ace_feed_health_only_surfaces_actionable_daily_brief_items(client):
+    seed_principal()
+    now = datetime.now(timezone.utc)
+    with SessionLocal.begin() as session:
+        session.add(AceFeedRun(organization_id="org-1", mode="scheduled", status="import_success", source_found=True, records_read=127, completed_at=now))
+    with SessionLocal() as session:
+        healthy = build_executive_dashboard(session, organization_id="org-1")
+    assert not [item for item in healthy.needs_attention if item.source == "ACE Daily Feed"]
+
+    with SessionLocal.begin() as session:
+        session.add(AceFeedRun(organization_id="org-1", mode="scheduled", status="source_contract_error", error_category="source_contract_error", completed_at=now + timedelta(minutes=5)))
+    with SessionLocal() as session:
+        failed = build_executive_dashboard(session, organization_id="org-1")
+    feed_items = [item for item in failed.needs_attention if item.source == "ACE Daily Feed"]
+    assert len(feed_items) == 1
+    assert feed_items[0].severity == "CRITICAL"
+    assert "source_contract_error" in feed_items[0].detail
+
+
 def test_manual_unauthorized_resolve_and_reopen_lifecycle(client):
     headers = seed_principal()
     client.post("/ace/movements/import", headers=headers, json=import_request("message-1", [ace_row(overdue_for_export=False, days_overdue_for_export=0)]))
@@ -262,3 +337,33 @@ def test_filters_cover_operational_fields():
         }
         query = movement_query(session, "org-1", **filters)
         assert query.count() == 1
+
+
+def test_counter_filters_match_ace_dashboard_cards():
+    seed_principal()
+    with SessionLocal() as session:
+        import_rows(
+            session,
+            "org-1",
+            source_message_id="message-1",
+            source_filename="ace.csv",
+            source_received_at=None,
+            rows=[
+                ace_row(),
+                ace_row(
+                    inbond_number="IB-200",
+                    bill_of_lading_number="BOL-200",
+                    qp_filer_code=None,
+                    manifest_carrier_code="MLVM",
+                    overdue_for_export=False,
+                    days_overdue_for_export=0,
+                ),
+            ],
+        )
+        assert movement_query(session, "org-1", counter_filter="exceptions").count() == 1
+        assert movement_query(session, "org-1", counter_filter="active").count() == 2
+        movement = session.query(AceInBondMovement).filter_by(inbond_number="IB-200").one()
+        movement.authorization_status = "UNAUTHORIZED - NO MOR PERMISSION"
+        movement.review_status, movement.review_reason = ("critical", "unauthorized")
+        session.commit()
+        assert movement_query(session, "org-1", counter_filter="unauthorized").count() == 1
