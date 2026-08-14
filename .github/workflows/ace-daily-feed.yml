@@ -2,7 +2,11 @@ name: ACE Daily Feed
 
 on:
   schedule:
-    - cron: "17 13 * * *"
+    # Redundant morning opportunities. GitHub cron uses UTC.
+    # 10:40-14:40 UTC covers 6:40-10:40 Toronto during EDT and
+    # 5:40-9:40 Toronto during EST, so at least four runs occur after
+    # the normal ~6:20 a.m. ACE report arrival in either season.
+    - cron: "40 10-14 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -71,7 +75,7 @@ jobs:
               CANONICAL_TIMESTAMP="${timestamp}" \
               POLARIS_ACE_CRON_TRIGGER_SECRET="${POLARIS_ACE_CRON_TRIGGER_SECRET}" \
               python -c 'import hashlib,hmac,os; body=hashlib.sha256(b"").hexdigest(); canonical="\n".join([os.environ["CANONICAL_METHOD"], os.environ["CANONICAL_PATH"], os.environ["CANONICAL_TIMESTAMP"], body]); print(hmac.new(os.environ["POLARIS_ACE_CRON_TRIGGER_SECRET"].encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest())'
-          )"
+            )"
             trigger_once response.json status.txt
             status="$(cat status.txt)"
           fi
