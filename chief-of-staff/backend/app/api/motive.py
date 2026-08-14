@@ -34,6 +34,7 @@ from app.connectors.motive_vehicle_utilization_contract import (
 )
 from app.database.database import SessionLocal
 from app.models.motive import MotiveDriverRecord, MotiveSyncCheckpoint, MotiveSyncHistory, MotiveVehicleRecord
+from app.motive.fleet_foundation import motive_fleet_foundation_status
 from app.organizations.models import Organization
 from app.security.dependencies import require_permission
 from app.security.models import AuthenticatedPrincipal, Permission
@@ -332,6 +333,16 @@ def motive_verification_contract(principal: AuthenticatedPrincipal = Depends(req
         "user_ingestion_certified_only_after_successful_manual_sync": True,
         "secrets_exposed": False,
     }
+
+
+@router.get("/fleet/foundation")
+def motive_fleet_foundation(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Return the read-only Motive Fleet V1 production contract and persistence gate."""
+    _organization(session, principal.organization_id)
+    return motive_fleet_foundation_status(session, principal.organization_id)
 
 
 def _organization(session: Session, organization_id: str) -> Organization:
