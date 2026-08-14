@@ -324,7 +324,7 @@ def movement_query(db: Session, organization_id: str, *, search: str | None = No
                    inbond_type: str | None = None, authorization_status: str | None = None,
                    exception_type: str | None = None, open_closed: str | None = None,
                    late: bool | None = None, overdue: bool | None = None, penalty: bool | None = None,
-                   transfer_of_liability: bool | None = None):
+                   transfer_of_liability: bool | None = None, counter_filter: str | None = None):
     query = db.query(AceInBondMovement).filter(AceInBondMovement.organization_id == organization_id)
     if search:
         token = f"%{search.strip()}%"
@@ -386,6 +386,16 @@ def movement_query(db: Session, organization_id: str, *, search: str | None = No
         query = query.filter(AceInBondMovement.transfer_of_liability_at.is_not(None))
     if transfer_of_liability is False:
         query = query.filter(AceInBondMovement.transfer_of_liability_at.is_(None))
+    if counter_filter == "active":
+        query = query.filter(AceInBondMovement.resolved_at.is_(None)).filter(or_(
+            AceInBondMovement.record_status == "Open",
+            AceInBondMovement.review_status.in_(["review", "critical"]),
+            AceInBondMovement.export_date.is_(None),
+        ))
+    if counter_filter == "exceptions":
+        query = query.filter(AceInBondMovement.resolved_at.is_(None), AceInBondMovement.review_status.in_(["review", "critical"]))
+    if counter_filter == "unauthorized":
+        query = query.filter(AceInBondMovement.authorization_status == "UNAUTHORIZED - NO MOR PERMISSION", AceInBondMovement.resolved_at.is_(None))
     if start_date:
         query = query.filter(AceInBondMovement.create_date >= start_date)
     if end_date:

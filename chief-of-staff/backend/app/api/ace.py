@@ -158,6 +158,7 @@ def list_movements(
     overdue: bool | None = Query(default=None),
     penalty: bool | None = Query(default=None),
     transfer_of_liability: bool | None = Query(default=None),
+    counter_filter: str | None = Query(default=None),
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
     active_only: bool = Query(default=False),
@@ -174,6 +175,7 @@ def list_movements(
         origin_port=origin_port, destination_port=destination_port, inbond_type=inbond_type,
         authorization_status=authorization_status, exception_type=exception_type, open_closed=open_closed,
         late=late, overdue=overdue, penalty=penalty, transfer_of_liability=transfer_of_liability,
+        counter_filter=counter_filter,
     )
     total = query.count()
     rows = query.order_by(AceInBondMovement.create_date.desc(), AceInBondMovement.id.desc()).offset(offset).limit(limit).all()

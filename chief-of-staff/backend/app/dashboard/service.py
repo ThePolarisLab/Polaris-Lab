@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import inspect
 from sqlalchemy.orm import Session
+from app.ace.feed_runner import ace_feed_health
 from app.dashboard.models import DashboardItem, DashboardPriority, ExecutiveDashboard
 from app.models.ace import AceInBondMovement
 from app.models.team_note import TeamNote
@@ -59,6 +60,36 @@ def _ace_table_available(db: Session) -> bool:
 def _ace_attention(db, organization_id):
     if not _ace_table_available(db):
         return []
+    counts = _ace_attention_counts(db, organization_id)
+    items = []
+    total = counts["critical"] + counts["review"]
+    if total:
+        detail_parts = []
+        for label, key in (
+            ("Unauthorized", "unauthorized"),
+            ("Penalty", "penalty"),
+            ("Overdue", "overdue_for_export"),
+            ("Late", "late_in_transit"),
+            ("Carrier review", "carrier_mismatch"),
+            ("QP filer review", "qp_filer_review"),
+        ):
+            if counts[key]:
+                detail_parts.append(f"{counts[key]} {label}")
+        detail = "; ".join(detail_parts) or f"{total} unresolved review item(s)"
+        items.append(DashboardItem(
+            "ACE / Bond Control requires attention",
+            detail,
+            "CRITICAL" if counts["critical"] else "HIGH",
+            "ACE Bond Control",
+            "#executive/ace?counter_filter=exceptions",
+        ))
+    feed_item = _ace_feed_attention(db, organization_id)
+    if feed_item:
+        items.append(feed_item)
+    return items[:3]
+
+
+def _ace_attention_counts(db, organization_id):
     rows = (
         db.query(AceInBondMovement)
         .filter(
@@ -66,24 +97,58 @@ def _ace_attention(db, organization_id):
             AceInBondMovement.resolved_at.is_(None),
             AceInBondMovement.review_status.in_(["review", "critical"]),
         )
-        .order_by(AceInBondMovement.review_status.desc(), AceInBondMovement.last_seen_at.desc())
-        .limit(6)
         .all()
     )
-    items=[]
+    counts = {
+        "critical": 0,
+        "review": 0,
+        "unauthorized": 0,
+        "penalty": 0,
+        "overdue_for_export": 0,
+        "late_in_transit": 0,
+        "carrier_mismatch": 0,
+        "qp_filer_review": 0,
+    }
     for movement in rows:
-        reason=(movement.review_reason or "ACE movement requires review").replace("_", " ")
-        label=f"ACE In-Bond {movement.inbond_number}"
-        if movement.bill_of_lading_number:
-            label += f" / {movement.bill_of_lading_number}"
-        items.append(DashboardItem(
-            label,
-            reason,
-            "CRITICAL" if movement.review_status == "critical" else "HIGH",
-            "ACE Bond Control",
-            f"ace.{movement.id}",
-        ))
-    return items
+        if movement.review_status == "critical":
+            counts["critical"] += 1
+        else:
+            counts["review"] += 1
+        for reason in _ace_reason_tokens(movement.review_reason):
+            if reason in counts:
+                counts[reason] += 1
+    return counts
+
+
+def _ace_reason_tokens(reason: str | None) -> set[str]:
+    if not reason:
+        return set()
+    return {token.strip() for token in reason.split(",") if token.strip()}
+
+
+def _ace_feed_attention(db, organization_id):
+    try:
+        health = ace_feed_health(db, organization_id)
+    except Exception:
+        return None
+    status = health.get("status")
+    if status == "error":
+        return DashboardItem(
+            "ACE daily feed failed",
+            f"Latest feed check ended in {health.get('latest_check_status') or 'failure'}. Review ACE feed health before relying on today's report.",
+            "CRITICAL",
+            "ACE Daily Feed",
+            "#executive/ace",
+        )
+    if status == "warning":
+        return DashboardItem(
+            "ACE daily feed needs review",
+            f"No successful ACE import inside the configured {health.get('freshness_threshold_hours') or 36}-hour freshness window.",
+            "HIGH",
+            "ACE Daily Feed",
+            "#executive/ace",
+        )
+    return None
 
 
 def _ace_watch(db, organization_id):
