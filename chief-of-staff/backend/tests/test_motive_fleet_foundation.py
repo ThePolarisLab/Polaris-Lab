@@ -9,7 +9,14 @@ from sqlalchemy.orm import sessionmaker
 from app.dashboard.service import build_executive_dashboard
 from app.database.database import Base
 from app.models.motive import MotiveDriverRecord, MotiveSyncCheckpoint, MotiveSyncHistory, MotiveVehicleRecord
-from app.motive.driver_contract import motive_driver_contract_status
+from app.motive.driver_contract import (
+    MOTIVE_DRIVER_ROLE_CLASSIFICATION,
+    MOTIVE_NON_DRIVER_ROLE_CLASSIFICATION,
+    MOTIVE_UNKNOWN_ROLE_CLASSIFICATION,
+    classify_motive_user_role,
+    motive_driver_classification_status,
+    motive_driver_contract_status,
+)
 from app.motive.fleet_foundation import motive_fleet_foundation_status
 from app.motive.vehicle_contract import motive_vehicle_contract_status
 from app.organizations.models import Organization
@@ -473,6 +480,202 @@ def test_motive_driver_contract_does_not_create_dashboard_or_daily_brief_attenti
 
     with motive_fleet_db() as session:
         _ = motive_driver_contract_status(session, "org-a")
+        dashboard = build_executive_dashboard(session, organization_id="org-a")
+
+    assert not [item for item in dashboard.needs_attention if item.source.startswith("Motive")]
+    assert not [item for item in dashboard.daily_brief.needs_attention if item.source.startswith("Motive")]
+
+
+def test_motive_driver_role_classifier_uses_only_documented_provider_roles():
+    assert classify_motive_user_role({"role": "driver"}) == MOTIVE_DRIVER_ROLE_CLASSIFICATION
+    assert classify_motive_user_role({"role": " fleet_user "}) == MOTIVE_NON_DRIVER_ROLE_CLASSIFICATION
+    assert classify_motive_user_role({"role": "Admin"}) == MOTIVE_NON_DRIVER_ROLE_CLASSIFICATION
+    assert classify_motive_user_role({"role": ""}) == MOTIVE_UNKNOWN_ROLE_CLASSIFICATION
+    assert classify_motive_user_role({}) == MOTIVE_UNKNOWN_ROLE_CLASSIFICATION
+    assert classify_motive_user_role({"role": None}) == MOTIVE_UNKNOWN_ROLE_CLASSIFICATION
+    assert classify_motive_user_role({"role": "dispatcher"}) == MOTIVE_UNKNOWN_ROLE_CLASSIFICATION
+    assert classify_motive_user_role({"roles": ["driver"]}) == MOTIVE_UNKNOWN_ROLE_CLASSIFICATION
+
+
+def test_motive_driver_classification_counts_roles_without_exposing_pii(motive_fleet_db):
+    with motive_fleet_db.begin() as session:
+        session.add(
+            MotiveDriverRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_driver_id="driver-secret",
+                source_endpoint="/v1/users",
+                name="Driver Secret",
+                email="driver-secret@example.com",
+                status="active",
+                provider_payload_metadata={"username": "driver.secret", "role": "driver"},
+            )
+        )
+        session.add(
+            MotiveDriverRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_driver_id="fleet-user-secret",
+                source_endpoint="/v1/users",
+                name="Fleet User Secret",
+                email="fleet-user-secret@example.com",
+                status="active",
+                provider_payload_metadata={"role": "fleet_user"},
+            )
+        )
+        session.add(
+            MotiveDriverRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_driver_id="admin-secret",
+                source_endpoint="/v1/users",
+                name="Admin Secret",
+                email="admin-secret@example.com",
+                status="active",
+                provider_payload_metadata={"role": "admin"},
+            )
+        )
+        session.add(
+            MotiveDriverRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_driver_id="unknown-secret",
+                source_endpoint="/v1/users",
+                name="Unknown Secret",
+                email="unknown-secret@example.com",
+                status="active",
+                provider_payload_metadata={"role": "dispatcher"},
+            )
+        )
+        session.add(
+            MotiveDriverRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_driver_id="missing-role-secret",
+                source_endpoint="/v1/users",
+                name="Missing Role Secret",
+                email="missing-role-secret@example.com",
+                status="active",
+                provider_payload_metadata={},
+            )
+        )
+
+    with motive_fleet_db() as session:
+        status = motive_driver_classification_status(session, "org-a")
+
+    assert status["resource"] == "driver_role_classification_certification"
+    assert status["classification_definition"][MOTIVE_DRIVER_ROLE_CLASSIFICATION] == 'provider_payload_metadata.role normalized to "driver"'
+    assert status["recognized_provider_roles"] == ["admin", "driver", "fleet_user"]
+    assert status["counts"] == {
+        "total_company_users": 5,
+        "rows_with_role": 4,
+        "motive_driver_role_count": 1,
+        "non_driver_role_count": 2,
+        "unknown_or_missing_role_count": 2,
+        "unknown_undocumented_role_count": 1,
+    }
+    assert status["certification"]["motive_driver_role_classification_certified"] is True
+    assert status["certification"]["mor_business_driver_certified"] is False
+    assert status["certification"]["mor_active_driver_certified"] is False
+    assert status["active_driver_safeguard"]["role_driver_plus_status_active_means_mor_active_driver"] is False
+    assert status["vehicle_driver_association"]["classification"] == "DEFERRED"
+    assert status["persistence"]["schema_change_required"] is False
+    assert status["persistence"]["migration_required"] is False
+    assert status["dashboard_daily_brief_boundary"]["fleet_attention_enabled"] is False
+    rendered = str(status)
+    assert "driver-secret" not in rendered
+    assert "driver-secret@example.com" not in rendered
+    assert "driver.secret" not in rendered
+    assert "Driver Secret" not in rendered
+
+
+def test_motive_driver_classification_is_tenant_scoped(motive_fleet_db):
+    with motive_fleet_db.begin() as session:
+        session.add(
+            MotiveDriverRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_driver_id="same-provider-user",
+                source_endpoint="/v1/users",
+                provider_payload_metadata={"role": "driver"},
+            )
+        )
+        session.add(
+            MotiveDriverRecord(
+                organization_id="org-b",
+                organization_slug="org-b",
+                provider_driver_id="same-provider-user",
+                source_endpoint="/v1/users",
+                provider_payload_metadata={"role": "admin"},
+            )
+        )
+        session.add(
+            MotiveDriverRecord(
+                organization_id="org-b",
+                organization_slug="org-b",
+                provider_driver_id="other-provider-user",
+                source_endpoint="/v1/users",
+                provider_payload_metadata={},
+            )
+        )
+
+    with motive_fleet_db() as session:
+        org_a = motive_driver_classification_status(session, "org-a")
+        org_b = motive_driver_classification_status(session, "org-b")
+
+    assert org_a["counts"]["total_company_users"] == 1
+    assert org_a["counts"]["motive_driver_role_count"] == 1
+    assert org_b["counts"]["total_company_users"] == 2
+    assert org_b["counts"]["motive_driver_role_count"] == 0
+    assert org_b["counts"]["non_driver_role_count"] == 1
+    assert org_b["counts"]["unknown_or_missing_role_count"] == 1
+
+
+def test_motive_driver_classification_route_returns_safe_counts(motive_fleet_db):
+    from app.api import motive as motive_api
+
+    with motive_fleet_db.begin() as session:
+        session.add(
+            MotiveDriverRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_driver_id="route-user-secret",
+                source_endpoint="/v1/users",
+                email="route-secret@example.com",
+                provider_payload_metadata={"username": "route-secret", "role": "driver"},
+            )
+        )
+
+    with motive_fleet_db() as session:
+        response = motive_api.motive_fleet_driver_classification(principal=_principal(), session=session)
+
+    assert response["counts"]["motive_driver_role_count"] == 1
+    assert response["security"]["provider_ids_exposed"] is False
+    assert response["security"]["email_values_exposed"] is False
+    assert response["security"]["username_values_exposed"] is False
+    assert response["security"]["raw_metadata_exposed"] is False
+    assert response["security"]["secrets_exposed"] is False
+    assert "route-user-secret" not in str(response)
+    assert "route-secret@example.com" not in str(response)
+    assert "route-secret" not in str(response)
+
+
+def test_motive_driver_classification_does_not_create_dashboard_or_daily_brief_attention(motive_fleet_db):
+    with motive_fleet_db.begin() as session:
+        session.add(
+            MotiveDriverRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_driver_id="driver-secret",
+                source_endpoint="/v1/users",
+                status="active",
+                provider_payload_metadata={"role": "driver"},
+            )
+        )
+        session.add(_history(mode="user_sync", provider_resource="users"))
+
+    with motive_fleet_db() as session:
+        _ = motive_driver_classification_status(session, "org-a")
         dashboard = build_executive_dashboard(session, organization_id="org-a")
 
     assert not [item for item in dashboard.needs_attention if item.source.startswith("Motive")]

@@ -34,7 +34,7 @@ from app.connectors.motive_vehicle_utilization_contract import (
 )
 from app.database.database import SessionLocal
 from app.models.motive import MotiveDriverRecord, MotiveSyncCheckpoint, MotiveSyncHistory, MotiveVehicleRecord
-from app.motive.driver_contract import motive_driver_contract_status
+from app.motive.driver_contract import motive_driver_classification_status, motive_driver_contract_status
 from app.motive.fleet_foundation import motive_fleet_foundation_status
 from app.motive.vehicle_contract import motive_vehicle_contract_status
 from app.organizations.models import Organization
@@ -330,6 +330,16 @@ def motive_verification_contract(principal: AuthenticatedPrincipal = Depends(req
             "raw_provider_payload_exposed": False,
             "dashboard_daily_brief_attention_enabled": False,
         },
+        "fleet_driver_classification": {
+            "method": "GET",
+            "manual_route": "/api/v1/motive/fleet/driver-classification",
+            "source_endpoint": MOTIVE_USERS_ENDPOINT,
+            "classification_source": "provider_payload_metadata.role",
+            "motive_driver_role_classification_certified": True,
+            "mor_active_driver_certified": False,
+            "raw_provider_payload_exposed": False,
+            "dashboard_daily_brief_attention_enabled": False,
+        },
         "vehicle_utilization_contract_verification": {
             "method": "GET",
             "path": MOTIVE_VEHICLE_UTILIZATION_ENDPOINT,
@@ -382,6 +392,16 @@ def motive_fleet_driver_contract(
     """Return read-only Motive company-user field certification for Fleet Operations V1."""
     _organization(session, principal.organization_id)
     return motive_driver_contract_status(session, principal.organization_id)
+
+
+@router.get("/fleet/driver-classification")
+def motive_fleet_driver_classification(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Return read-only Motive provider-role classification counts for Fleet Operations V1."""
+    _organization(session, principal.organization_id)
+    return motive_driver_classification_status(session, principal.organization_id)
 
 
 def _organization(session: Session, organization_id: str) -> Organization:

@@ -12,6 +12,13 @@ from sqlalchemy.orm import Session
 from app.connectors.motive import MOTIVE_USERS_ENDPOINT
 from app.models.motive import MotiveDriverRecord
 
+MOTIVE_DRIVER_ROLE = "driver"
+MOTIVE_NON_DRIVER_ROLES = frozenset({"fleet_user", "admin"})
+MOTIVE_RECOGNIZED_USER_ROLES = frozenset({MOTIVE_DRIVER_ROLE, *MOTIVE_NON_DRIVER_ROLES})
+MOTIVE_DRIVER_ROLE_CLASSIFICATION = "motive_driver_role"
+MOTIVE_NON_DRIVER_ROLE_CLASSIFICATION = "motive_non_driver_role"
+MOTIVE_UNKNOWN_ROLE_CLASSIFICATION = "unknown_role"
+
 
 @dataclass(frozen=True, slots=True)
 class DriverFieldContract:
@@ -225,6 +232,7 @@ def motive_driver_contract_status(db: Session, organization_id: str) -> dict[str
             "all_users_are_drivers": False,
             "stored_user_as_mor_active_driver": "DEFERRED",
             "driver_classification_certified": False,
+            "motive_driver_role_classification_certified": True,
         },
         "active_inactive_semantics": {
             "provider_status_literal_certified": True,
@@ -252,6 +260,94 @@ def motive_driver_contract_status(db: Session, organization_id: str) -> dict[str
         },
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def motive_driver_classification_status(db: Session, organization_id: str) -> dict[str, Any]:
+    rows = (
+        db.query(MotiveDriverRecord.provider_payload_metadata)
+        .filter(MotiveDriverRecord.organization_id == organization_id, MotiveDriverRecord.source_endpoint == MOTIVE_USERS_ENDPOINT)
+        .all()
+    )
+    total_users = len(rows)
+    counts = {
+        "total_company_users": total_users,
+        "rows_with_role": 0,
+        "motive_driver_role_count": 0,
+        "non_driver_role_count": 0,
+        "unknown_or_missing_role_count": 0,
+        "unknown_undocumented_role_count": 0,
+    }
+    for (metadata,) in rows:
+        outcome = classify_motive_user_role(metadata)
+        if _metadata_value_present(metadata, "role"):
+            counts["rows_with_role"] += 1
+        if outcome == MOTIVE_DRIVER_ROLE_CLASSIFICATION:
+            counts["motive_driver_role_count"] += 1
+        elif outcome == MOTIVE_NON_DRIVER_ROLE_CLASSIFICATION:
+            counts["non_driver_role_count"] += 1
+        else:
+            counts["unknown_or_missing_role_count"] += 1
+            if _metadata_value_present(metadata, "role"):
+                counts["unknown_undocumented_role_count"] += 1
+
+    return {
+        "provider": "motive",
+        "resource": "driver_role_classification_certification",
+        "source_endpoint": MOTIVE_USERS_ENDPOINT,
+        "classification_definition": {
+            MOTIVE_DRIVER_ROLE_CLASSIFICATION: 'provider_payload_metadata.role normalized to "driver"',
+            MOTIVE_NON_DRIVER_ROLE_CLASSIFICATION: 'provider_payload_metadata.role normalized to "fleet_user" or "admin"',
+            MOTIVE_UNKNOWN_ROLE_CLASSIFICATION: "missing, blank, non-string, or undocumented provider role",
+        },
+        "certification": {
+            "motive_driver_role_classification_certified": True,
+            "mor_business_driver_certified": False,
+            "mor_active_driver_certified": False,
+            "vehicle_driver_association_certified": False,
+        },
+        "recognized_provider_roles": sorted(MOTIVE_RECOGNIZED_USER_ROLES),
+        "counts": counts,
+        "active_driver_safeguard": {
+            "role_driver_plus_status_active_means_mor_active_driver": False,
+            "reason": "Provider role and provider status are certified only as Motive literals; MOR employment, availability, dispatch, HOS, and working state remain deferred.",
+        },
+        "vehicle_driver_association": {
+            "classification": "DEFERRED",
+            "reason": "Role classification does not assign vehicles or certify durable vehicle-driver association.",
+        },
+        "persistence": {
+            "schema_change_required": False,
+            "migration_required": False,
+            "classification_source": "provider_payload_metadata.role",
+            "computed_read_only": True,
+        },
+        "dashboard_daily_brief_boundary": {
+            "fleet_attention_enabled": False,
+            "driver_count_cards_enabled": False,
+            "normal_state_creates_attention": False,
+        },
+        "security": {
+            "organization_scoped": True,
+            "provider_ids_exposed": False,
+            "names_exposed": False,
+            "email_values_exposed": False,
+            "username_values_exposed": False,
+            "phone_values_exposed": False,
+            "raw_metadata_exposed": False,
+            "raw_provider_payload_exposed": False,
+            "secrets_exposed": False,
+        },
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def classify_motive_user_role(metadata: Any) -> str:
+    role = _normalized_provider_role(metadata)
+    if role == MOTIVE_DRIVER_ROLE:
+        return MOTIVE_DRIVER_ROLE_CLASSIFICATION
+    if role in MOTIVE_NON_DRIVER_ROLES:
+        return MOTIVE_NON_DRIVER_ROLE_CLASSIFICATION
+    return MOTIVE_UNKNOWN_ROLE_CLASSIFICATION
 
 
 def _field_definition(contract: DriverFieldContract) -> dict[str, Any]:
@@ -298,3 +394,13 @@ def _metadata_value_present(metadata: Any, key: str) -> bool:
     if value is None or value == "":
         return False
     return True
+
+
+def _normalized_provider_role(metadata: Any) -> str | None:
+    if not isinstance(metadata, dict):
+        return None
+    role = metadata.get("role")
+    if not isinstance(role, str):
+        return None
+    normalized = role.strip().lower()
+    return normalized or None

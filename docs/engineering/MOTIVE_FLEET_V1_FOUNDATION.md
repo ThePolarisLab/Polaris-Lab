@@ -70,6 +70,16 @@ The driver/user contract endpoint certifies the current `GET /v1/users` persiste
 
 See `docs/engineering/MOTIVE_DRIVER_CONTRACT_CERTIFICATION.md`.
 
+## Driver Classification Certification
+
+`GET /api/v1/motive/fleet/driver-classification`
+
+The driver-classification endpoint computes read-only counts from `provider_payload_metadata.role`. It certifies only `role == "driver"` as a Motive driver-role user. Recognized non-driver roles are `fleet_user` and `admin`; missing or undocumented roles remain unknown.
+
+This does not certify MOR active/employed/available/working driver state, HOS readiness, dispatch status, or vehicle assignment.
+
+See `docs/engineering/MOTIVE_DRIVER_CLASSIFICATION_CERTIFICATION.md`.
+
 ## Dashboard / Daily Brief Boundary
 
 Healthy or normal Motive foundation state must stay quiet. Future Motive management attention should be aggregated only after the underlying provider semantics are reliable, for example:
