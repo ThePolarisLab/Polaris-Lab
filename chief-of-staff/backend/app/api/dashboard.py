@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.dashboard.service import build_executive_dashboard
 from app.database.database import SessionLocal
-from app.schemas.dashboard import DashboardItemResponse, DashboardPriorityResponse, ExecutiveDashboardResponse
+from app.schemas.dashboard import DailyBriefResponse, DashboardItemResponse, DashboardPriorityResponse, ExecutiveDashboardResponse
 from app.security.dependencies import require_permission
 from app.security.models import AuthenticatedPrincipal, Permission
 
@@ -27,6 +27,17 @@ def serialize_priority(item) -> DashboardPriorityResponse:
     return DashboardPriorityResponse(rank=item.rank, title=item.title, reason=item.reason, source=item.source)
 
 
+def serialize_daily_brief(brief) -> DailyBriefResponse:
+    return DailyBriefResponse(
+        todays_priority=[serialize_priority(item) for item in brief.todays_priority],
+        needs_attention=[serialize_item(item) for item in brief.needs_attention],
+        ace_summary=[serialize_item(item) for item in brief.ace_summary],
+        carry_forward=[serialize_item(item) for item in brief.carry_forward],
+        waiting_on=[serialize_item(item) for item in brief.waiting_on],
+        system_health=[serialize_item(item) for item in brief.system_health],
+    )
+
+
 @router.get("/executive", response_model=ExecutiveDashboardResponse)
 def read_executive_dashboard(
     user_name: str = Query(default="Surinder", min_length=1, max_length=80),
@@ -47,4 +58,5 @@ def read_executive_dashboard(
         active_missions=dashboard.active_missions,
         total_trucks=dashboard.total_trucks,
         recommendation=dashboard.recommendation,
+        daily_brief=serialize_daily_brief(dashboard.daily_brief),
     )

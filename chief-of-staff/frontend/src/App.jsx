@@ -26,6 +26,7 @@ import {
 } from "./apiClient";
 import AceControl from "./components/AceControl";
 import BuilderConsole from "./components/BuilderConsole";
+import DailyBrief from "./components/DailyBrief";
 import ExecutiveDashboard from "./components/ExecutiveDashboard";
 import { ExecutiveRouteView } from "./components/ExecutiveViews";
 import { runtimeConfig } from "./runtimeConfig";
@@ -155,7 +156,7 @@ function ExecutiveWorkspace({ page, session, forbiddenMessage, onOpenMenu, onLog
         </div>
       </header>
       {forbiddenMessage && <div className="forbidden-banner" role="alert">{forbiddenMessage}</div>}
-      <main className="workspace-main">{page === "dashboard" ? <ExecutiveDashboard /> : page === "ace" ? <AceControl /> : <ExecutiveRouteView page={page} />}</main>
+      <main className="workspace-main">{page === "dashboard" ? <ExecutiveDashboard /> : page === "daily-brief" ? <DailyBrief /> : page === "ace" ? <AceControl /> : <ExecutiveRouteView page={page} />}</main>
       <footer className="workspace-statusbar"><span><span className="status-dot" aria-hidden="true" />{runtimeConfig.workspace.workspaceName}</span><span>Evidence · Intelligence · Action</span></footer>
     </div>
   );

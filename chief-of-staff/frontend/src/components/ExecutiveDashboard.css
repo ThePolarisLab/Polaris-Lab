@@ -197,6 +197,41 @@ button:disabled {
   gap: 20px;
 }
 
+.daily-brief-shell {
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+.daily-brief-hero h1 {
+  max-width: 780px;
+}
+
+.daily-brief-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 20px;
+  margin-top: 22px;
+}
+
+.daily-brief-section:first-child {
+  grid-column: 1 / -1;
+}
+
+.daily-priority-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  padding-left: 0;
+  list-style-position: inside;
+}
+
+.daily-priority-list li {
+  padding: 15px;
+  border: 1px solid #edf0f5;
+  border-radius: 12px;
+  background: #fbfcfe;
+}
+
 .polaris-card {
   min-width: 0;
   padding: 24px;
@@ -526,6 +561,11 @@ button:disabled {
   }
 
   .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .daily-brief-grid,
+  .daily-priority-list {
     grid-template-columns: 1fr;
   }
 }

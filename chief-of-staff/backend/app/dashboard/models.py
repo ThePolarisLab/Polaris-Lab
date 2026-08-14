@@ -19,6 +19,16 @@ class DashboardPriority:
 
 
 @dataclass(frozen=True, slots=True)
+class DailyBrief:
+    todays_priority: tuple[DashboardPriority, ...]
+    needs_attention: tuple[DashboardItem, ...]
+    ace_summary: tuple[DashboardItem, ...]
+    carry_forward: tuple[DashboardItem, ...]
+    waiting_on: tuple[DashboardItem, ...]
+    system_health: tuple[DashboardItem, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutiveDashboard:
     greeting: str
     business_status: str
@@ -32,3 +42,4 @@ class ExecutiveDashboard:
     active_missions: int
     total_trucks: int
     recommendation: str
+    daily_brief: DailyBrief
