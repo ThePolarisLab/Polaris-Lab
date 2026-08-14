@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 import json
 from typing import Any
@@ -19,7 +19,10 @@ from app.connectors.motive_vehicle_utilization import (
     parse_vehicle_utilization_rollups,
 )
 from app.database.database import Base
-from app.models.motive import MotiveVehicleRecord, MotiveVehicleUtilizationRecord
+from app.database.models import register_models
+from app.models.motive import MotiveSyncCheckpoint, MotiveVehicleRecord, MotiveVehicleUtilizationRecord
+
+register_models()
 
 
 def _payload(**overrides: Any) -> dict[str, Any]:
@@ -223,3 +226,120 @@ def test_vehicle_utilization_association_handles_multiple_rollups() -> None:
 
     assert [association.outcome for association in associations] == ["matched", "unknown_vehicle"]
     assert [association.motive_vehicle_id for association in associations] == [10, None]
+
+
+def test_vehicle_utilization_persistence_shape_preserves_zero_and_null_metric_values() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    TestingSession = sessionmaker(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    with TestingSession() as session:
+        vehicle = MotiveVehicleRecord(
+            id=10,
+            organization_id="org-a",
+            organization_slug="org-a",
+            provider_vehicle_id="known-vehicle",
+        )
+        session.add(vehicle)
+        session.add(
+            MotiveVehicleUtilizationRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_vehicle_id="known-vehicle",
+                motive_vehicle_id=vehicle.id,
+                request_window_start=date(2026, 8, 8),
+                request_window_end=date(2026, 8, 9),
+                reporting_period_start=None,
+                reporting_period_end=None,
+                utilization_percent=Decimal("0"),
+                idle_time=Decimal("0.0000"),
+                driving_time=None,
+                idle_fuel=Decimal("0.0000"),
+                driving_fuel=None,
+                metric_units=False,
+                observed_at=datetime(2026, 8, 10, tzinfo=timezone.utc),
+                parser_version=PARSER_VERSION,
+                provider_payload_metadata={"parser_version": PARSER_VERSION, "source": "schema_hardening_test"},
+            )
+        )
+        session.commit()
+
+        saved = session.query(MotiveVehicleUtilizationRecord).one()
+        assert saved.organization_id == "org-a"
+        assert saved.provider_vehicle_id == "known-vehicle"
+        assert saved.motive_vehicle_id == 10
+        assert saved.utilization_percent == Decimal("0.0000")
+        assert saved.idle_time == Decimal("0.0000")
+        assert saved.driving_time is None
+        assert saved.idle_fuel == Decimal("0.0000")
+        assert saved.driving_fuel is None
+        assert saved.metric_units is False
+        assert saved.parser_version == PARSER_VERSION
+
+
+def test_vehicle_utilization_schema_keeps_request_window_separate_from_reporting_period() -> None:
+    record = MotiveVehicleUtilizationRecord(
+        organization_id="org-a",
+        organization_slug="org-a",
+        provider_vehicle_id="known-vehicle",
+        request_window_start=date(2026, 8, 8),
+        request_window_end=date(2026, 8, 9),
+        reporting_period_start=None,
+        reporting_period_end=None,
+    )
+
+    assert record.request_window_start == date(2026, 8, 8)
+    assert record.request_window_end == date(2026, 8, 9)
+    assert record.reporting_period_start is None
+    assert record.reporting_period_end is None
+
+
+def test_vehicle_utilization_schema_supports_known_vehicle_reference_without_auto_create() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    TestingSession = sessionmaker(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    with TestingSession() as session:
+        vehicle = MotiveVehicleRecord(
+            id=10,
+            organization_id="org-a",
+            organization_slug="org-a",
+            provider_vehicle_id="known-vehicle",
+        )
+        session.add(vehicle)
+        session.commit()
+
+        session.add(
+            MotiveVehicleUtilizationRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_vehicle_id="known-vehicle",
+                motive_vehicle_id=vehicle.id,
+                request_window_start=date(2026, 8, 8),
+                request_window_end=date(2026, 8, 9),
+            )
+        )
+        session.commit()
+
+        assert session.query(MotiveVehicleRecord).filter_by(organization_id="org-a").count() == 1
+        assert session.query(MotiveVehicleRecord).filter_by(organization_id="org-b").count() == 0
+        saved = session.query(MotiveVehicleUtilizationRecord).one()
+        assert saved.motive_vehicle_id == 10
+        assert saved.motive_vehicle.provider_vehicle_id == "known-vehicle"
+
+
+def test_vehicle_utilization_parser_and_association_do_not_mutate_checkpoint_or_utilization_tables() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    TestingSession = sessionmaker(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    rollup = _parse(_payload())[0]
+
+    with TestingSession() as session:
+        session.add(MotiveVehicleRecord(id=10, organization_id="org-a", organization_slug="org-a", provider_vehicle_id="provider-vehicle-secret"))
+        session.commit()
+
+        association = associate_vehicle_utilization_rollup(session, organization_id="org-a", rollup=rollup)
+
+        assert association.outcome == "matched"
+        assert session.query(MotiveVehicleUtilizationRecord).count() == 0
+        assert session.query(MotiveSyncCheckpoint).count() == 0

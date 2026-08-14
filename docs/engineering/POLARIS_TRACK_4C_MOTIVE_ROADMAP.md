@@ -38,6 +38,8 @@ The non-empty item schema observed keys `driving_fuel`, `driving_time`, `idle_fu
 
 The next non-persistent implementation layer parses the production-observed `vehicle_idle_rollups` envelope into an internal contract and performs read-only association from `vehicle.id` to an existing organization-owned Motive vehicle. It does not write utilization rows, create vehicles, mutate checkpoints, add a sync route, or treat request dates as authoritative reporting periods while Motive Support clarification remains pending.
 
+The first persistence-readiness slice hardens the existing `motive_vehicle_utilization` table additively for the production-observed metrics, optional internal vehicle FK, parser version, and request-window context. It still does not ingest utilization, populate reporting periods, advance checkpoints, enable scheduling, or certify unresolved provider semantics.
+
 Before broader sync is implemented, Polaris must complete design and verification for:
 
 - durable vehicle-utilization persistence mapping, identity/period semantics, units, checkpoint strategy, unknown vehicle handling, KPI interpretation, and production ingestion certification
