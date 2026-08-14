@@ -60,6 +60,16 @@ The vehicle contract endpoint certifies the current `GET /v1/vehicles` persisted
 
 See `docs/engineering/MOTIVE_VEHICLE_CONTRACT_CERTIFICATION.md`.
 
+## Driver / User Contract Certification
+
+`GET /api/v1/motive/fleet/driver-contract`
+
+The driver/user contract endpoint certifies the current `GET /v1/users` persisted field subset for Fleet Operations V1. It exposes field definitions, `CONFIRMED` / `DERIVED` / `DEFERRED` classifications, organization-scoped company-user counts, and completeness percentages for persisted fields and selected metadata keys only.
+
+`/v1/users` returns company users; Motive provider role is certified as a literal discriminator, but MOR driver classification, active-driver business state, HOS/availability, and vehicle-driver association remain deferred.
+
+See `docs/engineering/MOTIVE_DRIVER_CONTRACT_CERTIFICATION.md`.
+
 ## Dashboard / Daily Brief Boundary
 
 Healthy or normal Motive foundation state must stay quiet. Future Motive management attention should be aggregated only after the underlying provider semantics are reliable, for example:

@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from app.dashboard.service import build_executive_dashboard
 from app.database.database import Base
 from app.models.motive import MotiveDriverRecord, MotiveSyncCheckpoint, MotiveSyncHistory, MotiveVehicleRecord
+from app.motive.driver_contract import motive_driver_contract_status
 from app.motive.fleet_foundation import motive_fleet_foundation_status
 from app.motive.vehicle_contract import motive_vehicle_contract_status
 from app.organizations.models import Organization
@@ -279,6 +280,199 @@ def test_motive_vehicle_contract_does_not_create_dashboard_or_daily_brief_attent
 
     with motive_fleet_db() as session:
         _ = motive_vehicle_contract_status(session, "org-a")
+        dashboard = build_executive_dashboard(session, organization_id="org-a")
+
+    assert not [item for item in dashboard.needs_attention if item.source.startswith("Motive")]
+    assert not [item for item in dashboard.daily_brief.needs_attention if item.source.startswith("Motive")]
+
+
+def test_motive_driver_contract_classifies_company_user_fields_and_deferred_driver_semantics(motive_fleet_db):
+    with motive_fleet_db.begin() as session:
+        session.add(
+            MotiveDriverRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_driver_id="user-secret-a",
+                source_endpoint="/v1/users",
+                name="Driver Secret",
+                email="driver-secret@example.com",
+                status="active",
+                provider_payload_metadata={
+                    "source_keys": ["id", "first_name", "last_name", "email", "username", "role", "status", "phone"],
+                    "username": "secret.username",
+                    "role": "driver",
+                    "driver_classification": "unknown",
+                    "driver_classification_certified": False,
+                },
+            )
+        )
+        session.add(
+            MotiveDriverRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_driver_id="user-secret-b",
+                source_endpoint="/v1/users",
+                name="Fleet User Secret",
+                email=None,
+                status="active",
+                provider_payload_metadata={
+                    "source_keys": ["id", "first_name", "last_name", "role", "status"],
+                    "role": "fleet_user",
+                    "driver_classification": "unknown",
+                    "driver_classification_certified": False,
+                },
+            )
+        )
+        session.add(
+            MotiveDriverRecord(
+                organization_id="org-b",
+                organization_slug="org-b",
+                provider_driver_id="user-secret-other",
+                source_endpoint="/v1/users",
+                name="Other Tenant",
+                email="other@example.com",
+                status="active",
+                provider_payload_metadata={"role": "driver"},
+            )
+        )
+
+    with motive_fleet_db() as session:
+        contract = motive_driver_contract_status(session, "org-a")
+
+    assert contract["resource"] == "driver_user_contract_certification"
+    assert contract["source_endpoint"] == "/v1/users"
+    assert contract["company_user_count"] == 2
+    fields = {item["field"]: item for item in contract["field_definitions"]}
+    assert fields["provider_user_id"]["classification"] == "CONFIRMED"
+    assert fields["first_name"]["classification"] == "CONFIRMED"
+    assert fields["last_name"]["classification"] == "CONFIRMED"
+    assert fields["full_name"]["classification"] == "DERIVED"
+    assert fields["email"]["classification"] == "CONFIRMED"
+    assert fields["username"]["classification"] == "CONFIRMED"
+    assert fields["provider_role"]["classification"] == "CONFIRMED"
+    assert fields["provider_status"]["classification"] == "CONFIRMED"
+    assert fields["observed_at"]["classification"] == "DERIVED"
+    assert fields["phone"]["classification"] == "DEFERRED"
+    assert fields["driver_classification"]["classification"] == "DEFERRED"
+    assert fields["mor_active_driver_business_state"]["classification"] == "DEFERRED"
+    assert fields["vehicle_driver_association"]["classification"] == "DEFERRED"
+    assert fields["duty_status"]["classification"] == "DEFERRED"
+    assert fields["driver_license"]["classification"] == "DEFERRED"
+    assert fields["provider_role"]["safe_for_fleet_ui"] is True
+    assert fields["provider_role"]["safe_for_dashboard_daily_brief"] is False
+    assert contract["driver_classification"]["role_driver_can_distinguish_provider_driver_rows"] is True
+    assert contract["driver_classification"]["all_users_are_drivers"] is False
+    assert contract["driver_classification"]["stored_user_as_mor_active_driver"] == "DEFERRED"
+    assert contract["driver_classification"]["driver_classification_certified"] is False
+    assert contract["active_inactive_semantics"]["motive_status_as_mor_active_driver_state"] == "DEFERRED"
+    assert contract["vehicle_driver_association"]["classification"] == "DEFERRED"
+    assert contract["persistence"]["schema_change_required"] is False
+    assert contract["persistence"]["migration_required"] is False
+    assert contract["persistence"]["identity"] == "organization_id + provider_driver_id"
+
+
+def test_motive_driver_contract_completeness_is_tenant_scoped_and_redacted(motive_fleet_db):
+    with motive_fleet_db.begin() as session:
+        session.add(
+            MotiveDriverRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_driver_id="secret-a",
+                source_endpoint="/v1/users",
+                name="User A",
+                email="user-a@example.com",
+                status="active",
+                provider_payload_metadata={"username": "user-a", "role": "driver"},
+            )
+        )
+        session.add(
+            MotiveDriverRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_driver_id="secret-b",
+                source_endpoint="/v1/users",
+                name="",
+                email=None,
+                status="",
+                provider_payload_metadata={"role": "admin"},
+            )
+        )
+        session.add(
+            MotiveDriverRecord(
+                organization_id="org-b",
+                organization_slug="org-b",
+                provider_driver_id="secret-c",
+                source_endpoint="/v1/users",
+                name="User C",
+                email="user-c@example.com",
+                status="active",
+                provider_payload_metadata={"username": "user-c", "role": "driver"},
+            )
+        )
+
+    with motive_fleet_db() as session:
+        org_a = motive_driver_contract_status(session, "org-a")
+        org_b = motive_driver_contract_status(session, "org-b")
+
+    assert org_a["completeness"]["provider_user_id"] == {"total": 2, "present": 2, "percent": 100.0}
+    assert org_a["completeness"]["full_name"] == {"total": 2, "present": 1, "percent": 50.0}
+    assert org_a["completeness"]["email"] == {"total": 2, "present": 1, "percent": 50.0}
+    assert org_a["completeness"]["provider_status"] == {"total": 2, "present": 1, "percent": 50.0}
+    assert org_a["completeness"]["username"] == {"total": 2, "present": 1, "percent": 50.0}
+    assert org_a["completeness"]["provider_role"] == {"total": 2, "present": 2, "percent": 100.0}
+    assert org_b["completeness"]["email"] == {"total": 1, "present": 1, "percent": 100.0}
+    rendered = str(org_a)
+    assert "secret-a" not in rendered
+    assert "user-a@example.com" not in rendered
+    assert "user-a" not in rendered
+
+
+def test_motive_driver_contract_route_returns_safe_read_only_payload(motive_fleet_db):
+    from app.api import motive as motive_api
+
+    with motive_fleet_db.begin() as session:
+        session.add(
+            MotiveDriverRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_driver_id="user-secret-a",
+                source_endpoint="/v1/users",
+                email="secret@example.com",
+                provider_payload_metadata={"username": "secret-user", "role": "driver"},
+            )
+        )
+
+    with motive_fleet_db() as session:
+        response = motive_api.motive_fleet_driver_contract(principal=_principal(), session=session)
+
+    assert response["resource"] == "driver_user_contract_certification"
+    assert response["security"]["provider_ids_exposed"] is False
+    assert response["security"]["email_values_exposed"] is False
+    assert response["security"]["phone_values_exposed"] is False
+    assert response["security"]["raw_provider_payload_exposed"] is False
+    assert response["security"]["secrets_exposed"] is False
+    assert response["completeness"]["email"]["present"] == 1
+    assert "user-secret-a" not in str(response)
+    assert "secret@example.com" not in str(response)
+    assert "secret-user" not in str(response)
+
+
+def test_motive_driver_contract_does_not_create_dashboard_or_daily_brief_attention(motive_fleet_db):
+    with motive_fleet_db.begin() as session:
+        session.add(
+            MotiveDriverRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_driver_id="user-secret-a",
+                source_endpoint="/v1/users",
+                status="active",
+                provider_payload_metadata={"role": "driver"},
+            )
+        )
+        session.add(_history(mode="user_sync", provider_resource="users"))
+
+    with motive_fleet_db() as session:
+        _ = motive_driver_contract_status(session, "org-a")
         dashboard = build_executive_dashboard(session, organization_id="org-a")
 
     assert not [item for item in dashboard.needs_attention if item.source.startswith("Motive")]
