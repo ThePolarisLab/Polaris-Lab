@@ -190,6 +190,13 @@ export default function AceControl() {
     return value ? new Date(value).toLocaleString() : "Not yet recorded";
   }
 
+  function movementDate(value) {
+    if (!value) return "—";
+    const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00` : value;
+    const parsed = new Date(normalized);
+    return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  }
+
   return (
     <section className="ace-control-page">
       <div className="ace-page-heading">
@@ -255,19 +262,19 @@ export default function AceControl() {
       <div className="ace-table-meta"><strong>{total}</strong> matching movements</div>
       <div className="ace-table-wrap">
         <table className="ace-table">
-          <thead><tr><th>In-Bond / BOL</th><th>Status</th><th>Shipper → Consignee</th><th>QP Filer</th><th>In-Bond / Manifest Carrier</th><th>Route</th><th>Exception</th></tr></thead>
+          <thead><tr><th className="ace-col-identity">In-Bond / BOL</th><th className="ace-col-status">Status</th><th className="ace-col-dates">Create / Arrive Date</th><th className="ace-col-filer">QP Filer</th><th className="ace-col-carrier">In-Bond / Manifest Carrier</th><th className="ace-col-route">Route</th><th className="ace-col-exception">Exception</th></tr></thead>
           <tbody>
             {loading && <tr><td colSpan="7">Loading ACE movements…</td></tr>}
             {!loading && items.length === 0 && <tr><td colSpan="7">No movements match these filters.</td></tr>}
             {!loading && items.map((item) => (
               <tr key={item.id} onClick={() => openMovement(item.id)} tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter") openMovement(item.id); }}>
-                <td><strong>{item.inbond_number}</strong><span>{item.bill_of_lading_number || "—"}</span></td>
-                <td><StatusPill movement={item} /></td>
-                <td><strong>{item.shipper_name || "—"}</strong><span>{item.consignee_name || "—"}</span></td>
-                <td><strong>{item.qp_filer?.code || "—"}</strong><span>{item.qp_filer?.name || "—"}</span></td>
-                <td><strong>{item.inbond_carrier?.code || "—"}</strong><span>{item.manifest_carrier?.code || "—"}</span></td>
-                <td><strong>{item.origination_port_name || "—"}</strong><span>{item.destination_port_name || "—"}</span></td>
-                <td>{item.review_reason || "—"}</td>
+                <td className="ace-col-identity"><strong>{item.inbond_number}</strong><span>{item.bill_of_lading_number || "—"}</span></td>
+                <td className="ace-col-status"><StatusPill movement={item} /></td>
+                <td className="ace-col-dates ace-date-pair"><strong>{movementDate(item.create_date)}</strong><span>{movementDate(item.arrival_date)}</span></td>
+                <td className="ace-col-filer"><strong>{item.qp_filer?.code || "—"}</strong><span>{item.qp_filer?.name || "—"}</span></td>
+                <td className="ace-col-carrier"><strong>{item.inbond_carrier?.code || "—"}</strong><span>{item.manifest_carrier?.code || "—"}</span></td>
+                <td className="ace-col-route"><strong>{item.origination_port_name || "—"}</strong><span>{item.destination_port_name || "—"}</span></td>
+                <td className="ace-col-exception">{item.review_reason || "—"}</td>
               </tr>
             ))}
           </tbody>
