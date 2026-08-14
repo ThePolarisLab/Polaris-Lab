@@ -19,7 +19,7 @@ def test_render_blueprint_removes_paid_cron_and_keeps_backend_trigger_config():
 
 def test_github_workflow_uses_only_narrow_trigger_secret_and_safe_schedule():
     workflow_text = (REPO_ROOT / ".github" / "workflows" / "ace-daily-feed.yml").read_text()
-    assert 'cron: "17 13 * * *"' in workflow_text
+    assert 'cron: "40 10-14 * * *"' in workflow_text
     assert "group: ace-daily-feed-production" in workflow_text
     assert "POLARIS_ACE_CRON_TRIGGER_SECRET" in workflow_text
     assert "DATABASE_URL" not in workflow_text
