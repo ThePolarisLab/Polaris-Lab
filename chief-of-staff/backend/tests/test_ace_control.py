@@ -19,6 +19,7 @@ from app.database.database import Base, SessionLocal, engine
 from app.identity.models import Identity, OrganizationMembership
 from app.main import app
 from app.models.ace import AceFeedRun, AceImportRun, AceInBondEvent, AceInBondMovement
+from app.models.team_note import TeamNote
 from app.organizations.models import Organization
 from app.security.providers import LocalTokenProvider
 
@@ -221,6 +222,13 @@ def test_unresolved_ace_exceptions_are_aggregated_in_daily_brief_without_raw_shi
     assert "IB-100" not in serialized
     assert "BOL-100" not in serialized
     assert "BOL-101" not in serialized
+    assert len(dashboard.daily_brief.needs_attention) == len(dashboard.needs_attention)
+    brief_ace = [item for item in dashboard.daily_brief.ace_summary if item.source == "ACE Bond Control"]
+    assert len(brief_ace) == 1
+    assert "2 Exceptions" in brief_ace[0].detail
+    assert "2 Overdue" in brief_ace[0].detail
+    assert "IB-100" not in brief_ace[0].detail
+    assert "BOL-100" not in brief_ace[0].detail
 
 
 def test_resolved_ace_exception_disappears_from_daily_brief_and_reopen_returns(client):
@@ -234,12 +242,16 @@ def test_resolved_ace_exception_disappears_from_daily_brief_and_reopen_returns(c
     resolved = client.post(f"/ace/movements/{movement_id}/resolve", headers=headers, json={"resolution_notes": "managed"})
     assert resolved.status_code == 200
     with SessionLocal() as session:
-        assert not [item for item in build_executive_dashboard(session, organization_id="org-1").needs_attention if item.source == "ACE Bond Control"]
+        dashboard = build_executive_dashboard(session, organization_id="org-1")
+        assert not [item for item in dashboard.needs_attention if item.source == "ACE Bond Control"]
+        assert not [item for item in dashboard.daily_brief.needs_attention if item.source == "ACE Bond Control"]
 
     reopened = client.post(f"/ace/movements/{movement_id}/reopen", headers=headers)
     assert reopened.status_code == 200
     with SessionLocal() as session:
-        assert [item for item in build_executive_dashboard(session, organization_id="org-1").needs_attention if item.source == "ACE Bond Control"]
+        dashboard = build_executive_dashboard(session, organization_id="org-1")
+        assert [item for item in dashboard.needs_attention if item.source == "ACE Bond Control"]
+        assert [item for item in dashboard.daily_brief.needs_attention if item.source == "ACE Bond Control"]
 
 
 def test_continuing_ace_exception_does_not_duplicate_daily_brief_attention_or_events(client):
@@ -262,6 +274,7 @@ def test_ace_feed_health_only_surfaces_actionable_daily_brief_items(client):
     with SessionLocal() as session:
         healthy = build_executive_dashboard(session, organization_id="org-1")
     assert not [item for item in healthy.needs_attention if item.source == "ACE Daily Feed"]
+    assert healthy.daily_brief.system_health == ()
 
     with SessionLocal.begin() as session:
         session.add(AceFeedRun(organization_id="org-1", mode="scheduled", status="source_contract_error", error_category="source_contract_error", completed_at=now + timedelta(minutes=5)))
@@ -271,6 +284,82 @@ def test_ace_feed_health_only_surfaces_actionable_daily_brief_items(client):
     assert len(feed_items) == 1
     assert feed_items[0].severity == "CRITICAL"
     assert "source_contract_error" in feed_items[0].detail
+    assert failed.daily_brief.system_health[0].title == "ACE daily feed failed"
+
+
+def test_daily_brief_prioritizes_critical_before_high_without_ace_flood(client):
+    headers = seed_principal()
+    client.post("/ace/movements/import", headers=headers, json=import_request("message-1", [ace_row(), ace_row(bill_of_lading_number="BOL-101")]))
+    with SessionLocal.begin() as session:
+        session.add(
+            TeamNote(
+                organization_id="org-1",
+                author="ops",
+                note_type="BLOCKER",
+                status="OPEN",
+                title="Executive blocker",
+                details="Critical management decision required.",
+            )
+        )
+
+    with SessionLocal() as session:
+        dashboard = build_executive_dashboard(session, organization_id="org-1")
+
+    assert dashboard.daily_brief.todays_priority[0].title == "Executive blocker"
+    assert len([item for item in dashboard.daily_brief.needs_attention if item.source == "ACE Bond Control"]) == 1
+
+
+def test_daily_brief_carry_forward_waiting_on_and_duplicate_prevention():
+    seed_principal()
+    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+    tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
+    with SessionLocal.begin() as session:
+        session.add(
+            TeamNote(
+                organization_id="org-1",
+                author="ops",
+                note_type="ACTION",
+                status="OPEN",
+                title="Call broker",
+                details="Confirm release timing.",
+                assigned_to="Broker",
+                due_at=tomorrow,
+                created_at=yesterday,
+            )
+        )
+        session.add(
+            TeamNote(
+                organization_id="org-1",
+                author="ops",
+                note_type="INFORMATION",
+                status="OPEN",
+                title="Accounting follow-up",
+                details="Waiting for reconciliation.",
+                assigned_to="Accountant",
+                created_at=yesterday,
+            )
+        )
+
+    with SessionLocal() as session:
+        dashboard = build_executive_dashboard(session, organization_id="org-1")
+
+    assert [item for item in dashboard.daily_brief.waiting_on if "Broker" in item.detail]
+    assert [item for item in dashboard.daily_brief.waiting_on if "Accountant" in item.detail]
+    assert not [item for item in dashboard.daily_brief.carry_forward if item.title == "Call broker"]
+
+
+def test_daily_brief_remains_organization_scoped(client):
+    org1 = seed_principal(organization_id="org-1", identity_id="identity-1")
+    seed_principal(organization_id="org-2", identity_id="identity-2")
+    client.post("/ace/movements/import", headers=org1, json=import_request("message-1", [ace_row()]))
+
+    with SessionLocal() as session:
+        org1_dashboard = build_executive_dashboard(session, organization_id="org-1")
+        org2_dashboard = build_executive_dashboard(session, organization_id="org-2")
+
+    assert [item for item in org1_dashboard.daily_brief.needs_attention if item.source == "ACE Bond Control"]
+    assert not [item for item in org2_dashboard.daily_brief.needs_attention if item.source == "ACE Bond Control"]
+    assert org2_dashboard.daily_brief.ace_summary == ()
 
 
 def test_manual_unauthorized_resolve_and_reopen_lifecycle(client):

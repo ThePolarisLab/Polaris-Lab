@@ -13,6 +13,14 @@ class DashboardPriorityResponse(BaseModel):
     reason: str
     source: str
 
+class DailyBriefResponse(BaseModel):
+    todays_priority: list[DashboardPriorityResponse]
+    needs_attention: list[DashboardItemResponse]
+    ace_summary: list[DashboardItemResponse]
+    carry_forward: list[DashboardItemResponse]
+    waiting_on: list[DashboardItemResponse]
+    system_health: list[DashboardItemResponse]
+
 class ExecutiveDashboardResponse(BaseModel):
     greeting: str
     business_status: str
@@ -26,3 +34,4 @@ class ExecutiveDashboardResponse(BaseModel):
     active_missions: int
     total_trucks: int
     recommendation: str
+    daily_brief: DailyBriefResponse
