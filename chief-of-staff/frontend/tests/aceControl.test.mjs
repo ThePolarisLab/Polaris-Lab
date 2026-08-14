@@ -18,3 +18,11 @@ test("ACE workspace exposes manual daily report import without manifest automati
 test("ACE workspace treats missing penalty indicator as unreported", () => {
   assert.match(ace, /Unreported/);
 });
+
+test("ACE movement table stacks create and arrival dates and gives exceptions a dedicated column", () => {
+  assert.match(ace, /Create \/ Arrive Date/);
+  assert.match(ace, /movementDate\(item\.create_date\)/);
+  assert.match(ace, /movementDate\(item\.arrival_date\)/);
+  assert.match(ace, /ace-col-exception/);
+  assert.doesNotMatch(ace, /<th>Shipper → Consignee<\/th>/);
+});
