@@ -35,6 +35,7 @@ from app.connectors.motive_vehicle_utilization_contract import (
 from app.database.database import SessionLocal
 from app.models.motive import MotiveDriverRecord, MotiveSyncCheckpoint, MotiveSyncHistory, MotiveVehicleRecord
 from app.motive.fleet_foundation import motive_fleet_foundation_status
+from app.motive.vehicle_contract import motive_vehicle_contract_status
 from app.organizations.models import Organization
 from app.security.dependencies import require_permission
 from app.security.models import AuthenticatedPrincipal, Permission
@@ -310,6 +311,14 @@ def motive_verification_contract(principal: AuthenticatedPrincipal = Depends(req
         "verification_endpoint": MOTIVE_VERIFICATION_ENDPOINT,
         "verification_request": {"method": "GET", "path": MOTIVE_VERIFICATION_ENDPOINT, "params": dict(MOTIVE_VERIFICATION_PARAMS), "authentication": "company_api_key_header"},
         "vehicle_sync": {"method": "GET", "path": MOTIVE_VEHICLES_ENDPOINT, "params": {"per_page": MOTIVE_VEHICLES_PER_PAGE, "page_no": "one_based"}, "manual_route": "/api/v1/motive/sync/vehicles"},
+        "fleet_vehicle_contract": {
+            "method": "GET",
+            "manual_route": "/api/v1/motive/fleet/vehicle-contract",
+            "source_endpoint": MOTIVE_VEHICLES_ENDPOINT,
+            "persistence_identity": "organization_id + provider_vehicle_id",
+            "raw_provider_payload_exposed": False,
+            "dashboard_daily_brief_attention_enabled": False,
+        },
         "user_sync": {"method": "GET", "path": MOTIVE_USERS_ENDPOINT, "params": {"per_page": MOTIVE_USERS_PER_PAGE, "page_no": "one_based"}, "manual_route": "/api/v1/motive/sync/users", "driver_classification_certified": False},
         "vehicle_utilization_contract_verification": {
             "method": "GET",
@@ -343,6 +352,16 @@ def motive_fleet_foundation(
     """Return the read-only Motive Fleet V1 production contract and persistence gate."""
     _organization(session, principal.organization_id)
     return motive_fleet_foundation_status(session, principal.organization_id)
+
+
+@router.get("/fleet/vehicle-contract")
+def motive_fleet_vehicle_contract(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Return read-only Motive vehicle field certification for Fleet Operations V1."""
+    _organization(session, principal.organization_id)
+    return motive_vehicle_contract_status(session, principal.organization_id)
 
 
 def _organization(session: Session, organization_id: str) -> Organization:

@@ -10,6 +10,7 @@ from app.dashboard.service import build_executive_dashboard
 from app.database.database import Base
 from app.models.motive import MotiveDriverRecord, MotiveSyncCheckpoint, MotiveSyncHistory, MotiveVehicleRecord
 from app.motive.fleet_foundation import motive_fleet_foundation_status
+from app.motive.vehicle_contract import motive_vehicle_contract_status
 from app.organizations.models import Organization
 from app.security.models import AuthenticatedPrincipal, Permission
 
@@ -155,3 +156,130 @@ def test_motive_fleet_foundation_does_not_create_dashboard_or_daily_brief_noise(
     assert not [item for item in dashboard.needs_attention if item.source.startswith("Motive")]
     assert not [item for item in dashboard.daily_brief.needs_attention if item.source.startswith("Motive")]
     assert not [item for item in dashboard.daily_brief.system_health if item.source.startswith("Motive")]
+
+
+def test_motive_vehicle_contract_classifies_confirmed_derived_and_deferred_fields(motive_fleet_db):
+    with motive_fleet_db.begin() as session:
+        session.add(
+            MotiveVehicleRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_vehicle_id="provider-secret-a",
+                unit_number="T-101",
+                vin="VIN-SECRET-1",
+                make="Make A",
+                model="Model A",
+                year=2024,
+                license_plate="PLATE-SECRET-1",
+                status="active",
+                provider_payload_metadata={"source_keys": ["id", "number", "vin", "make", "model", "year", "status", "unexpected_secret_value"]},
+            )
+        )
+        session.add(
+            MotiveVehicleRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_vehicle_id="provider-secret-b",
+                unit_number="T-102",
+                vin=None,
+                make="Make B",
+                model=None,
+                year=None,
+                license_plate=None,
+                status="inactive",
+                provider_payload_metadata={"source_keys": ["id", "number", "status"]},
+            )
+        )
+        session.add(
+            MotiveVehicleRecord(
+                organization_id="org-b",
+                organization_slug="org-b",
+                provider_vehicle_id="provider-secret-other",
+                unit_number="T-999",
+                vin="VIN-OTHER",
+                status="active",
+            )
+        )
+
+    with motive_fleet_db() as session:
+        contract = motive_vehicle_contract_status(session, "org-a")
+
+    assert contract["resource"] == "vehicle_contract_certification"
+    assert contract["source_endpoint"] == "/v1/vehicles"
+    assert contract["vehicle_count"] == 2
+    fields = {item["field"]: item for item in contract["field_definitions"]}
+    assert fields["provider_vehicle_id"]["classification"] == "CONFIRMED"
+    assert fields["vehicle_number"]["classification"] == "CONFIRMED"
+    assert fields["vin"]["classification"] == "CONFIRMED"
+    assert fields["make"]["classification"] == "CONFIRMED"
+    assert fields["model"]["classification"] == "CONFIRMED"
+    assert fields["year"]["classification"] == "CONFIRMED"
+    assert fields["license_plate"]["classification"] == "CONFIRMED"
+    assert fields["provider_status"]["classification"] == "CONFIRMED"
+    assert fields["observed_at"]["classification"] == "DERIVED"
+    assert fields["vehicle_active_inactive_business_state"]["classification"] == "DEFERRED"
+    assert fields["vehicle_driver_association"]["classification"] == "DEFERRED"
+    assert fields["location"]["classification"] == "DEFERRED"
+    assert fields["odometer"]["classification"] == "DEFERRED"
+    assert fields["engine_hours"]["classification"] == "DEFERRED"
+    assert fields["fuel_type"]["classification"] == "DEFERRED"
+    assert fields["metric_units"]["classification"] == "DEFERRED"
+    assert fields["license_plate_state"]["classification"] == "DEFERRED"
+    assert fields["provider_status"]["safe_for_fleet_ui"] is True
+    assert fields["provider_status"]["safe_for_dashboard_daily_brief"] is False
+    assert contract["active_inactive_semantics"]["motive_status_as_mor_business_active_state"] == "DEFERRED"
+    assert contract["vehicle_driver_association"]["classification"] == "DEFERRED"
+    assert contract["persistence"]["schema_change_required"] is False
+    assert contract["persistence"]["migration_required"] is False
+    assert contract["persistence"]["identity"] == "organization_id + provider_vehicle_id"
+
+
+def test_motive_vehicle_contract_completeness_is_tenant_scoped_and_safe(motive_fleet_db):
+    with motive_fleet_db.begin() as session:
+        session.add(MotiveVehicleRecord(organization_id="org-a", organization_slug="org-a", provider_vehicle_id="secret-a", unit_number="A", vin="VIN-A", status="active"))
+        session.add(MotiveVehicleRecord(organization_id="org-a", organization_slug="org-a", provider_vehicle_id="secret-b", unit_number="", vin=None, status=""))
+        session.add(MotiveVehicleRecord(organization_id="org-b", organization_slug="org-b", provider_vehicle_id="secret-c", unit_number="C", vin="VIN-C", status="active"))
+
+    with motive_fleet_db() as session:
+        org_a = motive_vehicle_contract_status(session, "org-a")
+        org_b = motive_vehicle_contract_status(session, "org-b")
+
+    assert org_a["completeness"]["provider_vehicle_id"] == {"total": 2, "present": 2, "percent": 100.0}
+    assert org_a["completeness"]["vehicle_number"] == {"total": 2, "present": 1, "percent": 50.0}
+    assert org_a["completeness"]["vin"] == {"total": 2, "present": 1, "percent": 50.0}
+    assert org_a["completeness"]["provider_status"] == {"total": 2, "present": 1, "percent": 50.0}
+    assert org_b["completeness"]["vehicle_number"] == {"total": 1, "present": 1, "percent": 100.0}
+    rendered = str(org_a)
+    assert "secret-a" not in rendered
+    assert "secret-b" not in rendered
+    assert "VIN-A" not in rendered
+
+
+def test_motive_vehicle_contract_route_returns_safe_read_only_payload(motive_fleet_db):
+    from app.api import motive as motive_api
+
+    with motive_fleet_db.begin() as session:
+        session.add(MotiveVehicleRecord(organization_id="org-a", organization_slug="org-a", provider_vehicle_id="provider-secret-a", unit_number="T-101"))
+
+    with motive_fleet_db() as session:
+        response = motive_api.motive_fleet_vehicle_contract(principal=_principal(), session=session)
+
+    assert response["resource"] == "vehicle_contract_certification"
+    assert response["security"]["provider_ids_exposed"] is False
+    assert response["security"]["raw_provider_payload_exposed"] is False
+    assert response["security"]["secrets_exposed"] is False
+    assert response["completeness"]["vehicle_number"]["present"] == 1
+    assert "provider-secret-a" not in str(response)
+
+
+def test_motive_vehicle_contract_does_not_create_dashboard_or_daily_brief_attention(motive_fleet_db):
+    with motive_fleet_db.begin() as session:
+        session.add(MotiveVehicleRecord(organization_id="org-a", organization_slug="org-a", provider_vehicle_id="provider-secret-a", status="active"))
+        session.add(_history())
+
+    with motive_fleet_db() as session:
+        _ = motive_vehicle_contract_status(session, "org-a")
+        dashboard = build_executive_dashboard(session, organization_id="org-a")
+
+    assert not [item for item in dashboard.needs_attention if item.source.startswith("Motive")]
+    assert not [item for item in dashboard.daily_brief.needs_attention if item.source.startswith("Motive")]

@@ -52,6 +52,14 @@ The endpoint is authenticated, organization-scoped, read-only, and returns:
 
 It does not return provider vehicle IDs, user IDs, VINs, emails, raw provider payloads, headers, secrets, or Motive API keys.
 
+## Vehicle Contract Certification
+
+`GET /api/v1/motive/fleet/vehicle-contract`
+
+The vehicle contract endpoint certifies the current `GET /v1/vehicles` persisted field subset for Fleet Operations V1. It exposes field definitions, `CONFIRMED` / `DERIVED` / `DEFERRED` classifications, organization-scoped vehicle counts, and completeness percentages for persisted fields only.
+
+See `docs/engineering/MOTIVE_VEHICLE_CONTRACT_CERTIFICATION.md`.
+
 ## Dashboard / Daily Brief Boundary
 
 Healthy or normal Motive foundation state must stay quiet. Future Motive management attention should be aggregated only after the underlying provider semantics are reliable, for example:
