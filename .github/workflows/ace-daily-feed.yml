@@ -75,7 +75,7 @@ jobs:
               CANONICAL_TIMESTAMP="${timestamp}" \
               POLARIS_ACE_CRON_TRIGGER_SECRET="${POLARIS_ACE_CRON_TRIGGER_SECRET}" \
               python -c 'import hashlib,hmac,os; body=hashlib.sha256(b"").hexdigest(); canonical="\n".join([os.environ["CANONICAL_METHOD"], os.environ["CANONICAL_PATH"], os.environ["CANONICAL_TIMESTAMP"], body]); print(hmac.new(os.environ["POLARIS_ACE_CRON_TRIGGER_SECRET"].encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest())'
-            )"
+          )"
             trigger_once response.json status.txt
             status="$(cat status.txt)"
           fi
