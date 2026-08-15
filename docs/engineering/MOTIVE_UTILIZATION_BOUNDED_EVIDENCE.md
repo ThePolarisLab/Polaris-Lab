@@ -140,7 +140,9 @@ For all three windows, Motive returned one unique selected vehicle rollup out of
 
 For the one returned vehicle slot, `metric_units` was consistent across the three windows. `idle_time`, `driving_time`, `idle_fuel`, and `driving_fuel` each matched exactly when the two single completed days were compared with the combined window. Polaris did not add `utilization` percentages. This supports the inclusive completed-date-window interpretation for the observed returned vehicle, but it is not a universal Motive provider guarantee.
 
-That single observation does not certify immutable unit selection for future writer runs. The Motive request boundary can conditionally send `X-Metric-Units` from configuration, so durable writer enablement remains blocked until Polaris fixes one canonical request-unit mode and validates that returned `metric_units` agrees with it.
+That single observation does not expose or certify the actual `metric_units` Boolean value because production diagnostics intentionally redact provider values. Separately, official Motive documentation defines `X-Metric-Units: true` as metric units, `X-Metric-Units: false` as imperial units, and the returned vehicle `metric_units` field as a Boolean unit indicator.
+
+Polaris now defines the future durable writer's canonical unit policy as `X-Metric-Units: true` / metric. This is a Polaris-owned persistence contract, not evidence of Motive's omitted-header default and not proof that earlier manual probes used metric units. Future writes must fail closed if returned `metric_units` is false, missing, or unknown; no conversion is enabled.
 
 No zero-activity-shaped rollup was observed. Missing selected vehicles remain absence evidence only; Polaris does not infer no activity, inactive vehicle state, or zero utilization from a missing provider rollup.
 

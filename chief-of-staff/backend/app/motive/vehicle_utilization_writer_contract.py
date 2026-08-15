@@ -10,6 +10,13 @@ from sqlalchemy.orm import Session
 from app.connectors.motive_vehicle_utilization import PARSER_VERSION
 from app.connectors.motive_vehicle_utilization_contract import MOTIVE_VEHICLE_UTILIZATION_ENDPOINT
 from app.models.motive import MotiveVehicleUtilizationRecord
+from app.motive.vehicle_utilization_unit_policy import (
+    MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER,
+    MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER_VALUE,
+    MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_METRIC_UNITS,
+    MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_UNIT_SYSTEM,
+    MOTIVE_VEHICLE_UTILIZATION_UNIT_CONVERSION_ENABLED,
+)
 
 
 LIVE_BOUNDED_EVIDENCE: dict[str, Any] = {
@@ -139,17 +146,15 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
                 "request_window_end",
             ],
             "provider_natural_key_returned": False,
-            "classification": "CANDIDATE_REQUIRES_CANONICAL_UNIT_POLICY",
+            "classification": "CERTIFIED_POLARIS_IDEMPOTENCY_KEY",
             "scope": "Preferred Polaris-owned idempotency key for returned, validated rollups from an explicit completed request window.",
             "prefers_internal_vehicle_fk": True,
             "migration_required_now": False,
-            "reason": "The key is not certifiable until the future writer fixes one canonical X-Metric-Units request mode and rejects replays with a different or unknown unit context.",
-            "certifiable_after": [
-                "canonical X-Metric-Units writer request mode is selected and documented",
-                "writer replays reject unit-mode changes for an existing durable window",
-                "returned metric_units agrees with the certified request-unit policy",
-                "unknown or missing unit context fails persistence readiness closed",
-            ],
+            "database_enforced": False,
+            "writer_enabled": False,
+            "persistence_enabled": False,
+            "metric_units_in_key": False,
+            "reason": "The key is certified as a Polaris-owned replay identity only when the future writer enforces the canonical metric X-Metric-Units policy and fails closed on missing or mismatched returned unit context.",
         },
         "reporting_period_status": {
             "provider_reporting_period_fields_available": False,
@@ -208,15 +213,26 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
         },
         "unit_policy": {
             "metric_units_preserved": True,
-            "writer_unit_mode_certified": False,
-            "canonical_metric_units_policy": "DEFERRED",
-            "canonical_metric_units_policy_required_before_writer_enablement": True,
+            "writer_unit_mode_certified": True,
+            "canonical_metric_units_policy": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_METRIC_UNITS,
+            "canonical_unit_system": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_UNIT_SYSTEM,
+            "canonical_request_header": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER,
+            "canonical_request_header_value": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER_VALUE,
+            "canonical_metric_units_policy_required_before_writer_enablement": False,
             "replay_unit_mode_must_not_change_for_existing_window": True,
             "returned_metric_units_must_match_certified_request_policy": True,
             "unknown_or_missing_unit_context_fails_persistence_readiness": True,
-            "unit_conversion_enabled": False,
+            "unit_conversion_enabled": MOTIVE_VEHICLE_UTILIZATION_UNIT_CONVERSION_ENABLED,
             "combine_fuel_across_different_or_unknown_unit_contexts": False,
-            "reason": "Fuel metrics must not be combined unless unit context is known and consistent; future writer enablement must fix one canonical request-unit mode instead of creating parallel metric and imperial rows.",
+            "replay_rule": [
+                "canonical requested unit mode remains metric/true for an existing durable vehicle/window identity",
+                "returned metric_units must be true",
+                "false, missing, or unknown returned unit context fails closed",
+                "never overwrite a row using a different unit context",
+                "never create a second imperial row",
+                "never convert values silently",
+            ],
+            "reason": "Future durable vehicle-utilization writes use a fixed Polaris-owned metric policy. This does not certify Motive's default behavior when the header is omitted.",
         },
         "observed_persistence_state": {
             "organization_scoped_utilization_rows": utilization_count,
@@ -238,7 +254,6 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
         },
         "remaining_blockers": [
             "exact company-configured rollup timezone must be confirmed before scheduled daily ingestion",
-            "canonical metric-units request policy must be fixed before writer enablement",
             "broad pagination behavior must be certified before ingestion beyond bounded page 1",
             "writer transaction and checkpoint advancement implementation remains disabled",
             "database uniqueness hardening may be addressed in the future writer implementation PR",
