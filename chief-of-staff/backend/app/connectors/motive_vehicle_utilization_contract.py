@@ -74,6 +74,7 @@ PROVIDER_400_SEMANTIC_FIELDS = (
 _PROVIDER_ERROR_MESSAGE_KEYS = {"error", "error_message", "errormessage", "message", "detail", "description"}
 _SCHEMA_COMPATIBLE = "compatible"
 _SCHEMA_INSUFFICIENT_IDENTITY = "insufficient_identity"
+_SCHEMA_INCOMPLETE_PROVIDER_SCHEMA = "incomplete_provider_schema"
 _SECRET_KEY_MARKERS = ("token", "secret", "authorization", "api_key", "x-api-key", "credential")
 _SENSITIVE_MESSAGE_MARKERS = _SECRET_KEY_MARKERS + (
     "bearer",
@@ -383,7 +384,12 @@ def _summarize_contract_payload(payload: Any) -> dict[str, Any]:
     pagination_keys = _safe_sorted_keys(pagination) if isinstance(pagination, dict) else []
     metrics = {metric: _metric_summary(item, metric) for metric in MOTIVE_VEHICLE_UTILIZATION_METRICS}
     unit_fields = _matching_paths(payload, _is_unit_key)
-    schema_compatibility = _schema_compatibility(vehicle_identity_paths)
+    schema_compatibility = _schema_compatibility(
+        item_container_key=item_container_key,
+        item_wrapper_key=item_wrapper_key,
+        vehicle_identity_paths=vehicle_identity_paths,
+        metrics=metrics,
+    )
     provider_returned_reporting_period_fields = bool(period_fields)
     return {
         "top_level_type": top_level_type,
@@ -418,7 +424,7 @@ def _summarize_contract_payload(payload: Any) -> dict[str, Any]:
         },
         "persistence_readiness": {
             "status": "blocked",
-            "schema_ready_for_future_writer_shape": True,
+            "schema_ready_for_future_writer_shape": schema_compatibility == _SCHEMA_COMPATIBLE,
             "writer_enabled": False,
             "persistence_enabled": False,
             "checkpoint_advancement_enabled": False,
@@ -587,9 +593,19 @@ def _value_at_path(value: Any, path: str) -> Any:
     return current
 
 
-def _schema_compatibility(vehicle_identity_paths: list[str]) -> str:
+def _schema_compatibility(
+    *,
+    item_container_key: str | None,
+    item_wrapper_key: str | None,
+    vehicle_identity_paths: list[str],
+    metrics: dict[str, dict[str, Any]],
+) -> str:
     if not vehicle_identity_paths:
         return _SCHEMA_INSUFFICIENT_IDENTITY
+    if item_container_key != "vehicle_idle_rollups" or item_wrapper_key != "vehicle_idle_rollup":
+        return _SCHEMA_INCOMPLETE_PROVIDER_SCHEMA
+    if any(not metrics.get(metric, {}).get("present") for metric in MOTIVE_VEHICLE_UTILIZATION_METRICS):
+        return _SCHEMA_INCOMPLETE_PROVIDER_SCHEMA
     return _SCHEMA_COMPATIBLE
 
 
