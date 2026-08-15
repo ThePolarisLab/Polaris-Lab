@@ -169,6 +169,8 @@ The proposed Polaris-owned idempotency boundary for returned, validated rollups 
 
 `organization_id + motive_vehicle_id + request_window_start + request_window_end`
 
+The key remains preferred, but it is not yet certified for writer enablement. The existing provider request boundary can send optional `X-Metric-Units` from `POLARIS_MOTIVE_X_METRIC_UNITS`, while unit conversion is disabled and `metric_units` is persisted. A future writer must fix one canonical request-unit mode before enabling durable writes, reject replays that would change unit mode for an existing vehicle/window, and fail closed if returned `metric_units` is missing, unknown, or inconsistent with the certified request policy. `metric_units` is not added to the durable key because Polaris should not create parallel metric and imperial rows for the same vehicle/request window.
+
 The request window remains request context. Polaris must not copy it into provider reporting-period fields because the provider item does not return reporting-period start/end fields.
 
 Scheduled daily ingestion and automatic checkpoint-window calculation remain blocked until the exact company-configured Motive rollup timezone is known. Broad ingestion remains blocked until pagination behavior is explicitly certified.

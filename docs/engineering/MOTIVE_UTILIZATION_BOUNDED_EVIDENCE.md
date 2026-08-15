@@ -140,6 +140,8 @@ For all three windows, Motive returned one unique selected vehicle rollup out of
 
 For the one returned vehicle slot, `metric_units` was consistent across the three windows. `idle_time`, `driving_time`, `idle_fuel`, and `driving_fuel` each matched exactly when the two single completed days were compared with the combined window. Polaris did not add `utilization` percentages. This supports the inclusive completed-date-window interpretation for the observed returned vehicle, but it is not a universal Motive provider guarantee.
 
+That single observation does not certify immutable unit selection for future writer runs. The Motive request boundary can conditionally send `X-Metric-Units` from configuration, so durable writer enablement remains blocked until Polaris fixes one canonical request-unit mode and validates that returned `metric_units` agrees with it.
+
 No zero-activity-shaped rollup was observed. Missing selected vehicles remain absence evidence only; Polaris does not infer no activity, inactive vehicle state, or zero utilization from a missing provider rollup.
 
 ## Security Boundary
