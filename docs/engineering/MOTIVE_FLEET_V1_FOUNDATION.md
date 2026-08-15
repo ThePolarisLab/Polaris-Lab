@@ -80,6 +80,14 @@ This does not certify MOR active/employed/available/working driver state, HOS re
 
 See `docs/engineering/MOTIVE_DRIVER_CLASSIFICATION_CERTIFICATION.md`.
 
+## Vehicle Utilization Schema Hardening
+
+The vehicle-utilization schema-hardening slice prepares the existing `motive_vehicle_utilization` table for future ingestion by adding production-observed metric columns, request-window context, parser version, and an optional reference to the existing organization-owned Motive vehicle row.
+
+This does not enable utilization ingestion, certify reporting-period semantics, advance checkpoints, create Fleet KPIs, or create Daily Brief attention.
+
+See `docs/engineering/MOTIVE_UTILIZATION_SCHEMA_HARDENING.md`.
+
 ## Dashboard / Daily Brief Boundary
 
 Healthy or normal Motive foundation state must stay quiet. Future Motive management attention should be aggregated only after the underlying provider semantics are reliable, for example:

@@ -97,6 +97,24 @@ def test_clean_sqlite_upgrade_head_starts_and_has_expected_schema(tmp_path: Path
         assert 'uq_motive_credential_org_method' in motive_constraints
         vehicle_constraints = {{constraint['name'] for constraint in inspector.get_unique_constraints('motive_vehicles')}}
         assert 'uq_motive_vehicle_org_provider' in vehicle_constraints
+        utilization_columns = {{column['name'] for column in inspector.get_columns('motive_vehicle_utilization')}}
+        assert {{
+            'motive_vehicle_id',
+            'request_window_start',
+            'request_window_end',
+            'idle_time',
+            'driving_time',
+            'idle_fuel',
+            'driving_fuel',
+            'metric_units',
+            'parser_version',
+        }}.issubset(utilization_columns)
+        utilization_foreign_keys = {{foreign_key['name'] for foreign_key in inspector.get_foreign_keys('motive_vehicle_utilization')}}
+        assert 'fk_motive_vehicle_utilization_motive_vehicle_id' in utilization_foreign_keys
+        utilization_indexes = {{index['name'] for index in inspector.get_indexes('motive_vehicle_utilization')}}
+        assert 'ix_motive_vehicle_utilization_motive_vehicle_id' in utilization_indexes
+        assert 'ix_motive_vehicle_utilization_request_window_start' in utilization_indexes
+        assert 'ix_motive_vehicle_utilization_request_window_end' in utilization_indexes
         """,
         db_url,
     )

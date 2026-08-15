@@ -166,18 +166,28 @@ class MotiveVehicleUtilizationRecord(Base):
     organization_slug: Mapped[str] = mapped_column(String, nullable=False, index=True)
     provider: Mapped[str] = mapped_column(String(60), nullable=False, default="motive", index=True)
     provider_vehicle_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    motive_vehicle_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("motive_vehicles.id"), nullable=True, index=True)
     source_endpoint: Mapped[str] = mapped_column(String(120), nullable=False, default="/v1/vehicle_utilization")
+    request_window_start: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    request_window_end: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     reporting_period_start: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     reporting_period_end: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     utilization_percent: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
+    idle_time: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    driving_time: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    idle_fuel: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    driving_fuel: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    metric_units: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     distance: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     engine_hours: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    parser_version: Mapped[str | None] = mapped_column(String(80), nullable=True)
     provider_payload_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now, nullable=False)
 
     organization = relationship("Organization")
+    motive_vehicle = relationship("MotiveVehicleRecord")
 
 
 class MotiveDriverUtilizationRecord(Base):
