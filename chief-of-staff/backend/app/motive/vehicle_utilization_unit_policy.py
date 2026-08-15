@@ -26,7 +26,9 @@ class VehicleUtilizationMetricUnitsValidation:
 
 def vehicle_utilization_writer_metric_units_header_value(metric_units: bool) -> str:
     """Return Motive's Boolean header spelling for an explicit unit mode."""
-    return "true" if metric_units is True else "false"
+    if type(metric_units) is not bool:
+        raise ValueError("Motive utilization writer metric_units must be an explicit Boolean")
+    return "true" if metric_units else "false"
 
 
 def validate_vehicle_utilization_writer_metric_units(

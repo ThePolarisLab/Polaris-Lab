@@ -523,6 +523,34 @@ def test_vehicle_utilization_request_helper_default_preserves_probe_environment_
     assert calls[0].headers["X-Metric-Units"] == "false"
 
 
+@pytest.mark.parametrize("invalid_metric_units", [1, 0, "true", "false", "metric"])
+def test_vehicle_utilization_request_helper_rejects_invalid_explicit_unit_mode_before_provider_call(
+    invalid_metric_units: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    monkeypatch.setenv("POLARIS_MOTIVE_X_METRIC_UNITS", "true")
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json=_successful_payload())
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(ValueError, match="explicit Boolean"):
+        request_vehicle_utilization_payload(
+            organization_id="org-a",
+            provider_vehicle_ids=["provider-vehicle-a"],
+            start_date=date(2026, 8, 5),
+            end_date=date(2026, 8, 6),
+            per_page=1,
+            metric_units=invalid_metric_units,  # type: ignore[arg-type]
+            http_client=client,
+        )
+
+    assert calls == []
+
+
 def test_vehicle_utilization_contract_window_uses_completed_winnipeg_days(monkeypatch: pytest.MonkeyPatch) -> None:
     observed_time_zones: list[str] = []
 

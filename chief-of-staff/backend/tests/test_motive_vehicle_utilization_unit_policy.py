@@ -39,6 +39,12 @@ def test_vehicle_utilization_explicit_metric_units_header_value(metric_units: bo
     assert vehicle_utilization_writer_metric_units_header_value(metric_units) == expected_header
 
 
+@pytest.mark.parametrize("metric_units", [1, 0, "true", "false", "metric", "imperial", []])
+def test_vehicle_utilization_explicit_metric_units_header_value_rejects_non_boolean(metric_units: object) -> None:
+    with pytest.raises(ValueError, match="explicit Boolean"):
+        vehicle_utilization_writer_metric_units_header_value(metric_units)  # type: ignore[arg-type]
+
+
 def test_vehicle_utilization_writer_metric_units_validator_accepts_true() -> None:
     result = validate_vehicle_utilization_writer_metric_units(True)
 

@@ -111,9 +111,13 @@ Current status:
 - `checkpoint_advancement_enabled = false`
 - `scheduled_sync_enabled = false`
 - `broad_sync_enabled = false`
-- `durable_identity_certified = false`
+- Polaris-owned replay/idempotency identity = `CERTIFIED`
+- provider natural key = `NOT_RETURNED` / `NOT_CERTIFIED`
+- database uniqueness enforcement = `DISABLED` / `NOT_IMPLEMENTED`
 
 The existing nullable unique constraint on `organization_id + provider_vehicle_id + reporting_period_start + reporting_period_end` is not certified as a future utilization idempotency key.
+
+The certified Polaris-owned replay identity is `organization_id + motive_vehicle_id + request_window_start + request_window_end` under the canonical writer unit policy `X-Metric-Units: true`. That certification does not enable writes, does not claim Motive returned a provider natural key, and does not add database enforcement yet.
 
 ## Still Deferred
 
@@ -122,7 +126,9 @@ The existing nullable unique constraint on `organization_id + provider_vehicle_i
 - returned-row cardinality for requested vehicles
 - no-activity vehicle behavior
 - `pagination.total` business meaning for future ingestion
-- durable natural-key / idempotency contract
+- provider natural key not returned / not certified
+- database uniqueness enforcement
+- writer transaction implementation
 - empty-result interpretation
 - conversion to one internal unit system
 - checkpoint advancement strategy
