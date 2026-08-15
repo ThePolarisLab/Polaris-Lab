@@ -234,6 +234,7 @@ def _cardinality(
         returned_unique_count = sum(1 for count in selected_counts.values() if count > 0)
         missing_count = len(selected_slots) - returned_unique_count
         pagination_total = _pagination_total_value(payloads[window_key])
+        returned_item_count = _returned_item_count(payloads[window_key])
         truncated = pagination_total is not None and pagination_total > per_page
         any_unexpected = any_unexpected or unexpected
         any_duplicate = any_duplicate or duplicate_count > 0
@@ -247,6 +248,12 @@ def _cardinality(
             "unexpected_vehicle_observed": unexpected,
             "pagination_total_present": pagination_total is not None,
             "pagination_total_count": pagination_total,
+            "returned_item_count": returned_item_count,
+            "pagination_total_equals_returned_item_count": (
+                pagination_total == returned_item_count
+                if pagination_total is not None and returned_item_count is not None
+                else "indeterminate"
+            ),
             "result_truncated_possible": truncated,
         }
     return {
@@ -348,10 +355,12 @@ def _single_selected_rollup(rollups: list[MotiveVehicleUtilizationRollup], provi
 
 
 def _metric_units_consistency(rollups: list[MotiveVehicleUtilizationRollup | None]) -> bool | str:
-    present = [rollup.metric_units for rollup in rollups if rollup is not None and rollup.metric_units is not None]
-    if not present:
+    if any(rollup is None for rollup in rollups):
         return "indeterminate"
-    return len(set(present)) == 1
+    units = [rollup.metric_units for rollup in rollups if rollup is not None]
+    if len(units) != 3 or any(unit is None for unit in units):
+        return "indeterminate"
+    return len(set(units)) == 1
 
 
 def _composition_state(
@@ -366,7 +375,7 @@ def _composition_state(
         return "indeterminate_missing_rollup"
     if combined is None:
         return "indeterminate_missing_rollup"
-    if metric in FUEL_METRICS and metric_units_consistent is False:
+    if metric in FUEL_METRICS and metric_units_consistent is not True:
         return "indeterminate_unit_mismatch"
     values = [_metric_value(rollup, metric) for rollup in (day_a, day_b, combined)]
     if any(value is None for value in values):
@@ -394,18 +403,23 @@ def _quantum(value: Decimal) -> Decimal:
 
 def _no_activity_evidence(vehicle_slots: dict[str, Any]) -> dict[str, Any]:
     zero_observed = False
-    missing_observed = False
+    missing_single_day_observed = False
+    missing_combined_observed = False
     null_observed = False
     for slot in vehicle_slots.values():
         for window_key in ("day_a", "day_b", "combined"):
             window = slot[window_key]
             zero_observed = zero_observed or bool(window["all_additive_metrics_zero"])
-            missing_observed = missing_observed or not bool(window["rollup_present"])
+            if window_key in {"day_a", "day_b"}:
+                missing_single_day_observed = missing_single_day_observed or not bool(window["rollup_present"])
+            else:
+                missing_combined_observed = missing_combined_observed or not bool(window["rollup_present"])
             null_observed = null_observed or bool(window["additive_metric_null_present"])
     return {
         "classification": "OBSERVED",
         "zero_activity_shaped_rollup_observed": zero_observed,
-        "missing_single_day_rollup_observed": missing_observed,
+        "missing_single_day_rollup_observed": missing_single_day_observed,
+        "missing_combined_window_rollup_observed": missing_combined_observed,
         "additive_metric_null_observed": null_observed,
         "no_activity_provider_semantics": "DEFERRED",
         "missing_rollup_means_no_activity": "DEFERRED",
@@ -413,18 +427,40 @@ def _no_activity_evidence(vehicle_slots: dict[str, Any]) -> dict[str, Any]:
 
 
 def _pagination_total(payloads: dict[str, Any], *, per_page: int) -> dict[str, Any]:
-    values = {window: _pagination_total_value(payload) for window, payload in payloads.items()}
-    observed = any(value is not None for value in values.values())
-    if not observed:
+    per_window = {
+        window: _pagination_window_evidence(payload, per_page=per_page)
+        for window, payload in payloads.items()
+    }
+    equality_values = [evidence["pagination_total_equals_returned_item_count"] for evidence in per_window.values()]
+    observed = any(evidence["pagination_total_present"] for evidence in per_window.values())
+    if not observed or any(value == "indeterminate" for value in equality_values):
         consistent: bool | str = "indeterminate"
+    elif any(value is False for value in equality_values):
+        consistent = False
     else:
-        consistent = all(value is None or value <= per_page for value in values.values())
+        consistent = True
     return {
         "observed": observed,
         "values_consistent_with_returned_count": consistent,
-        "result_truncated_possible": any(value is not None and value > per_page for value in values.values()),
-        "per_window": values,
+        "result_truncated_possible": any(evidence["result_truncated_possible"] for evidence in per_window.values()),
+        "per_window": per_window,
         "universal_provider_guarantee": False,
+    }
+
+
+def _pagination_window_evidence(payload: Any, *, per_page: int) -> dict[str, Any]:
+    pagination_total = _pagination_total_value(payload)
+    returned_item_count = _returned_item_count(payload)
+    return {
+        "pagination_total_present": pagination_total is not None,
+        "pagination_total_count": pagination_total,
+        "returned_item_count": returned_item_count,
+        "pagination_total_equals_returned_item_count": (
+            pagination_total == returned_item_count
+            if pagination_total is not None and returned_item_count is not None
+            else "indeterminate"
+        ),
+        "result_truncated_possible": pagination_total is not None and pagination_total > per_page,
     }
 
 
@@ -440,6 +476,15 @@ def _pagination_total_value(payload: Any) -> int | None:
     if isinstance(total, int):
         return total
     return None
+
+
+def _returned_item_count(payload: Any) -> int | None:
+    if not isinstance(payload, dict):
+        return None
+    items = payload.get("vehicle_idle_rollups")
+    if not isinstance(items, list):
+        return None
+    return len(items)
 
 
 def _timezone_evidence() -> dict[str, str]:

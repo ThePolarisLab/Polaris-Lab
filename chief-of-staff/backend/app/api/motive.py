@@ -410,7 +410,7 @@ def motive_verification_contract(principal: AuthenticatedPrincipal = Depends(req
             "dashboard_daily_brief_attention_enabled": False,
         },
         "vehicle_utilization_bounded_evidence": {
-            "method": "GET",
+            "method": "POST",
             "manual_route": "/api/v1/motive/verify/vehicle-utilization-evidence",
             "source_endpoint": MOTIVE_VEHICLE_UTILIZATION_ENDPOINT,
             "provider_calls_per_successful_run": 3,

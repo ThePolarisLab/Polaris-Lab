@@ -50,6 +50,8 @@ def _payload(
                 "metric_units": values.get("metric_units", True),
                 "vin": "VINSHOULDNOTLEAK12",
                 "number": "unit-should-not-leak",
+                "email": "driver@example.com",
+                "phone": "+15555550123",
             },
             "utilization": values.get("utilization", 50),
             "idle_time": values.get("idle_time", 0),
@@ -117,6 +119,16 @@ def test_vehicle_utilization_evidence_route_requires_connector_write() -> None:
 
     assert "/api/v1/motive/verify/vehicle-utilization-evidence" in route_paths
     assert "require_permission(Permission.CONNECTOR_WRITE)" in source
+
+
+def test_vehicle_utilization_evidence_verification_contract_metadata_matches_route() -> None:
+    route_paths = {getattr(route, "path", "") for route in motive_api.router.routes}
+    contract = motive_api.motive_verification_contract(principal=_principal(permissions=frozenset({Permission.CONNECTOR_READ})))
+    metadata = contract["vehicle_utilization_bounded_evidence"]
+
+    assert "/api/v1/motive/verify/vehicle-utilization-evidence" in route_paths
+    assert metadata["method"] == "POST"
+    assert metadata["manual_route"] == "/api/v1/motive/verify/vehicle-utilization-evidence"
 
 
 def test_vehicle_utilization_evidence_route_selects_org_vehicles_and_windows(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -270,6 +282,36 @@ def test_vehicle_utilization_evidence_indeterminate_states(monkeypatch: pytest.M
     assert metrics["idle_fuel"] == "indeterminate_unit_mismatch"
 
 
+@pytest.mark.parametrize(
+    ("metric_units", "expected_consistency", "expected_fuel_state"),
+    [
+        ((True, True, True), True, "exact_match"),
+        ((True, False, True), False, "indeterminate_unit_mismatch"),
+        ((True, None, True), "indeterminate", "indeterminate_unit_mismatch"),
+        ((None, None, None), "indeterminate", "indeterminate_unit_mismatch"),
+    ],
+)
+def test_vehicle_utilization_evidence_requires_complete_unit_context_for_fuel_comparison(
+    monkeypatch: pytest.MonkeyPatch,
+    metric_units: tuple[bool | None, bool | None, bool | None],
+    expected_consistency: bool | str,
+    expected_fuel_state: str,
+) -> None:
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    result = _run(
+        [
+            _payload({"provider-vehicle-a": {"idle_time": "1", "driving_time": "2", "idle_fuel": "3", "driving_fuel": "4", "metric_units": metric_units[0]}}),
+            _payload({"provider-vehicle-a": {"idle_time": "1", "driving_time": "2", "idle_fuel": "3", "driving_fuel": "4", "metric_units": metric_units[1]}}),
+            _payload({"provider-vehicle-a": {"idle_time": "2", "driving_time": "4", "idle_fuel": "6", "driving_fuel": "8", "metric_units": metric_units[2]}}),
+        ]
+    )
+
+    slot = result["completed_day_composition"]["vehicle_slots"]["vehicle_slot_1"]
+    assert slot["metric_units_consistent_across_windows"] == expected_consistency
+    assert slot["metrics"]["idle_fuel"] == expected_fuel_state
+    assert slot["metrics"]["driving_fuel"] == expected_fuel_state
+
+
 def test_vehicle_utilization_evidence_missing_rollups_duplicate_unexpected_and_wrong_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
     missing = _run(
@@ -316,6 +358,72 @@ def test_vehicle_utilization_evidence_missing_rollups_duplicate_unexpected_and_w
     assert wrong_envelope["error_code"] == "missing_container"
 
 
+@pytest.mark.parametrize(
+    ("total", "returned_count", "expected_equal", "expected_consistent", "expected_truncated"),
+    [
+        (3, 3, True, True, False),
+        (1, 1, True, True, False),
+        (3, 1, False, False, False),
+        (9, 1, False, False, True),
+        (None, 1, "indeterminate", "indeterminate", False),
+        ("invalid", 1, "indeterminate", "indeterminate", False),
+    ],
+)
+def test_vehicle_utilization_evidence_pagination_total_compares_to_returned_item_count(
+    monkeypatch: pytest.MonkeyPatch,
+    total: int | str | None,
+    returned_count: int,
+    expected_equal: bool | str,
+    expected_consistent: bool | str,
+    expected_truncated: bool,
+) -> None:
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    vehicles = {
+        f"provider-vehicle-{index}": {"idle_time": index, "driving_time": index, "idle_fuel": index, "driving_fuel": index}
+        for index in range(1, returned_count + 1)
+    }
+    payload = _payload(vehicles, total=total if isinstance(total, int) else None)
+    if total is None:
+        payload["pagination"].pop("total")
+    elif isinstance(total, str):
+        payload["pagination"]["total"] = total
+    calls: list[httpx.Request] = []
+
+    result = _run([payload, payload, payload], calls)
+
+    assert len(calls) == 3
+    day_a = result["pagination_total"]["per_window"]["day_a"]
+    assert day_a["returned_item_count"] == returned_count
+    assert day_a["pagination_total_equals_returned_item_count"] == expected_equal
+    assert day_a["result_truncated_possible"] is expected_truncated
+    assert result["pagination_total"]["values_consistent_with_returned_count"] == expected_consistent
+    assert result["pagination_total"]["result_truncated_possible"] is expected_truncated
+
+
+def test_vehicle_utilization_evidence_missing_rollup_flags_distinguish_single_day_and_combined(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    day_a_missing = _run([
+        _payload({}),
+        _payload({"provider-vehicle-a": {"idle_time": "1"}}),
+        _payload({"provider-vehicle-a": {"idle_time": "1"}}),
+    ])
+    day_b_missing = _run([
+        _payload({"provider-vehicle-a": {"idle_time": "1"}}),
+        _payload({}),
+        _payload({"provider-vehicle-a": {"idle_time": "1"}}),
+    ])
+    combined_missing = _run([
+        _three_payloads()[0],
+        _three_payloads()[1],
+        _payload({}),
+    ])
+
+    assert day_a_missing["no_activity_evidence"]["missing_single_day_rollup_observed"] is True
+    assert day_b_missing["no_activity_evidence"]["missing_single_day_rollup_observed"] is True
+    assert combined_missing["no_activity_evidence"]["missing_single_day_rollup_observed"] is False
+    assert combined_missing["no_activity_evidence"]["missing_combined_window_rollup_observed"] is True
+
+
 def test_vehicle_utilization_evidence_pagination_truncation_and_redaction(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
     payloads = _three_payloads()
@@ -350,9 +458,12 @@ def test_vehicle_utilization_evidence_pagination_truncation_and_redaction(monkey
         "X-API-Key",
         "X-Time-Zone",
         "X-User-Id",
+        "driver@example.com",
+        "+15555550123",
     ):
         assert unsafe not in rendered
     assert result["pagination_total"]["result_truncated_possible"] is True
+    assert result["pagination_total"]["values_consistent_with_returned_count"] is False
     assert result["cardinality"]["windows"]["day_a"]["result_truncated_possible"] is True
     assert result["security"]["provider_ids_exposed"] is False
     assert result["security"]["metric_values_exposed"] is False
