@@ -42,7 +42,13 @@ MOTIVE_VEHICLE_UTILIZATION_PERIOD_KEYS = {
     "start_timestamp",
     "timestamp",
 }
-MOTIVE_VEHICLE_UTILIZATION_TIME_ZONE = "America/Winnipeg"
+MOTIVE_VEHICLE_UTILIZATION_REQUEST_WINDOW_TIME_ZONE = "America/Winnipeg"
+"""Polaris-local calendar for choosing the temporary verification request window.
+
+This is not asserted to equal Motive's company-configured rollup timezone.
+Motive documents vehicle-utilization rollups as computed in the company's
+configured rollup timezone and not controlled by X-Time-Zone.
+"""
 PROVIDER_400_GENERIC_MESSAGE = "Provider rejected request parameters or required context."
 PROVIDER_400_MESSAGE_BY_CATEGORY = {
     "missing_user_context": "Provider requires additional authorized user context.",
@@ -67,9 +73,8 @@ PROVIDER_400_SEMANTIC_FIELDS = (
 )
 _PROVIDER_ERROR_MESSAGE_KEYS = {"error", "error_message", "errormessage", "message", "detail", "description"}
 _SCHEMA_COMPATIBLE = "compatible"
-_SCHEMA_REQUIRES_MAPPING_REVIEW = "requires_mapping_review"
 _SCHEMA_INSUFFICIENT_IDENTITY = "insufficient_identity"
-_SCHEMA_INSUFFICIENT_PERIOD = "insufficient_period"
+_SCHEMA_INCOMPLETE_PROVIDER_SCHEMA = "incomplete_provider_schema"
 _SECRET_KEY_MARKERS = ("token", "secret", "authorization", "api_key", "x-api-key", "credential")
 _SENSITIVE_MESSAGE_MARKERS = _SECRET_KEY_MARKERS + (
     "bearer",
@@ -149,7 +154,7 @@ def verify_vehicle_utilization_contract(
     finally:
         if owns_client:
             client.close()
-    summary = _summarize_contract_payload(payload, request_date=end_date)
+    summary = _summarize_contract_payload(payload)
     logger.info(
         "MOTIVE VEHICLE UTILIZATION CONTRACT VERIFY",
         extra={
@@ -363,7 +368,7 @@ def _is_safe_provider_message(message: str) -> bool:
     return True
 
 
-def _summarize_contract_payload(payload: Any, *, request_date: date) -> dict[str, Any]:
+def _summarize_contract_payload(payload: Any) -> dict[str, Any]:
     top_level_type = _json_type(payload)
     top_level_keys = _safe_sorted_keys(payload) if isinstance(payload, dict) else []
     item_container_key, items = _item_container(payload)
@@ -379,7 +384,13 @@ def _summarize_contract_payload(payload: Any, *, request_date: date) -> dict[str
     pagination_keys = _safe_sorted_keys(pagination) if isinstance(pagination, dict) else []
     metrics = {metric: _metric_summary(item, metric) for metric in MOTIVE_VEHICLE_UTILIZATION_METRICS}
     unit_fields = _matching_paths(payload, _is_unit_key)
-    schema_compatibility = _schema_compatibility(vehicle_identity_paths, period_fields, request_date=request_date)
+    schema_compatibility = _schema_compatibility(
+        item_container_key=item_container_key,
+        item_wrapper_key=item_wrapper_key,
+        vehicle_identity_paths=vehicle_identity_paths,
+        metrics=metrics,
+    )
+    provider_returned_reporting_period_fields = bool(period_fields)
     return {
         "top_level_type": top_level_type,
         "top_level_keys": top_level_keys,
@@ -398,7 +409,36 @@ def _summarize_contract_payload(payload: Any, *, request_date: date) -> dict[str
         "metrics": metrics,
         "unit_fields": unit_fields,
         "schema_compatibility": schema_compatibility,
-        "period_source_candidate": "provider_fields" if period_fields else "request_window_requires_review",
+        "provider_schema_compatibility": schema_compatibility,
+        "period_source_candidate": "provider_fields" if period_fields else "request_window_documented_summary_scope",
+        "request_window": {
+            "classification": "CONFIRMED",
+            "meaning": "provider-documented utilization summary request scope",
+            "source": "request_parameters.start_date/end_date",
+            "provider_returned_reporting_period_fields": provider_returned_reporting_period_fields,
+        },
+        "provider_reporting_period_fields": {
+            "present": provider_returned_reporting_period_fields,
+            "classification": "DEFERRED" if not provider_returned_reporting_period_fields else "CONFIRMED",
+            "reason": "The documented v1 vehicle_utilization response uses the request window as summary scope and does not require returned reporting-period fields.",
+        },
+        "persistence_readiness": {
+            "status": "blocked",
+            "schema_ready_for_future_writer_shape": schema_compatibility == _SCHEMA_COMPATIBLE,
+            "writer_enabled": False,
+            "persistence_enabled": False,
+            "checkpoint_advancement_enabled": False,
+            "scheduled_sync_enabled": False,
+            "broad_sync_enabled": False,
+            "durable_identity_certified": False,
+            "reasons": [
+                "end_date boundary behavior remains unresolved",
+                "rollup cardinality and no-activity vehicle behavior remain unresolved",
+                "exact company-configured rollup timezone value remains unresolved",
+                "durable idempotency key remains unresolved",
+                "checkpoint advancement strategy remains unresolved",
+            ],
+        },
     }
 
 
@@ -553,14 +593,20 @@ def _value_at_path(value: Any, path: str) -> Any:
     return current
 
 
-def _schema_compatibility(vehicle_identity_paths: list[str], period_fields: list[str], *, request_date: date) -> str:
+def _schema_compatibility(
+    *,
+    item_container_key: str | None,
+    item_wrapper_key: str | None,
+    vehicle_identity_paths: list[str],
+    metrics: dict[str, dict[str, Any]],
+) -> str:
     if not vehicle_identity_paths:
         return _SCHEMA_INSUFFICIENT_IDENTITY
-    if period_fields:
-        return _SCHEMA_COMPATIBLE
-    if request_date:
-        return _SCHEMA_REQUIRES_MAPPING_REVIEW
-    return _SCHEMA_INSUFFICIENT_PERIOD
+    if item_container_key != "vehicle_idle_rollups" or item_wrapper_key != "vehicle_idle_rollup":
+        return _SCHEMA_INCOMPLETE_PROVIDER_SCHEMA
+    if any(not metrics.get(metric, {}).get("present") for metric in MOTIVE_VEHICLE_UTILIZATION_METRICS):
+        return _SCHEMA_INCOMPLETE_PROVIDER_SCHEMA
+    return _SCHEMA_COMPATIBLE
 
 
 def _json_type(value: Any) -> str:

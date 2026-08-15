@@ -40,6 +40,8 @@ The next non-persistent implementation layer parses the production-observed `veh
 
 The first persistence-readiness slice hardens the existing `motive_vehicle_utilization` table additively for the production-observed metrics, optional internal vehicle FK, parser version, and request-window context. It still does not ingest utilization, populate reporting periods, advance checkpoints, enable scheduling, or certify unresolved provider semantics.
 
+The semantics-certification gate uses current official Motive documentation to classify the documented `vehicle_idle_rollups` rollup summary schema as provider-contract compatible. It certifies metric meanings (`utilization` as percent; `idle_time` and `driving_time` as seconds; fuel metrics in the provider-selected unit system) and confirms `start_date` / `end_date` as the request-window summary scope. Durable ingestion remains blocked because `end_date` boundary behavior, row cardinality/no-activity behavior, exact company rollup timezone, durable idempotency, and checkpoint advancement are still unresolved.
+
 Before broader sync is implemented, Polaris must complete design and verification for:
 
 - durable vehicle-utilization persistence mapping, identity/period semantics, units, checkpoint strategy, unknown vehicle handling, KPI interpretation, and production ingestion certification

@@ -123,6 +123,22 @@ def _empty_vehicle_idle_rollups_payload() -> dict[str, Any]:
     }
 
 
+def _result_for_payload(monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]) -> dict[str, Any]:
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    return verify_vehicle_utilization_contract(
+        organization_id="org-a",
+        provider_vehicle_ids=["provider-vehicle-secret"],
+        start_date=date(2026, 8, 5),
+        end_date=date(2026, 8, 6),
+        http_client=client,
+    )
+
+
 def _contract_error_for_response(monkeypatch: pytest.MonkeyPatch, response: httpx.Response) -> MotiveConnectorError:
     monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
     calls: list[httpx.Request] = []
@@ -224,32 +240,95 @@ def test_vehicle_utilization_contract_request_is_one_redacted_provider_call(monk
     assert result["period_fields"] == []
     assert "driving_time" not in result["period_fields"]
     assert "idle_time" not in result["period_fields"]
-    assert result["period_source_candidate"] == "request_window_requires_review"
-    assert result["schema_compatibility"] == "requires_mapping_review"
+    assert result["period_source_candidate"] == "request_window_documented_summary_scope"
+    assert result["schema_compatibility"] == "compatible"
+    assert result["provider_schema_compatibility"] == "compatible"
+    assert result["request_window"]["classification"] == "CONFIRMED"
+    assert result["request_window"]["provider_returned_reporting_period_fields"] is False
+    assert result["provider_reporting_period_fields"]["present"] is False
+    assert result["persistence_readiness"]["status"] == "blocked"
+    assert result["persistence_readiness"]["durable_identity_certified"] is False
+    assert result["persistence_readiness"]["persistence_enabled"] is False
     assert result["unit_fields"] == ["vehicle_idle_rollups[].vehicle_idle_rollup.vehicle.metric_units"]
     assert result["secrets_exposed"] is False
 
 
 def test_vehicle_utilization_contract_preserves_provider_period_and_nullability_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_legacy_payload_with_provider_period_fields())
-
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    result = verify_vehicle_utilization_contract(
-        organization_id="org-a",
-        provider_vehicle_ids=["provider-vehicle-secret"],
-        start_date=date(2026, 8, 5),
-        end_date=date(2026, 8, 6),
-        http_client=client,
-    )
+    result = _result_for_payload(monkeypatch, _legacy_payload_with_provider_period_fields())
 
     assert result["item_container_key"] == "vehicle_utilization"
     assert result["period_fields"] == ["end_date", "start_date"]
     assert result["period_source_candidate"] == "provider_fields"
-    assert result["schema_compatibility"] == "compatible"
+    assert result["schema_compatibility"] == "incomplete_provider_schema"
     assert result["metrics"]["idle_time"] == {"present": True, "type": "null", "null": True, "paths": ["idle_time"]}
+    assert result["persistence_readiness"]["status"] == "blocked"
+
+
+def test_vehicle_utilization_contract_requires_documented_production_envelope_for_compatibility(monkeypatch: pytest.MonkeyPatch) -> None:
+    result = _result_for_payload(monkeypatch, _successful_payload())
+
+    assert result["item_container_key"] == "vehicle_idle_rollups"
+    assert result["item_wrapper_key"] == "vehicle_idle_rollup"
+    assert result["vehicle_identity_paths"] == ["vehicle.id"]
+    assert result["schema_compatibility"] == "compatible"
+    assert result["provider_schema_compatibility"] == "compatible"
+    assert result["period_fields"] == []
+    assert result["period_source_candidate"] == "request_window_documented_summary_scope"
+    assert result["persistence_readiness"]["status"] == "blocked"
+
+
+def test_vehicle_utilization_contract_fails_closed_for_identity_only_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "vehicle_idle_rollups": [{"vehicle_idle_rollup": {"vehicle": {"id": "provider-vehicle-secret"}}}],
+        "pagination": {"total": 1, "page_no": 1, "per_page": 1},
+    }
+
+    result = _result_for_payload(monkeypatch, payload)
+
+    assert result["vehicle_identity_paths"] == ["vehicle.id"]
+    assert result["schema_compatibility"] == "incomplete_provider_schema"
+    assert result["provider_schema_compatibility"] == "incomplete_provider_schema"
+    assert result["persistence_readiness"]["status"] == "blocked"
+
+
+@pytest.mark.parametrize("missing_metric", ("utilization", "idle_time", "driving_time", "idle_fuel", "driving_fuel"))
+def test_vehicle_utilization_contract_fails_closed_when_required_metric_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    missing_metric: str,
+) -> None:
+    payload = _successful_payload()
+    del payload["vehicle_idle_rollups"][0]["vehicle_idle_rollup"][missing_metric]
+
+    result = _result_for_payload(monkeypatch, payload)
+
+    assert result["vehicle_identity_paths"] == ["vehicle.id"]
+    assert result["metrics"][missing_metric] == {"present": False, "type": None, "null": None, "paths": []}
+    assert result["schema_compatibility"] == "incomplete_provider_schema"
+    assert result["persistence_readiness"]["status"] == "blocked"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "vehicle_utilization": [_successful_payload()["vehicle_idle_rollups"][0]["vehicle_idle_rollup"]],
+            "pagination": {"total": 1, "page_no": 1, "per_page": 1},
+        },
+        {
+            "vehicle_idle_rollups": [{"vehicle_utilization": _successful_payload()["vehicle_idle_rollups"][0]["vehicle_idle_rollup"]}],
+            "pagination": {"total": 1, "page_no": 1, "per_page": 1},
+        },
+    ],
+)
+def test_vehicle_utilization_contract_fails_closed_for_wrong_container_or_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, Any],
+) -> None:
+    result = _result_for_payload(monkeypatch, payload)
+
+    assert result["vehicle_identity_paths"] == ["vehicle.id"]
+    assert result["schema_compatibility"] == "incomplete_provider_schema"
+    assert result["persistence_readiness"]["status"] == "blocked"
 
 
 def test_vehicle_utilization_contract_filters_unsafe_container_and_wrapper_keys(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -322,7 +401,7 @@ def test_vehicle_utilization_contract_encodes_up_to_three_vehicle_ids_in_one_req
     assert result["pagination_page_no_present"] is True
     assert result["pagination_per_page_present"] is True
     assert result["schema_compatibility"] == "insufficient_identity"
-    assert result["period_source_candidate"] == "request_window_requires_review"
+    assert result["period_source_candidate"] == "request_window_documented_summary_scope"
     rendered = json.dumps(result, sort_keys=True)
     assert "provider-vehicle-a" not in rendered
     assert "provider-vehicle-b" not in rendered

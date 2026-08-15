@@ -29,7 +29,7 @@ from app.connectors.motive_contracts import MotiveDriver, MotiveVehicle
 from app.connectors.motive_vehicle_utilization_contract import (
     MOTIVE_VEHICLE_UTILIZATION_ENDPOINT,
     MOTIVE_VEHICLE_UTILIZATION_CONTRACT_MAX_VEHICLES,
-    MOTIVE_VEHICLE_UTILIZATION_TIME_ZONE,
+    MOTIVE_VEHICLE_UTILIZATION_REQUEST_WINDOW_TIME_ZONE,
     run_vehicle_utilization_contract_verification,
 )
 from app.database.database import SessionLocal
@@ -37,6 +37,7 @@ from app.models.motive import MotiveDriverRecord, MotiveSyncCheckpoint, MotiveSy
 from app.motive.driver_contract import motive_driver_classification_status, motive_driver_contract_status
 from app.motive.fleet_foundation import motive_fleet_foundation_status
 from app.motive.vehicle_contract import motive_vehicle_contract_status
+from app.motive.vehicle_utilization_semantics import motive_vehicle_utilization_semantics_status
 from app.organizations.models import Organization
 from app.security.dependencies import require_permission
 from app.security.models import AuthenticatedPrincipal, Permission
@@ -355,6 +356,15 @@ def motive_verification_contract(principal: AuthenticatedPrincipal = Depends(req
             "max_provider_vehicles": MOTIVE_VEHICLE_UTILIZATION_CONTRACT_MAX_VEHICLES,
             "persistence_enabled": False,
         },
+        "fleet_vehicle_utilization_semantics": {
+            "method": "GET",
+            "manual_route": "/api/v1/motive/fleet/vehicle-utilization-semantics",
+            "source_endpoint": MOTIVE_VEHICLE_UTILIZATION_ENDPOINT,
+            "provider_schema_compatibility": "compatible",
+            "persistence_enabled": False,
+            "checkpoint_advancement_enabled": False,
+            "dashboard_daily_brief_attention_enabled": False,
+        },
         "oauth_runtime_enabled": False,
         "broad_sync_enabled": False,
         "production_certified": False,
@@ -404,6 +414,16 @@ def motive_fleet_driver_classification(
     return motive_driver_classification_status(session, principal.organization_id)
 
 
+@router.get("/fleet/vehicle-utilization-semantics")
+def motive_fleet_vehicle_utilization_semantics(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Return read-only Motive vehicle-utilization semantics certification."""
+    _organization(session, principal.organization_id)
+    return motive_vehicle_utilization_semantics_status(session, principal.organization_id)
+
+
 def _organization(session: Session, organization_id: str) -> Organization:
     organization = session.query(Organization).filter(Organization.id == organization_id).one_or_none()
     if organization is None:
@@ -422,7 +442,7 @@ def _vehicles_for_utilization_contract(session: Session, organization_id: str) -
 
 
 def _completed_vehicle_utilization_contract_window() -> tuple[date, date]:
-    company_today = datetime.now(ZoneInfo(MOTIVE_VEHICLE_UTILIZATION_TIME_ZONE)).date()
+    company_today = datetime.now(ZoneInfo(MOTIVE_VEHICLE_UTILIZATION_REQUEST_WINDOW_TIME_ZONE)).date()
     end_date = company_today - timedelta(days=1)
     start_date = end_date - timedelta(days=1)
     return start_date, end_date
