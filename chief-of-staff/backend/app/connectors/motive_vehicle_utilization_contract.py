@@ -110,30 +110,15 @@ def verify_vehicle_utilization_contract(
 ) -> dict[str, Any]:
     """Make exactly one read-only provider call and summarize the response schema."""
     selected_provider_vehicle_ids = [provider_vehicle_id for provider_vehicle_id in provider_vehicle_ids if provider_vehicle_id]
-    if not selected_provider_vehicle_ids:
-        raise MotiveConnectorError("Motive vehicle utilization contract verification requires a stored vehicle id", status=ConnectorStatus.FAILED, code="provider_contract_error")
-    if len(selected_provider_vehicle_ids) > MOTIVE_VEHICLE_UTILIZATION_CONTRACT_MAX_VEHICLES:
-        raise MotiveConnectorError("Motive vehicle utilization contract verification is limited to three stored vehicle ids", status=ConnectorStatus.FAILED, code="provider_contract_error")
-    params: list[tuple[str, str]] = [
-        ("vehicle_ids[]", provider_vehicle_id) for provider_vehicle_id in selected_provider_vehicle_ids
-    ]
-    params.extend(
-        [
-            ("start_date", start_date.isoformat()),
-            ("end_date", end_date.isoformat()),
-            ("per_page", str(MOTIVE_VEHICLE_UTILIZATION_CONTRACT_PARAMS["per_page"])),
-            ("page_no", str(MOTIVE_VEHICLE_UTILIZATION_CONTRACT_PARAMS["page_no"])),
-        ]
-    )
-    headers = {"Accept": "application/json", "X-API-Key": _api_key()}
-    metric_units = os.getenv("POLARIS_MOTIVE_X_METRIC_UNITS")
-    if metric_units:
-        headers["X-Metric-Units"] = metric_units
-    owns_client = http_client is None
-    client = http_client or httpx.Client(timeout=_timeout_seconds())
     try:
-        response = client.get(f"{_base_url()}{MOTIVE_VEHICLE_UTILIZATION_ENDPOINT}", params=params, headers=headers)
-        payload = _contract_json_response(response)
+        payload, http_status = request_vehicle_utilization_payload(
+            organization_id=organization_id,
+            provider_vehicle_ids=selected_provider_vehicle_ids,
+            start_date=start_date,
+            end_date=end_date,
+            per_page=MOTIVE_VEHICLE_UTILIZATION_CONTRACT_PARAMS["per_page"],
+            http_client=http_client,
+        )
     except MotiveConnectorError as exc:
         logger.info(
             "MOTIVE VEHICLE UTILIZATION CONTRACT VERIFY",
@@ -147,20 +132,13 @@ def verify_vehicle_utilization_contract(
             },
         )
         raise
-    except httpx.TimeoutException as exc:
-        raise MotiveConnectorError("Motive vehicle utilization contract request timed out", status=ConnectorStatus.FAILED, retryable=False, code="provider_timeout") from exc
-    except httpx.HTTPError as exc:
-        raise MotiveConnectorError("Motive vehicle utilization contract request failed due to a network error", status=ConnectorStatus.FAILED, retryable=False, code="network_failure") from exc
-    finally:
-        if owns_client:
-            client.close()
     summary = _summarize_contract_payload(payload)
     logger.info(
         "MOTIVE VEHICLE UTILIZATION CONTRACT VERIFY",
         extra={
             "motive_operation": "vehicle_utilization_contract_verify",
             "organization_id": organization_id,
-            "http_status": response.status_code,
+            "http_status": http_status,
             "response_type": summary["top_level_type"],
             "item_count": summary["item_count_observed"],
             "schema_compatibility": summary["schema_compatibility"],
@@ -177,12 +155,72 @@ def verify_vehicle_utilization_contract(
             "method": "GET",
             "path": MOTIVE_VEHICLE_UTILIZATION_ENDPOINT,
             "params": {"vehicle_ids[]": "[REDACTED]", "start_date": start_date.isoformat(), "end_date": end_date.isoformat(), "per_page": 1, "page_no": 1},
-            "headers": {"Accept": "application/json", "X-Metric-Units": metric_units if metric_units else None, "X-API-Key": "[REDACTED]"},
+            "headers": {"Accept": "application/json", "X-Metric-Units": _metric_units_header(), "X-API-Key": "[REDACTED]"},
             "max_provider_attempts": 1,
         },
         **summary,
         "secrets_exposed": False,
     }
+
+
+def request_vehicle_utilization_payload(
+    *,
+    organization_id: str,
+    provider_vehicle_ids: Sequence[str],
+    start_date: date,
+    end_date: date,
+    per_page: int,
+    http_client: httpx.Client | None = None,
+) -> tuple[Any, int]:
+    """Perform one no-retry vehicle-utilization provider request and return decoded JSON internally."""
+    selected_provider_vehicle_ids = [provider_vehicle_id for provider_vehicle_id in provider_vehicle_ids if provider_vehicle_id]
+    if not selected_provider_vehicle_ids:
+        raise MotiveConnectorError("Motive vehicle utilization request requires a stored vehicle id", status=ConnectorStatus.FAILED, code="provider_contract_error")
+    if len(selected_provider_vehicle_ids) > MOTIVE_VEHICLE_UTILIZATION_CONTRACT_MAX_VEHICLES:
+        raise MotiveConnectorError("Motive vehicle utilization request is limited to three stored vehicle ids", status=ConnectorStatus.FAILED, code="provider_contract_error")
+    if per_page < 1 or per_page > MOTIVE_VEHICLE_UTILIZATION_CONTRACT_MAX_VEHICLES:
+        raise MotiveConnectorError("Motive vehicle utilization request per_page is limited to the selected vehicle bound", status=ConnectorStatus.FAILED, code="provider_contract_error")
+    params: list[tuple[str, str]] = [("vehicle_ids[]", provider_vehicle_id) for provider_vehicle_id in selected_provider_vehicle_ids]
+    params.extend(
+        [
+            ("start_date", start_date.isoformat()),
+            ("end_date", end_date.isoformat()),
+            ("per_page", str(per_page)),
+            ("page_no", str(MOTIVE_VEHICLE_UTILIZATION_CONTRACT_PARAMS["page_no"])),
+        ]
+    )
+    headers = {"Accept": "application/json", "X-API-Key": _api_key()}
+    metric_units = _metric_units_header()
+    if metric_units:
+        headers["X-Metric-Units"] = metric_units
+    owns_client = http_client is None
+    client = http_client or httpx.Client(timeout=_timeout_seconds())
+    try:
+        response = client.get(f"{_base_url()}{MOTIVE_VEHICLE_UTILIZATION_ENDPOINT}", params=params, headers=headers)
+        payload = _contract_json_response(response)
+        logger.info(
+            "MOTIVE VEHICLE UTILIZATION REQUEST",
+            extra={
+                "motive_operation": "vehicle_utilization_provider_request",
+                "organization_id": organization_id,
+                "http_status": response.status_code,
+                "selected_vehicle_count": len(selected_provider_vehicle_ids),
+                "page_no": MOTIVE_VEHICLE_UTILIZATION_CONTRACT_PARAMS["page_no"],
+                "per_page": per_page,
+            },
+        )
+        return payload, response.status_code
+    except httpx.TimeoutException as exc:
+        raise MotiveConnectorError("Motive vehicle utilization request timed out", status=ConnectorStatus.FAILED, retryable=False, code="provider_timeout") from exc
+    except httpx.HTTPError as exc:
+        raise MotiveConnectorError("Motive vehicle utilization request failed due to a network error", status=ConnectorStatus.FAILED, retryable=False, code="network_failure") from exc
+    finally:
+        if owns_client:
+            client.close()
+
+
+def _metric_units_header() -> str | None:
+    return os.getenv("POLARIS_MOTIVE_X_METRIC_UNITS")
 
 
 def _contract_json_response(response: httpx.Response) -> Any:

@@ -42,6 +42,8 @@ The first persistence-readiness slice hardens the existing `motive_vehicle_utili
 
 The semantics-certification gate uses current official Motive documentation to classify the documented `vehicle_idle_rollups` rollup summary schema as provider-contract compatible. It certifies metric meanings (`utilization` as percent; `idle_time` and `driving_time` as seconds; fuel metrics in the provider-selected unit system) and confirms `start_date` / `end_date` as the request-window summary scope. Durable ingestion remains blocked because `end_date` boundary behavior, row cardinality/no-activity behavior, exact company rollup timezone, durable idempotency, and checkpoint advancement are still unresolved.
 
+The bounded evidence gate adds a separate manual read-only probe for `GET /v1/vehicle_utilization`. It selects up to three stored organization-owned vehicles and makes exactly three provider calls for day A, day B, and the combined A-through-B window. It returns only sanitized cardinality, no-activity-shape, pagination, and additive metric-composition classifications. It does not persist utilization rows, advance checkpoints, request page 2, enable scheduling, or create Dashboard / Daily Brief attention.
+
 Before broader sync is implemented, Polaris must complete design and verification for:
 
 - durable vehicle-utilization persistence mapping, identity/period semantics, units, checkpoint strategy, unknown vehicle handling, KPI interpretation, and production ingestion certification

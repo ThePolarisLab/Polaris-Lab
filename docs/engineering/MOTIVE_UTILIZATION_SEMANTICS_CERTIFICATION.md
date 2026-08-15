@@ -129,15 +129,18 @@ The existing nullable unique constraint on `organization_id + provider_vehicle_i
 - MOR business interpretation of utilization
 - alert thresholds and Fleet KPI semantics
 
-## Future Bounded Evidence Gate
+## Bounded Evidence Gate
 
-Before enabling a writer, Polaris needs a separate manual, bounded, read-only evidence gate to resolve:
+The next gate adds a separate manual endpoint:
 
-- `end_date` boundary behavior if required for durable keying
-- returned-row cardinality for requested vehicles
-- no-activity vehicle behavior
-- exact company rollup timezone
-- final durable idempotency identity
-- checkpoint advancement window
+`POST /api/v1/motive/verify/vehicle-utilization-evidence`
 
-Any future runtime probe must remain few-vehicle, few-request, sanitized, and non-persistent.
+It performs exactly three bounded provider calls against the same selected organization-owned vehicles:
+
+- day A only
+- day B only
+- combined day A through day B
+
+The probe compares only additive metrics and never adds utilization percentages.
+
+This is runtime evidence only. It remains few-vehicle, few-request, sanitized, and non-persistent. It does not certify universal provider cardinality, no-activity semantics, exact company rollup timezone, final durable idempotency identity, or checkpoint advancement.

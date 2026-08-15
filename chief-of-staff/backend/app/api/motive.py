@@ -32,6 +32,7 @@ from app.connectors.motive_vehicle_utilization_contract import (
     MOTIVE_VEHICLE_UTILIZATION_REQUEST_WINDOW_TIME_ZONE,
     run_vehicle_utilization_contract_verification,
 )
+from app.connectors.motive_vehicle_utilization_evidence import run_vehicle_utilization_bounded_evidence
 from app.database.database import SessionLocal
 from app.models.motive import MotiveDriverRecord, MotiveSyncCheckpoint, MotiveSyncHistory, MotiveVehicleRecord
 from app.motive.driver_contract import motive_driver_classification_status, motive_driver_contract_status
@@ -194,6 +195,49 @@ def verify_motive_vehicle_utilization_contract(
             "response_type": result.get("top_level_type"),
             "item_count": result.get("item_count_observed"),
             "schema_compatibility": result.get("schema_compatibility"),
+        },
+    )
+    return result
+
+
+@router.post("/verify/vehicle-utilization-evidence")
+def verify_motive_vehicle_utilization_evidence(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_WRITE)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Run a bounded three-window read-only evidence probe for Motive vehicle utilization."""
+    organization = _organization(session, principal.organization_id)
+    vehicles = _vehicles_for_utilization_contract(session, principal.organization_id)
+    if not vehicles:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "status": "failed",
+                "resource": "vehicle_utilization_bounded_evidence",
+                "error_code": "no_stored_vehicle",
+                "message": "Motive vehicle utilization evidence requires stored Motive vehicles for this organization.",
+                "provider_calls_attempted": 0,
+                "provider_calls_completed": 0,
+                "secrets_exposed": False,
+            },
+        )
+    day_a, day_b = _completed_vehicle_utilization_evidence_days()
+    result = run_vehicle_utilization_bounded_evidence(
+        organization_id=principal.organization_id,
+        organization_slug=organization.slug,
+        provider_vehicle_ids=[vehicle.provider_vehicle_id for vehicle in vehicles],
+        day_a=day_a,
+        day_b=day_b,
+    )
+    logger.info(
+        "MOTIVE VEHICLE UTILIZATION BOUNDED EVIDENCE",
+        extra={
+            "motive_operation": "vehicle_utilization_bounded_evidence",
+            "organization_id": principal.organization_id,
+            "selected_vehicle_count": result.get("request_contract", {}).get("selected_vehicle_count"),
+            "provider_calls_attempted": result.get("request_contract", {}).get("provider_calls_attempted"),
+            "provider_calls_completed": result.get("request_contract", {}).get("provider_calls_completed"),
+            "status": result.get("status"),
         },
     )
     return result
@@ -365,6 +409,17 @@ def motive_verification_contract(principal: AuthenticatedPrincipal = Depends(req
             "checkpoint_advancement_enabled": False,
             "dashboard_daily_brief_attention_enabled": False,
         },
+        "vehicle_utilization_bounded_evidence": {
+            "method": "GET",
+            "manual_route": "/api/v1/motive/verify/vehicle-utilization-evidence",
+            "source_endpoint": MOTIVE_VEHICLE_UTILIZATION_ENDPOINT,
+            "provider_calls_per_successful_run": 3,
+            "max_provider_vehicles": MOTIVE_VEHICLE_UTILIZATION_CONTRACT_MAX_VEHICLES,
+            "page_no": 1,
+            "persistence_enabled": False,
+            "checkpoint_advancement_enabled": False,
+            "dashboard_daily_brief_attention_enabled": False,
+        },
         "oauth_runtime_enabled": False,
         "broad_sync_enabled": False,
         "production_certified": False,
@@ -446,6 +501,13 @@ def _completed_vehicle_utilization_contract_window() -> tuple[date, date]:
     end_date = company_today - timedelta(days=1)
     start_date = end_date - timedelta(days=1)
     return start_date, end_date
+
+
+def _completed_vehicle_utilization_evidence_days() -> tuple[date, date]:
+    company_today = datetime.now(ZoneInfo(MOTIVE_VEHICLE_UTILIZATION_REQUEST_WINDOW_TIME_ZONE)).date()
+    day_a = company_today - timedelta(days=3)
+    day_b = company_today - timedelta(days=2)
+    return day_a, day_b
 
 
 def _latest_motive_status(session: Session, organization_id: str) -> dict[str, Any] | None:
