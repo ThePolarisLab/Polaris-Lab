@@ -33,6 +33,7 @@ from app.connectors.motive_vehicle_utilization_contract import (
     run_vehicle_utilization_contract_verification,
 )
 from app.connectors.motive_vehicle_utilization_evidence import run_vehicle_utilization_bounded_evidence
+from app.connectors.motive_vehicle_utilization_pagination import motive_vehicle_utilization_pagination_contract_status
 from app.database.database import SessionLocal
 from app.models.motive import MotiveDriverRecord, MotiveSyncCheckpoint, MotiveSyncHistory, MotiveVehicleRecord
 from app.motive.driver_contract import motive_driver_classification_status, motive_driver_contract_status
@@ -499,6 +500,19 @@ def motive_fleet_vehicle_utilization_writer_contract(
     """Return the read-only durable-writer contract for Motive vehicle utilization."""
     _organization(session, principal.organization_id)
     return motive_vehicle_utilization_writer_contract_status(session, principal.organization_id)
+
+
+@router.get("/fleet/vehicle-utilization-pagination-contract")
+def motive_fleet_vehicle_utilization_pagination_contract(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Return the read-only Motive vehicle-utilization pagination contract.
+
+    Makes ZERO Motive provider calls and ZERO database writes.
+    """
+    _organization(session, principal.organization_id)
+    return motive_vehicle_utilization_pagination_contract_status()
 
 
 def _organization(session: Session, organization_id: str) -> Organization:

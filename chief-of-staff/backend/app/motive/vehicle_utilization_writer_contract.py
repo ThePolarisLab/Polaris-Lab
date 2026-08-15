@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.connectors.motive_vehicle_utilization import PARSER_VERSION
 from app.connectors.motive_vehicle_utilization_contract import MOTIVE_VEHICLE_UTILIZATION_ENDPOINT
+from app.connectors.motive_vehicle_utilization_pagination import MOTIVE_VEHICLE_UTILIZATION_PAGINATION_CANONICAL_WRITER_PAGE_SIZE
 from app.models.motive import MotiveVehicleUtilizationRecord
 from app.motive.vehicle_utilization_unit_policy import (
     MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER,
@@ -200,7 +201,17 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
             ],
         },
         "pagination_blocker": {
-            "status": "blocked_for_broad_ingestion",
+            "status": "pagination_reader_certified_writer_still_disabled",
+            "pagination_contract_certified": True,
+            "pagination_reader_implemented": True,
+            "canonical_page_size": MOTIVE_VEHICLE_UTILIZATION_PAGINATION_CANONICAL_WRITER_PAGE_SIZE,
+            "one_based_page_progression": True,
+            "pagination_total_required": True,
+            "pagination_total_stability_required": True,
+            "duplicate_across_pages_fails_closed": True,
+            "unexpected_vehicle_fails_closed": True,
+            "pagination_persistence_enabled": False,
+            "checkpoint_advancement_enabled": False,
             "live_observation": {
                 "pagination_total_present": True,
                 "pagination_total_count": 1,
@@ -208,7 +219,7 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
                 "pagination_total_equals_returned_item_count": True,
                 "result_truncated_possible": False,
             },
-            "broad_writer_requires_explicit_pagination_contract": True,
+            "broad_writer_requires_explicit_pagination_contract": False,
             "page_2_fetch_enabled": False,
         },
         "unit_policy": {
@@ -253,10 +264,10 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
             "secrets_exposed": False,
         },
         "remaining_blockers": [
+            "database uniqueness enforcement for the durable writer identity key is not yet implemented",
+            "utilization writer transaction implementation remains disabled",
+            "checkpoint advancement implementation remains disabled",
             "exact company-configured rollup timezone must be confirmed before scheduled daily ingestion",
-            "broad pagination behavior must be certified before ingestion beyond bounded page 1",
-            "writer transaction and checkpoint advancement implementation remains disabled",
-            "database uniqueness hardening may be addressed in the future writer implementation PR",
         ],
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
