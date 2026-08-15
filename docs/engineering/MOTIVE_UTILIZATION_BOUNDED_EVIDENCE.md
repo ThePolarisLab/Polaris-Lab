@@ -144,6 +144,8 @@ That single observation does not expose or certify the actual `metric_units` Boo
 
 Polaris now defines the future durable writer's canonical unit policy as `X-Metric-Units: true` / metric. This is a Polaris-owned persistence contract, not evidence of Motive's omitted-header default and not proof that earlier manual probes used metric units. Future writes must fail closed if returned `metric_units` is false, missing, or unknown; no conversion is enabled.
 
+This bounded evidence probe is intentionally page-1-only and does not exercise broad multi-page pagination. The separate, official multi-page provider pagination contract for `GET /v1/vehicle_utilization` — including `pagination.per_page`, `pagination.page_no`, `pagination.total`, and the fail-closed completion/duplicate/unexpected-vehicle rules for a future writer — is certified in `MOTIVE_UTILIZATION_PAGINATION_CONTRACT.md`. That certification does not change this bounded probe's existing one-call-per-window, page-1-only shape.
+
 No zero-activity-shaped rollup was observed. Missing selected vehicles remain absence evidence only; Polaris does not infer no activity, inactive vehicle state, or zero utilization from a missing provider rollup.
 
 ## Security Boundary

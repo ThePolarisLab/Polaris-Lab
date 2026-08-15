@@ -200,9 +200,23 @@ def test_vehicle_utilization_writer_contract_blocks_scheduler_checkpoint_and_pag
     assert status["checkpoint_advancement_enabled"] is False
     assert status["timezone_blocker"]["exact_company_rollup_timezone_required_before_scheduled_daily_ingestion"] is True
     assert status["timezone_blocker"]["scheduled_daily_ingestion_enabled"] is False
-    assert status["pagination_blocker"]["status"] == "blocked_for_broad_ingestion"
-    assert status["pagination_blocker"]["broad_writer_requires_explicit_pagination_contract"] is True
+    assert status["pagination_blocker"]["status"] == "pagination_reader_certified_writer_still_disabled"
+    assert status["pagination_blocker"]["pagination_contract_certified"] is True
+    assert status["pagination_blocker"]["pagination_reader_implemented"] is True
+    assert status["pagination_blocker"]["canonical_page_size"] == 100
+    assert status["pagination_blocker"]["one_based_page_progression"] is True
+    assert status["pagination_blocker"]["pagination_total_required"] is True
+    assert status["pagination_blocker"]["pagination_total_stability_required"] is True
+    assert status["pagination_blocker"]["duplicate_across_pages_fails_closed"] is True
+    assert status["pagination_blocker"]["unexpected_vehicle_fails_closed"] is True
+    assert status["pagination_blocker"]["pagination_persistence_enabled"] is False
+    assert status["pagination_blocker"]["checkpoint_advancement_enabled"] is False
+    assert status["pagination_blocker"]["broad_writer_requires_explicit_pagination_contract"] is False
     assert status["pagination_blocker"]["page_2_fetch_enabled"] is False
+    assert "broad pagination behavior must be certified before ingestion beyond bounded page 1" not in status["remaining_blockers"]
+    assert "database uniqueness enforcement for the durable writer identity key is not yet implemented" in status["remaining_blockers"]
+    assert "utilization writer transaction implementation remains disabled" in status["remaining_blockers"]
+    assert "checkpoint advancement implementation remains disabled" in status["remaining_blockers"]
 
 
 def test_vehicle_utilization_writer_contract_redacts_values_and_creates_no_dashboard_noise(tmp_path) -> None:
