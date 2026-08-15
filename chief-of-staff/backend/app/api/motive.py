@@ -39,6 +39,7 @@ from app.motive.driver_contract import motive_driver_classification_status, moti
 from app.motive.fleet_foundation import motive_fleet_foundation_status
 from app.motive.vehicle_contract import motive_vehicle_contract_status
 from app.motive.vehicle_utilization_semantics import motive_vehicle_utilization_semantics_status
+from app.motive.vehicle_utilization_writer_contract import motive_vehicle_utilization_writer_contract_status
 from app.organizations.models import Organization
 from app.security.dependencies import require_permission
 from app.security.models import AuthenticatedPrincipal, Permission
@@ -420,6 +421,17 @@ def motive_verification_contract(principal: AuthenticatedPrincipal = Depends(req
             "checkpoint_advancement_enabled": False,
             "dashboard_daily_brief_attention_enabled": False,
         },
+        "fleet_vehicle_utilization_writer_contract": {
+            "method": "GET",
+            "manual_route": "/api/v1/motive/fleet/vehicle-utilization-writer-contract",
+            "source_endpoint": MOTIVE_VEHICLE_UTILIZATION_ENDPOINT,
+            "writer_enabled": False,
+            "persistence_enabled": False,
+            "checkpoint_advancement_enabled": False,
+            "scheduled_ingestion_enabled": False,
+            "provider_calls": 0,
+            "dashboard_daily_brief_attention_enabled": False,
+        },
         "oauth_runtime_enabled": False,
         "broad_sync_enabled": False,
         "production_certified": False,
@@ -477,6 +489,16 @@ def motive_fleet_vehicle_utilization_semantics(
     """Return read-only Motive vehicle-utilization semantics certification."""
     _organization(session, principal.organization_id)
     return motive_vehicle_utilization_semantics_status(session, principal.organization_id)
+
+
+@router.get("/fleet/vehicle-utilization-writer-contract")
+def motive_fleet_vehicle_utilization_writer_contract(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Return the read-only durable-writer contract for Motive vehicle utilization."""
+    _organization(session, principal.organization_id)
+    return motive_vehicle_utilization_writer_contract_status(session, principal.organization_id)
 
 
 def _organization(session: Session, organization_id: str) -> Organization:
