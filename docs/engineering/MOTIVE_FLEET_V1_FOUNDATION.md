@@ -98,6 +98,18 @@ This does not certify durable reporting-period identity, `end_date` boundary beh
 
 See `docs/engineering/MOTIVE_UTILIZATION_SEMANTICS_CERTIFICATION.md`.
 
+## Vehicle Utilization Bounded Evidence
+
+`POST /api/v1/motive/verify/vehicle-utilization-evidence`
+
+The bounded evidence endpoint is a manual, authenticated, organization-scoped, read-only probe. It selects up to three stored Motive vehicles and performs exactly three provider calls against `GET /v1/vehicle_utilization` to compare day A, day B, and the combined A-through-B window.
+
+The endpoint returns only sanitized slot labels, counts, booleans, and evidence classifications. It does not expose provider vehicle IDs, VINs, vehicle numbers, raw payloads, headers, or metric values.
+
+This does not enable utilization ingestion, write utilization records, certify durable period identity, advance checkpoints, create Fleet KPIs, or create Daily Brief attention.
+
+See `docs/engineering/MOTIVE_UTILIZATION_BOUNDED_EVIDENCE.md`.
+
 ## Dashboard / Daily Brief Boundary
 
 Healthy or normal Motive foundation state must stay quiet. Future Motive management attention should be aggregated only after the underlying provider semantics are reliable, for example:
