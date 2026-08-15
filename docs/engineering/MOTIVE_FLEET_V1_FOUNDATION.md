@@ -88,6 +88,16 @@ This does not enable utilization ingestion, certify reporting-period semantics, 
 
 See `docs/engineering/MOTIVE_UTILIZATION_SCHEMA_HARDENING.md`.
 
+## Vehicle Utilization Semantics Certification
+
+`GET /api/v1/motive/fleet/vehicle-utilization-semantics`
+
+The vehicle-utilization semantics endpoint certifies the official Motive `GET /v1/vehicle_utilization` provider schema and metric meanings for Fleet Operations V1. The documented `vehicle_idle_rollups` response is provider-schema compatible, and the request `start_date` / `end_date` values are confirmed as the provider summary request scope.
+
+This does not certify durable reporting-period identity, `end_date` boundary behavior, rollup cardinality, no-activity behavior, exact company rollup timezone, checkpoint advancement, or any Fleet KPI / Daily Brief attention.
+
+See `docs/engineering/MOTIVE_UTILIZATION_SEMANTICS_CERTIFICATION.md`.
+
 ## Dashboard / Daily Brief Boundary
 
 Healthy or normal Motive foundation state must stay quiet. Future Motive management attention should be aggregated only after the underlying provider semantics are reliable, for example:

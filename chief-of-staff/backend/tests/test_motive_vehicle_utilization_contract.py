@@ -224,8 +224,15 @@ def test_vehicle_utilization_contract_request_is_one_redacted_provider_call(monk
     assert result["period_fields"] == []
     assert "driving_time" not in result["period_fields"]
     assert "idle_time" not in result["period_fields"]
-    assert result["period_source_candidate"] == "request_window_requires_review"
-    assert result["schema_compatibility"] == "requires_mapping_review"
+    assert result["period_source_candidate"] == "request_window_documented_summary_scope"
+    assert result["schema_compatibility"] == "compatible"
+    assert result["provider_schema_compatibility"] == "compatible"
+    assert result["request_window"]["classification"] == "CONFIRMED"
+    assert result["request_window"]["provider_returned_reporting_period_fields"] is False
+    assert result["provider_reporting_period_fields"]["present"] is False
+    assert result["persistence_readiness"]["status"] == "blocked"
+    assert result["persistence_readiness"]["durable_identity_certified"] is False
+    assert result["persistence_readiness"]["persistence_enabled"] is False
     assert result["unit_fields"] == ["vehicle_idle_rollups[].vehicle_idle_rollup.vehicle.metric_units"]
     assert result["secrets_exposed"] is False
 
@@ -322,7 +329,7 @@ def test_vehicle_utilization_contract_encodes_up_to_three_vehicle_ids_in_one_req
     assert result["pagination_page_no_present"] is True
     assert result["pagination_per_page_present"] is True
     assert result["schema_compatibility"] == "insufficient_identity"
-    assert result["period_source_candidate"] == "request_window_requires_review"
+    assert result["period_source_candidate"] == "request_window_documented_summary_scope"
     rendered = json.dumps(result, sort_keys=True)
     assert "provider-vehicle-a" not in rendered
     assert "provider-vehicle-b" not in rendered
