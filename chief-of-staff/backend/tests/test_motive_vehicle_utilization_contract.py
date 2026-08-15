@@ -19,6 +19,7 @@ from app.connectors.motive_vehicle_utilization_contract import (
     MOTIVE_VEHICLE_UTILIZATION_CONTRACT_MAX_VEHICLES,
     PROVIDER_400_GENERIC_MESSAGE,
     PROVIDER_400_MESSAGE_BY_CATEGORY,
+    request_vehicle_utilization_payload,
     verify_vehicle_utilization_contract,
 )
 from app.database.database import Base
@@ -455,6 +456,99 @@ def test_vehicle_utilization_contract_preserves_optional_metric_units_without_ti
     assert "X-User-Id" not in calls[0].headers
     assert result["request_shape"]["headers"]["X-Metric-Units"] == "true"
     assert "X-Time-Zone" not in json.dumps(result["request_shape"], sort_keys=True)
+
+
+@pytest.mark.parametrize(("explicit_metric_units", "expected_header"), [(True, "true"), (False, "false")])
+def test_vehicle_utilization_request_helper_allows_explicit_writer_unit_mode(
+    explicit_metric_units: bool,
+    expected_header: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    monkeypatch.setenv("POLARIS_MOTIVE_X_METRIC_UNITS", "false" if explicit_metric_units is True else "true")
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json=_successful_payload())
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    payload, http_status = request_vehicle_utilization_payload(
+        organization_id="org-a",
+        provider_vehicle_ids=["provider-vehicle-a", "provider-vehicle-b"],
+        start_date=date(2026, 8, 5),
+        end_date=date(2026, 8, 6),
+        per_page=2,
+        metric_units=explicit_metric_units,
+        http_client=client,
+    )
+
+    assert payload == _successful_payload()
+    assert http_status == 200
+    assert len(calls) == 1
+    assert calls[0].headers["X-Metric-Units"] == expected_header
+    assert "X-Time-Zone" not in calls[0].headers
+    assert "X-User-Id" not in calls[0].headers
+    assert calls[0].headers["X-API-Key"] == "fake-motive-key"
+    assert calls[0].url.params.multi_items() == [
+        ("vehicle_ids[]", "provider-vehicle-a"),
+        ("vehicle_ids[]", "provider-vehicle-b"),
+        ("start_date", "2026-08-05"),
+        ("end_date", "2026-08-06"),
+        ("per_page", "2"),
+        ("page_no", "1"),
+    ]
+
+
+def test_vehicle_utilization_request_helper_default_preserves_probe_environment_behavior(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    monkeypatch.setenv("POLARIS_MOTIVE_X_METRIC_UNITS", "false")
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json=_successful_payload())
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    request_vehicle_utilization_payload(
+        organization_id="org-a",
+        provider_vehicle_ids=["provider-vehicle-a"],
+        start_date=date(2026, 8, 5),
+        end_date=date(2026, 8, 6),
+        per_page=1,
+        http_client=client,
+    )
+
+    assert len(calls) == 1
+    assert calls[0].headers["X-Metric-Units"] == "false"
+
+
+@pytest.mark.parametrize("invalid_metric_units", [1, 0, "true", "false", "metric"])
+def test_vehicle_utilization_request_helper_rejects_invalid_explicit_unit_mode_before_provider_call(
+    invalid_metric_units: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    monkeypatch.setenv("POLARIS_MOTIVE_X_METRIC_UNITS", "true")
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json=_successful_payload())
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(ValueError, match="explicit Boolean"):
+        request_vehicle_utilization_payload(
+            organization_id="org-a",
+            provider_vehicle_ids=["provider-vehicle-a"],
+            start_date=date(2026, 8, 5),
+            end_date=date(2026, 8, 6),
+            per_page=1,
+            metric_units=invalid_metric_units,  # type: ignore[arg-type]
+            http_client=client,
+        )
+
+    assert calls == []
 
 
 def test_vehicle_utilization_contract_window_uses_completed_winnipeg_days(monkeypatch: pytest.MonkeyPatch) -> None:

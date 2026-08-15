@@ -147,11 +147,16 @@ def test_vehicle_utilization_writer_contract_keeps_request_window_distinct_from_
 
     identity = status["request_window_identity"]
     reporting = status["reporting_period_status"]
-    assert identity["classification"] == "CANDIDATE_REQUIRES_CANONICAL_UNIT_POLICY"
+    assert identity["classification"] == "CERTIFIED_POLARIS_IDEMPOTENCY_KEY"
     assert identity["candidate_key"] == ["organization_id", "motive_vehicle_id", "request_window_start", "request_window_end"]
+    assert "metric_units" not in identity["candidate_key"]
     assert identity["provider_natural_key_returned"] is False
     assert identity["prefers_internal_vehicle_fk"] is True
     assert identity["migration_required_now"] is False
+    assert identity["database_enforced"] is False
+    assert identity["writer_enabled"] is False
+    assert identity["persistence_enabled"] is False
+    assert identity["metric_units_in_key"] is False
     assert reporting["request_window_start_end_are_context"] is True
     assert reporting["copy_request_window_to_reporting_period"] is False
     assert reporting["provider_reporting_period_fields_available"] is False
@@ -159,25 +164,30 @@ def test_vehicle_utilization_writer_contract_keeps_request_window_distinct_from_
     assert reporting["reporting_period_end"] == "DEFERRED"
 
 
-def test_vehicle_utilization_writer_contract_requires_canonical_unit_policy_before_certification(tmp_path) -> None:
+def test_vehicle_utilization_writer_contract_certifies_canonical_metric_unit_policy(tmp_path) -> None:
     TestingSession = _session_factory(tmp_path)
     with TestingSession() as session:
         status = motive_vehicle_utilization_writer_contract_status(session, "org-a")
 
     identity = status["request_window_identity"]
     unit_policy = status["unit_policy"]
-    assert identity["classification"] != "CERTIFIED_POLARIS_IDEMPOTENCY_KEY"
-    assert "canonical X-Metric-Units writer request mode is selected and documented" in identity["certifiable_after"]
-    assert "returned metric_units agrees with the certified request-unit policy" in identity["certifiable_after"]
-    assert unit_policy["writer_unit_mode_certified"] is False
-    assert unit_policy["canonical_metric_units_policy"] == "DEFERRED"
-    assert unit_policy["canonical_metric_units_policy_required_before_writer_enablement"] is True
+    assert identity["classification"] == "CERTIFIED_POLARIS_IDEMPOTENCY_KEY"
+    assert identity["database_enforced"] is False
+    assert status["writer_enabled"] is False
+    assert status["persistence_enabled"] is False
+    assert unit_policy["writer_unit_mode_certified"] is True
+    assert unit_policy["canonical_metric_units_policy"] is True
+    assert unit_policy["canonical_unit_system"] == "metric"
+    assert unit_policy["canonical_request_header"] == "X-Metric-Units"
+    assert unit_policy["canonical_request_header_value"] == "true"
+    assert unit_policy["canonical_metric_units_policy_required_before_writer_enablement"] is False
     assert unit_policy["replay_unit_mode_must_not_change_for_existing_window"] is True
     assert unit_policy["returned_metric_units_must_match_certified_request_policy"] is True
     assert unit_policy["unknown_or_missing_unit_context_fails_persistence_readiness"] is True
     assert unit_policy["unit_conversion_enabled"] is False
     assert unit_policy["combine_fuel_across_different_or_unknown_unit_contexts"] is False
-    assert "canonical metric-units request policy must be fixed before writer enablement" in status["remaining_blockers"]
+    assert "canonical metric-units request policy must be fixed before writer enablement" not in status["remaining_blockers"]
+    assert "never create a second imperial row" in unit_policy["replay_rule"]
 
 
 def test_vehicle_utilization_writer_contract_blocks_scheduler_checkpoint_and_pagination(tmp_path) -> None:

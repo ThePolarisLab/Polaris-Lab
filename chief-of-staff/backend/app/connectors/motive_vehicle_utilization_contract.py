@@ -17,6 +17,7 @@ import httpx
 
 from app.connectors.models import ConnectorStatus
 from app.connectors.motive import MOTIVE_API_BASE_URL, MotiveConnectorError, _api_key, _retry_after_seconds, _timeout_seconds
+from app.motive.vehicle_utilization_unit_policy import vehicle_utilization_writer_metric_units_header_value
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,7 @@ def request_vehicle_utilization_payload(
     start_date: date,
     end_date: date,
     per_page: int,
+    metric_units: bool | None = None,
     http_client: httpx.Client | None = None,
 ) -> tuple[Any, int]:
     """Perform one no-retry vehicle-utilization provider request and return decoded JSON internally."""
@@ -190,9 +192,9 @@ def request_vehicle_utilization_payload(
         ]
     )
     headers = {"Accept": "application/json", "X-API-Key": _api_key()}
-    metric_units = _metric_units_header()
-    if metric_units:
-        headers["X-Metric-Units"] = metric_units
+    metric_units_header = _metric_units_header(metric_units)
+    if metric_units_header:
+        headers["X-Metric-Units"] = metric_units_header
     owns_client = http_client is None
     client = http_client or httpx.Client(timeout=_timeout_seconds())
     try:
@@ -219,7 +221,9 @@ def request_vehicle_utilization_payload(
             client.close()
 
 
-def _metric_units_header() -> str | None:
+def _metric_units_header(metric_units: bool | None = None) -> str | None:
+    if metric_units is not None:
+        return vehicle_utilization_writer_metric_units_header_value(metric_units)
     return os.getenv("POLARIS_MOTIVE_X_METRIC_UNITS")
 
 
