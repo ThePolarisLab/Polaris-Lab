@@ -110,6 +110,18 @@ This does not enable utilization ingestion, write utilization records, certify d
 
 See `docs/engineering/MOTIVE_UTILIZATION_BOUNDED_EVIDENCE.md`.
 
+## Vehicle Utilization Writer Contract
+
+`GET /api/v1/motive/fleet/vehicle-utilization-writer-contract`
+
+The writer-contract endpoint is a read-only gate for future durable Motive utilization ingestion. It records the completed bounded production evidence and defines the fail-closed row policy for a future writer.
+
+Future writes are limited to returned rollups that map to exactly one existing organization-owned Motive vehicle and pass the certified parser/envelope checks. Missing requested vehicles are classified only as `provider_rollup_absent`; Polaris must not synthesize zero utilization rows, no-activity state, or inactive vehicle state from absence alone.
+
+The candidate writer identity is the preferred Polaris-owned key `organization_id + motive_vehicle_id + request_window_start + request_window_end`, but it is not yet certified for writer enablement. The future writer must first fix one canonical `X-Metric-Units` request mode; replays for an existing vehicle/window must not change unit mode, and returned `metric_units` must agree with the certified policy. Request-window dates remain distinct from provider reporting-period fields, which are still deferred because Motive did not return item-level reporting-period start/end fields.
+
+This endpoint does not call Motive, persist utilization rows, add a migration, advance checkpoints, enable scheduling, create Fleet KPIs, or create Dashboard / Daily Brief attention.
+
 ## Dashboard / Daily Brief Boundary
 
 Healthy or normal Motive foundation state must stay quiet. Future Motive management attention should be aggregated only after the underlying provider semantics are reliable, for example:

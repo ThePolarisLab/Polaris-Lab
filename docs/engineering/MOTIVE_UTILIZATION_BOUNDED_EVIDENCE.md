@@ -126,6 +126,24 @@ Still deferred:
 
 Exact company rollup timezone requires external provider setting evidence from Motive company/admin configuration.
 
+## Completed Bounded Production Evidence
+
+The completed bounded production run selected three stored organization-owned vehicles and made exactly three provider calls: day A, day B, and the combined A-through-B window. Each call used `page_no=1`, `per_page=3`, one attempt, no retry, no persistence, and no checkpoint mutation.
+
+Observed windows:
+
+- day A: `2026-08-12` to `2026-08-12`
+- day B: `2026-08-13` to `2026-08-13`
+- combined: `2026-08-12` to `2026-08-13`
+
+For all three windows, Motive returned one unique selected vehicle rollup out of the three requested vehicles. Two selected vehicles were absent, no duplicate selected rollups were observed, no unexpected vehicle was observed, `pagination.total` was present and equal to returned item count `1`, and no bounded truncation was observed.
+
+For the one returned vehicle slot, `metric_units` was consistent across the three windows. `idle_time`, `driving_time`, `idle_fuel`, and `driving_fuel` each matched exactly when the two single completed days were compared with the combined window. Polaris did not add `utilization` percentages. This supports the inclusive completed-date-window interpretation for the observed returned vehicle, but it is not a universal Motive provider guarantee.
+
+That single observation does not certify immutable unit selection for future writer runs. The Motive request boundary can conditionally send `X-Metric-Units` from configuration, so durable writer enablement remains blocked until Polaris fixes one canonical request-unit mode and validates that returned `metric_units` agrees with it.
+
+No zero-activity-shaped rollup was observed. Missing selected vehicles remain absence evidence only; Polaris does not infer no activity, inactive vehicle state, or zero utilization from a missing provider rollup.
+
 ## Security Boundary
 
 The public response must not expose:

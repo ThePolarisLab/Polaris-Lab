@@ -144,3 +144,33 @@ It performs exactly three bounded provider calls against the same selected organ
 The probe compares only additive metrics and never adds utilization percentages.
 
 This is runtime evidence only. It remains few-vehicle, few-request, sanitized, and non-persistent. It does not certify universal provider cardinality, no-activity semantics, exact company rollup timezone, final durable idempotency identity, or checkpoint advancement.
+
+## Durable Writer Contract Gate
+
+The next gate adds a read-only writer-contract endpoint:
+
+`GET /api/v1/motive/fleet/vehicle-utilization-writer-contract`
+
+This endpoint records the completed bounded production evidence and defines the fail-closed contract a future durable writer must follow. It does not enable the writer, persist utilization rows, advance checkpoints, schedule ingestion, request Motive, or create Dashboard / Daily Brief attention.
+
+The future writer may persist only returned Motive rollups that:
+
+- use the certified `vehicle_idle_rollups[] -> vehicle_idle_rollup` envelope;
+- map `vehicle.id` to exactly one existing organization-owned `motive_vehicles` row;
+- were included in the authenticated organization's requested vehicle set;
+- pass certified metric parser validation;
+- are not duplicate returned rollups for the same vehicle and request window;
+- are not unexpected vehicles;
+- have complete pagination for the writer's requested page set.
+
+Missing requested vehicles remain classified as `provider_rollup_absent`. Absence must not synthesize a utilization row, zero metrics, inactive state, or no-activity classification.
+
+The proposed Polaris-owned idempotency boundary for returned, validated rollups is:
+
+`organization_id + motive_vehicle_id + request_window_start + request_window_end`
+
+The key remains preferred, but it is not yet certified for writer enablement. The existing provider request boundary can send optional `X-Metric-Units` from `POLARIS_MOTIVE_X_METRIC_UNITS`, while unit conversion is disabled and `metric_units` is persisted. A future writer must fix one canonical request-unit mode before enabling durable writes, reject replays that would change unit mode for an existing vehicle/window, and fail closed if returned `metric_units` is missing, unknown, or inconsistent with the certified request policy. `metric_units` is not added to the durable key because Polaris should not create parallel metric and imperial rows for the same vehicle/request window.
+
+The request window remains request context. Polaris must not copy it into provider reporting-period fields because the provider item does not return reporting-period start/end fields.
+
+Scheduled daily ingestion and automatic checkpoint-window calculation remain blocked until the exact company-configured Motive rollup timezone is known. Broad ingestion remains blocked until pagination behavior is explicitly certified.
