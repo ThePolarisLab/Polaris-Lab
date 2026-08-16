@@ -68,6 +68,12 @@ _CONTROLLED_WRITE_WRITER_ERROR_CODES = {
     "request_window_missing",
     "parser_version_not_certified",
     "source_endpoint_not_certified",
+    # Returned provider unit-indicator semantics are unresolved (see
+    # vehicle_utilization_unit_policy.py); this is a Polaris-side readiness
+    # gate, not a provider protocol failure, so it maps alongside the other
+    # writer-originated fail-closed codes rather than a gateway/provider code.
+    "provider_unit_indicator_semantics_unresolved",
+    "provider_unit_context_invalid_type",
 }
 
 

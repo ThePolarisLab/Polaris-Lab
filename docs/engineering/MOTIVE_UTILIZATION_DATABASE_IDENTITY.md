@@ -161,3 +161,14 @@ gate only.
 > it calls the writer transaction for the fixed historical day `2026-08-13`.
 > No schema change was required for that gate — see
 > `MOTIVE_UTILIZATION_CONTROLLED_WRITE_VALIDATION.md`.
+
+> **Confirmed unchanged by the unit-context reconciliation gate
+> (2026-08-16).** The one real controlled production validation of that
+> route (see `MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md`) failed at the
+> unit-context readiness step, before any row would have been staged. This
+> identity — `organization_id + motive_vehicle_id + request_window_start +
+> request_window_end` — remains exactly as certified here: no `metric_units`,
+> no parser version, no source endpoint, and no `provider_vehicle_id` were
+> added to it, and no migration was made. It remains the correct identity for
+> Motive's recommended vehicle + normalized date-range synchronization model
+> (Motive Support's 2026-08-12 written clarification item 12).

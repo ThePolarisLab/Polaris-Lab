@@ -42,6 +42,7 @@ from app.models.motive import (
     MotiveVehicleUtilizationRecord,
 )
 from app.motive import vehicle_utilization_writer as writer_module
+from app.motive.vehicle_utilization_unit_policy import VehicleUtilizationUnitPersistenceReadiness
 from app.motive.vehicle_utilization_writer import (
     CERTIFIED_PARSER_VERSION,
     CERTIFIED_SOURCE_ENDPOINT,
@@ -57,6 +58,36 @@ WINDOW_START = date(2026, 8, 12)
 WINDOW_END = date(2026, 8, 13)
 
 UNSAFE_PROVIDER_VEHICLE_ID = "provider-vehicle-should-not-leak-9911"
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-16 unit-context reconciliation gate.
+#
+# Motive's returned vehicle.metric_units Boolean semantics are now unresolved
+# (see app/motive/vehicle_utilization_unit_policy.py): the writer's step-6
+# unit-context readiness gate fails closed for EVERY returned value -- True
+# included -- until that relationship is explicitly certified. The dedicated
+# unit-readiness tests below (marked ``unit_readiness_gate``) exercise that
+# real, fail-closed behavior directly.
+#
+# The rest of this suite tests batching, tenancy, replay, and provenance
+# concerns that are orthogonal to unit-indicator semantics. Those tests are
+# transparently bypassed past the still-unresolved unit gate below so they
+# can keep exercising the specific step (duplicate detection, tenant
+# resolution, parser/source provenance, replay conflict, whole-batch
+# rollback, database-uniqueness) they were written to prove.
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _bypass_unresolved_unit_gate_for_unrelated_concerns(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    if request.node.get_closest_marker("unit_readiness_gate") is not None:
+        yield
+        return
+    monkeypatch.setattr(
+        writer_module,
+        "validate_vehicle_utilization_unit_persistence_readiness",
+        lambda returned_metric_units: VehicleUtilizationUnitPersistenceReadiness(ready_for_durable_persistence=True),
+    )
+    yield
 
 
 def _session_factory(tmp_path, name: str = "writer"):
@@ -494,9 +525,39 @@ def test_duplicate_returned_rollup_fails_closed_no_dedup(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 38 — unit policy.
+# Section 38 — unit policy (2026-08-16: redesigned persistence-readiness
+# gate). True, False, and None all currently fail closed with the SAME
+# neutral "unresolved" code -- none of these tests may assert or imply what
+# a returned False or None *means*.
 # ---------------------------------------------------------------------------
-def test_metric_units_false_fails_closed(tmp_path) -> None:
+@pytest.mark.unit_readiness_gate
+def test_metric_units_true_does_not_automatically_certify_and_fails_closed(tmp_path) -> None:
+    """Returned True must never be treated as automatically certified --
+    zero rows are written even though the returned Boolean matches the
+    requested Boolean."""
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1",))
+
+    with TestingSession() as session:
+        with pytest.raises(MotiveVehicleUtilizationWriterError) as exc_info:
+            write_vehicle_utilization_transaction(
+                session,
+                organization_id="org-a",
+                organization_slug="org-a",
+                selected_provider_vehicle_ids=["veh-1"],
+                request_window_start=WINDOW_START,
+                request_window_end=WINDOW_END,
+                rollups=[_rollup("veh-1", metric_units=True)],
+            )
+    assert exc_info.value.code == "provider_unit_indicator_semantics_unresolved"
+    assert _row_count(TestingSession) == 0
+
+
+@pytest.mark.unit_readiness_gate
+def test_metric_units_false_fails_closed_without_being_interpreted_as_imperial(tmp_path) -> None:
+    """Returned False fails closed using the SAME neutral code as True and
+    None -- it is never interpreted as imperial or as evidence the header
+    was ignored."""
     TestingSession = _session_factory(tmp_path)
     _seed(TestingSession, provider_vehicle_ids=("veh-1",))
 
@@ -511,11 +572,12 @@ def test_metric_units_false_fails_closed(tmp_path) -> None:
                 request_window_end=WINDOW_END,
                 rollups=[_rollup("veh-1", metric_units=False)],
             )
-    assert exc_info.value.code == "provider_unit_policy_mismatch"
+    assert exc_info.value.code == "provider_unit_indicator_semantics_unresolved"
     assert _row_count(TestingSession) == 0
 
 
-def test_metric_units_none_fails_closed(tmp_path) -> None:
+@pytest.mark.unit_readiness_gate
+def test_metric_units_none_remains_unresolved_and_fails_closed(tmp_path) -> None:
     TestingSession = _session_factory(tmp_path)
     _seed(TestingSession, provider_vehicle_ids=("veh-1",))
 
@@ -530,7 +592,55 @@ def test_metric_units_none_fails_closed(tmp_path) -> None:
                 request_window_end=WINDOW_END,
                 rollups=[_rollup("veh-1", metric_units=None)],
             )
-    assert exc_info.value.code == "provider_unit_context_missing"
+    assert exc_info.value.code == "provider_unit_indicator_semantics_unresolved"
+    assert _row_count(TestingSession) == 0
+
+
+@pytest.mark.unit_readiness_gate
+def test_no_returned_unit_value_is_ready_for_durable_persistence_in_this_gate(tmp_path) -> None:
+    """Writer persists zero rows in this state, for every observed returned
+    value, no checkpoint/history writes either way."""
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2", "veh-3"))
+    checkpoints_before, history_before = _checkpoint_and_history_counts(TestingSession)
+
+    for provider_vehicle_id, metric_units in (("veh-1", True), ("veh-2", False), ("veh-3", None)):
+        with TestingSession() as session:
+            with pytest.raises(MotiveVehicleUtilizationWriterError) as exc_info:
+                write_vehicle_utilization_transaction(
+                    session,
+                    organization_id="org-a",
+                    organization_slug="org-a",
+                    selected_provider_vehicle_ids=[provider_vehicle_id],
+                    request_window_start=WINDOW_START,
+                    request_window_end=WINDOW_END,
+                    rollups=[_rollup(provider_vehicle_id, metric_units=metric_units)],
+                )
+        assert exc_info.value.code == "provider_unit_indicator_semantics_unresolved"
+
+    assert _row_count(TestingSession) == 0
+    checkpoints_after, history_after = _checkpoint_and_history_counts(TestingSession)
+    assert checkpoints_after == checkpoints_before
+    assert history_after == history_before
+
+
+@pytest.mark.unit_readiness_gate
+def test_malformed_returned_unit_type_fails_closed_with_a_distinct_code(tmp_path) -> None:
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1",))
+
+    with TestingSession() as session:
+        with pytest.raises(MotiveVehicleUtilizationWriterError) as exc_info:
+            write_vehicle_utilization_transaction(
+                session,
+                organization_id="org-a",
+                organization_slug="org-a",
+                selected_provider_vehicle_ids=["veh-1"],
+                request_window_start=WINDOW_START,
+                request_window_end=WINDOW_END,
+                rollups=[_rollup("veh-1", metric_units="metric-value-should-not-retain")],
+            )
+    assert exc_info.value.code == "provider_unit_context_invalid_type"
     assert _row_count(TestingSession) == 0
 
 

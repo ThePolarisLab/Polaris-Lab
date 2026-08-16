@@ -336,3 +336,56 @@ gate reuses this transaction **unchanged** for one fixed historical day
 (`2026-08-13`), with at most one Motive provider call per invocation. It does
 not modify anything documented above; see that document for the full
 controlled-route contract.
+
+## Update: Unit-Context Reconciliation Gate (2026-08-16)
+
+A real controlled production execution of the route above failed safely:
+Motive returned one rollup whose `vehicle.metric_units` did not equal the
+requested `True`. See `MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md` for the
+full sanitized evidence.
+
+Step 6 of the transaction contract above ("validate the canonical unit
+policy ... `True` accepted, `False`/`None`/unknown fail closed") is now:
+
+> validate durable unit-context **persistence readiness**
+> (`validate_vehicle_utilization_unit_persistence_readiness` in
+> `vehicle_utilization_unit_policy.py`) — until Motive's returned
+> `vehicle.metric_units` Boolean semantics are explicitly certified,
+> **every** returned value fails closed, `True` included, with the neutral
+> code `provider_unit_indicator_semantics_unresolved`. A malformed
+> (non-Boolean, non-`None`) value fails closed separately with
+> `provider_unit_context_invalid_type`.
+
+This means `write_vehicle_utilization_transaction` currently rejects every
+incoming rollup at step 6 regardless of its `metric_units` value — this is
+intentional hardening, not a defect: no fuel-bearing rollup may be durably
+persisted while the returned unit-indicator semantics remain unresolved.
+The transaction's other validation steps (batching, tenancy, replay,
+provenance) are otherwise unchanged; `tests/test_motive_vehicle_utilization_writer_transaction.py`
+exercises them in isolation from the unit-readiness gate via an explicit,
+marker-controlled bypass fixture, and separately proves the real
+fail-closed unit-readiness behavior for `True`, `False`, `None`, and
+malformed returned values.
+
+The error-code list above is superseded for the unit-context codes:
+`provider_unit_policy_mismatch` / `provider_unit_context_missing` are
+retired from new writer output (they remain in the sanitized, static,
+already-executed production evidence record only — see
+`PRODUCTION_WRITE_VALIDATION_EVIDENCE` in
+`vehicle_utilization_writer_contract.py`) in favor of the single neutral
+`provider_unit_indicator_semantics_unresolved` code plus
+`provider_unit_context_invalid_type` for malformed values.
+
+The replay/mutability contract classification also changes: conflicting
+historical values are no longer classified as inherently invalid, because
+Motive has confirmed completed rollups may later differ slightly. The
+**runtime** replay behavior documented above (identical → unchanged,
+conflicting → fail closed, updates disabled) is unchanged in this gate; only
+the contract classification is now
+`TEMPORARY_FAIL_CLOSED_PENDING_RECONCILIATION_POLICY`
+(`historical_rollup_mutability` in `vehicle_utilization_writer_contract.py`).
+A future, separately-authorized gate must design controlled historical
+refresh/upsert semantics before broad scheduled ingestion; this gate adds no
+version table, no audit-history schema, and changes no existing durable row.
+
+See `MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md` for the full reconciliation.

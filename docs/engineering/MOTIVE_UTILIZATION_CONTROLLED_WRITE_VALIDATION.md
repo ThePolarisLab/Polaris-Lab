@@ -116,8 +116,13 @@ Strict, fail-closed validation before any write is attempted:
 - the returned, certified-parser-validated item count must equal
   `pagination.total`;
 - no duplicate returned vehicle;
-- no vehicle outside the selected set;
-- every returned rollup's `metric_units` must be exactly `True`.
+- no vehicle outside the selected set.
+
+> **2026-08-16 update:** the read stage no longer performs its own
+> returned-`metric_units` check here (see "Update: Unit-Context
+> Reconciliation Gate" below) — that is now the writer transaction's
+> persistence-readiness gate, which fails closed on every returned value
+> (`True` included) until Motive's semantics are explicitly certified.
 
 Any violation fails the whole invocation closed with **zero** durable writes,
 **zero** checkpoint writes, and **zero** sync-history writes. No page 2 is
@@ -208,6 +213,11 @@ controlled_manual_write_validation:
   scheduled_ingestion_enabled: false
 ```
 
+> **Superseded 2026-08-16.** `production_validation_executed` is no longer
+> `false` — the route was actually run against production and failed
+> safely. See "Update: Unit-Context Reconciliation Gate" below for the
+> current, precise, sanitized shape of this block.
+
 `production_validation_executed` stays `false` until this route is actually
 run against production and evidence is captured — implementation and tests
 existing is not sufficient to flip it. The top-level `writer_enabled` and
@@ -261,3 +271,44 @@ This gate makes zero live Motive provider calls anywhere in its
 implementation or test suite. All provider interaction in tests is mocked
 via `httpx.MockTransport`. The production validation run itself is
 explicitly deferred to a separate, later step after this PR merges.
+
+## Update: Unit-Context Reconciliation Gate (2026-08-16)
+
+A real, controlled production validation was executed against this exact
+route after this gate merged. It failed safely: `provider_calls_completed
+= 1`, `returned_rollup_count = 1`, `records_inserted = 0`. See
+`MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md` for the full sanitized
+evidence and the resulting policy downgrade.
+
+As a result:
+
+- `production_validation_executed` is no longer `false`. It is now a
+  precise, sanitized, static state
+  (`production_validation_succeeded`, `production_validation_persisted_rows`,
+  `production_validation_failure_stage`, `production_validation_provider_calls`,
+  `production_validation_returned_rollups`, `production_validation_error_code`,
+  `production_validation_safe_failure`) recorded in
+  `app/motive/vehicle_utilization_writer_contract.py`.
+- The read stage's own `every returned rollup's metric_units must be
+  exactly True` pre-check (formerly the last bullet in the "One-Page,
+  One-Call Contract" strict-validation list above) has been **removed**.
+  Provider schema parse success is now explicitly distinct from durable
+  persistence readiness: the parser preserves the returned Boolean as
+  observed context, and the merged writer transaction's persistence-
+  readiness gate is the single place that fails closed on unresolved
+  returned unit-indicator semantics, before any commit. The controlled
+  route's net behavior is unchanged (zero durable writes when the unit
+  context is not ready) -- only which step raises, and under which code,
+  changed.
+- Every returned unit-indicator value -- `True`, `False`, or `None` --
+  currently fails closed with the neutral code
+  `provider_unit_indicator_semantics_unresolved` (a structurally malformed
+  value fails closed separately with `provider_unit_context_invalid_type`).
+  This is a strengthening, not a relaxation: it does not accept `False`,
+  and it does not claim `True` is certified either.
+- The feature flag remains disabled by default and was not enabled during
+  this reconciliation gate's implementation or tests.
+
+See `MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md` and the updated "Unit
+Policy" sections of `MOTIVE_UTILIZATION_WRITER_TRANSACTION.md` for the full
+downgraded contract.
