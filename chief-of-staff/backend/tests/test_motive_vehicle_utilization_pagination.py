@@ -350,26 +350,33 @@ def test_unexpected_vehicle_fails_closed(monkeypatch: pytest.MonkeyPatch) -> Non
     assert exc.value.code == "unexpected_vehicle_observed"
 
 
-def test_metric_units_false_on_later_page_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_metric_units_false_on_later_page_is_preserved_as_observed_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provider schema parse success is distinct from durable persistence
+    readiness (see app.motive.vehicle_utilization_unit_policy). This
+    read-only reader does not gate on the returned metric_units Boolean; it
+    preserves whatever Motive returned. A future writer's persistence-
+    readiness gate is responsible for the unresolved-semantics fail-closed
+    behavior, not this reader.
+    """
     monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
     pages = [
         _page([_rollup("vehicle-a")], page_no=1, per_page=1, total=2),
         _page([_rollup("vehicle-b", metric_units=False)], page_no=2, per_page=1, total=2),
     ]
-    with pytest.raises(MotiveVehicleUtilizationPaginationError) as exc:
-        _read(pages, per_page=1, vehicle_ids=["vehicle-a", "vehicle-b"])
-    assert exc.value.code == "provider_unit_policy_mismatch"
+    result = _read(pages, per_page=1, vehicle_ids=["vehicle-a", "vehicle-b"])
+    metric_units_by_vehicle = {rollup.provider_vehicle_id: rollup.metric_units for rollup in result.rollups}
+    assert metric_units_by_vehicle == {"vehicle-a": True, "vehicle-b": False}
 
 
-def test_metric_units_none_on_later_page_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_metric_units_none_on_later_page_is_preserved_as_observed_context(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
     pages = [
         _page([_rollup("vehicle-a")], page_no=1, per_page=1, total=2),
         _page([_rollup("vehicle-b", metric_units=None)], page_no=2, per_page=1, total=2),
     ]
-    with pytest.raises(MotiveVehicleUtilizationPaginationError) as exc:
-        _read(pages, per_page=1, vehicle_ids=["vehicle-a", "vehicle-b"])
-    assert exc.value.code == "provider_unit_context_missing"
+    result = _read(pages, per_page=1, vehicle_ids=["vehicle-a", "vehicle-b"])
+    metric_units_by_vehicle = {rollup.provider_vehicle_id: rollup.metric_units for rollup in result.rollups}
+    assert metric_units_by_vehicle == {"vehicle-a": True, "vehicle-b": None}
 
 
 def test_parser_failure_on_page_2_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:

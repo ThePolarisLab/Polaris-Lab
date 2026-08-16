@@ -39,7 +39,6 @@ from app.connectors.motive_vehicle_utilization_contract import (
 )
 from app.motive.vehicle_utilization_unit_policy import (
     MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_METRIC_UNITS,
-    validate_vehicle_utilization_writer_metric_units,
     vehicle_utilization_writer_metric_units_header_value,
 )
 
@@ -370,12 +369,15 @@ def read_vehicle_utilization_pages(
                     "unexpected_vehicle_observed",
                     "Motive vehicle utilization pagination returned a vehicle outside the selected vehicle set.",
                 )
-            unit_validation = validate_vehicle_utilization_writer_metric_units(rollup.metric_units)
-            if not unit_validation.valid:
-                raise MotiveVehicleUtilizationPaginationError(
-                    unit_validation.error_code or "provider_unit_context_invalid",
-                    "Motive vehicle utilization pagination rollup did not use the certified canonical metric unit policy.",
-                )
+            # Deliberately no returned-unit-indicator readiness check here.
+            # Provider schema parse success is distinct from durable
+            # persistence readiness (see
+            # app.motive.vehicle_utilization_unit_policy). The returned
+            # metric_units Boolean is preserved on the rollup as observed
+            # context; a future writer that calls this reader is responsible
+            # for the persistence-readiness gate
+            # (validate_vehicle_utilization_unit_persistence_readiness)
+            # before any commit.
 
         all_rollups.extend(page_rollups)
         pages.append(VehicleUtilizationPageRead(page_no=page_no, per_page=per_page, rollups=page_rollups))

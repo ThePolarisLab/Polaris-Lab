@@ -31,11 +31,19 @@ from app.motive.vehicle_utilization_controlled_write import (
     controlled_write_enabled,
 )
 from app.motive.vehicle_utilization_unit_policy import (
+    MOTIVE_VEHICLE_UTILIZATION_CANONICAL_REQUEST_POLICY,
+    MOTIVE_VEHICLE_UTILIZATION_CANONICAL_REQUEST_POLICY_CERTIFIED,
+    MOTIVE_VEHICLE_UTILIZATION_CANONICAL_REQUESTED_UNIT_SYSTEM,
     MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER,
     MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER_VALUE,
     MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_METRIC_UNITS,
     MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_UNIT_SYSTEM,
+    MOTIVE_VEHICLE_UTILIZATION_COMBINE_FUEL_ACROSS_UNKNOWN_UNIT_CONTEXT,
+    MOTIVE_VEHICLE_UTILIZATION_DURABLE_FUEL_PERSISTENCE_ENABLED,
+    MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_BOOLEAN_SEMANTICS_CERTIFIED,
+    MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_MUST_EQUAL_REQUEST_BOOLEAN,
     MOTIVE_VEHICLE_UTILIZATION_UNIT_CONVERSION_ENABLED,
+    MOTIVE_VEHICLE_UTILIZATION_UNIT_POLICY_STATUS,
 )
 
 
@@ -105,6 +113,43 @@ LIVE_BOUNDED_EVIDENCE: dict[str, Any] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# 2026-08-16 gate: sanitized, static evidence from the one real controlled
+# production validation executed after PR #162 merged (see
+# docs/engineering/MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md). This is
+# static metadata only -- it is never dynamically inferred from logs or
+# re-derived at runtime, and it carries no provider vehicle ID, VIN,
+# utilization value, time value, fuel value, raw provider response, or
+# secret of any kind.
+# ---------------------------------------------------------------------------
+PRODUCTION_WRITE_VALIDATION_EVIDENCE: dict[str, Any] = {
+    "execution_date": "2026-08-16",
+    "route": "/api/v1/motive/verify/vehicle-utilization-write",
+    "fixed_request_window": {"start_date": "2026-08-13", "end_date": "2026-08-13"},
+    "selected_vehicle_count": 3,
+    "provider_calls_attempted": 1,
+    "provider_calls_completed": 1,
+    "returned_rollup_count": 1,
+    "records_inserted": 0,
+    "checkpoint_advanced": False,
+    "sync_history_written": False,
+    "secrets_exposed": False,
+    "status": "failed",
+    "error_code": "provider_unit_policy_mismatch",
+    "failure_stage": "unit_context_readiness",
+    "safe_failure": True,
+    "reason": (
+        "The controlled request explicitly sent X-Metric-Units: true. Motive "
+        "returned one rollup that parsed successfully but whose "
+        "vehicle.metric_units did not equal True. This contradicted Polaris's "
+        "prior assumption that the returned Boolean must equal the requested "
+        "Boolean. No conclusion is drawn about what the returned value means; "
+        "zero durable rows were written and the route failed closed as "
+        "designed."
+    ),
+}
+
+
 def motive_vehicle_utilization_writer_contract_status(db: Session, organization_id: str) -> dict[str, Any]:
     """Return the sanitized durable-writer contract without provider calls or writes."""
     utilization_count = (
@@ -143,6 +188,24 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
             "sync_history_writes": 0,
             "public_route_enabled": False,
         },
+        "historical_rollup_mutability": {
+            "classification": "MAY_LEGITIMATELY_DIFFER",
+            "provider_confirmed": True,
+            "reason": (
+                "Motive Support's 2026-08-12 written clarification states that "
+                "completed utilization rollups may occasionally be incomplete or "
+                "later differ slightly as records are processed, and that "
+                "production integrations should periodically re-read a recent "
+                "rolling window rather than assume a returned completed aggregate "
+                "is permanently immutable. Polaris no longer treats a conflicting "
+                "historical value as inherently invalid."
+            ),
+            "current_runtime_behavior": "identical_replay_unchanged_conflicting_replay_fail_closed_updates_disabled",
+            "replay_contract_classification": "TEMPORARY_FAIL_CLOSED_PENDING_RECONCILIATION_POLICY",
+            "update_or_upsert_semantics_implemented": False,
+            "future_gate_required": True,
+            "future_gate_scope": "controlled historical refresh/upsert semantics for broad scheduled ingestion",
+        },
         "controlled_manual_write_validation": {
             "implementation_present": True,
             "route_present": True,
@@ -150,7 +213,14 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
             "feature_flag": CONTROLLED_WRITE_ENABLED_ENV_VAR,
             "feature_flag_default_enabled": False,
             "feature_flag_currently_enabled": controlled_write_enabled(),
-            "production_validation_executed": False,
+            "production_validation_executed": True,
+            "production_validation_succeeded": False,
+            "production_validation_persisted_rows": False,
+            "production_validation_failure_stage": "unit_context_readiness",
+            "production_validation_provider_calls": 1,
+            "production_validation_returned_rollups": 1,
+            "production_validation_error_code": "provider_unit_policy_mismatch",
+            "production_validation_safe_failure": True,
             "provider_calls_allowed_per_execution": CONTROLLED_WRITE_MAX_PROVIDER_CALLS,
             "selected_vehicle_limit": CONTROLLED_WRITE_MAX_SELECTED_VEHICLES,
             "fixed_validation_window": {
@@ -161,6 +231,7 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
             "sync_history_writes": 0,
             "scheduled_ingestion_enabled": False,
         },
+        "production_write_validation_evidence": PRODUCTION_WRITE_VALIDATION_EVIDENCE,
         "live_bounded_evidence": LIVE_BOUNDED_EVIDENCE,
         "returned_row_policy": {
             "classification": "persist_returned_rollups_only_after_validation",
@@ -183,8 +254,16 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
             "creates_synthetic_zero_metrics": False,
             "classifies_vehicle_inactive": False,
             "classifies_no_activity": False,
-            "missing_rollup_means_no_activity": "DEFERRED",
-            "reason": "Bounded production evidence observed missing requested vehicles, but Motive no-activity semantics are not certified.",
+            "missing_rollup_means_no_activity": "PROVIDER_CONFIRMED_FALSE",
+            "provider_confirmed_meaning": "no_matching_rollup_returned_for_requested_range",
+            "reason": (
+                "Motive Support's 2026-08-12 written clarification confirmed that "
+                "vehicles without a matching utilization rollup for the requested "
+                "range are simply omitted from the response. Absence means only "
+                "that no matching rollup was returned -- it is not proof of "
+                "inactivity or no activity, and Polaris still creates no row, no "
+                "zero metrics, and no inactive/no-activity classification."
+            ),
         },
         "unknown_vehicle_policy": {
             "classification": "fail_closed",
@@ -235,11 +314,15 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
             "future_writer_may_store_exact_requested_completed_window": True,
             "completed_day_composition_observed_for_returned_vehicle": True,
             "supports_inclusive_date_window_interpretation": True,
+            "end_date_inclusive": "PROVIDER_CONFIRMED",
+            "one_aggregate_per_vehicle_per_requested_range": "PROVIDER_CONFIRMED",
+            "multiple_vehicle_ids_at_most_one_aggregate_per_matching_vehicle": "PROVIDER_CONFIRMED",
             "provider_universal_end_date_guarantee": False,
             "inferred_timestamps_enabled": False,
         },
         "timezone_blocker": {
-            "provider_rollup_timezone_behavior": "CONFIRMED_FROM_OFFICIAL_DOCS",
+            "provider_rollup_timezone_behavior": "CONFIRMED_PROVIDER_SUPPORT",
+            "company_configured_default_timezone_used": True,
             "exact_company_rollup_timezone": "DEFERRED",
             "exact_company_rollup_timezone_required_before_scheduled_daily_ingestion": True,
             "scheduled_daily_ingestion_enabled": False,
@@ -270,6 +353,7 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
         "pagination_blocker": {
             "status": "pagination_reader_certified_writer_still_disabled",
             "pagination_contract_certified": True,
+            "pagination_total_meaning": "PROVIDER_CONFIRMED_FILTERED_RESULT_ROW_COUNT",
             "pagination_reader_implemented": True,
             "canonical_page_size": MOTIVE_VEHICLE_UTILIZATION_PAGINATION_CANONICAL_WRITER_PAGE_SIZE,
             "one_based_page_progression": True,
@@ -290,27 +374,52 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
             "page_2_fetch_enabled": False,
         },
         "unit_policy": {
+            # -- 2026-08-16 reconciliation gate: certified request policy,
+            # unresolved returned-side semantics. See
+            # vehicle_utilization_unit_policy.py and
+            # docs/engineering/MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md.
+            "unit_policy_status": MOTIVE_VEHICLE_UTILIZATION_UNIT_POLICY_STATUS,
+            "canonical_request_policy": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_REQUEST_POLICY,
+            "canonical_requested_unit_system": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_REQUESTED_UNIT_SYSTEM,
+            "canonical_request_policy_certified": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_REQUEST_POLICY_CERTIFIED,
+            "returned_metric_units_boolean_semantics_certified": MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_BOOLEAN_SEMANTICS_CERTIFIED,
+            "returned_metric_units_must_equal_request_boolean": MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_MUST_EQUAL_REQUEST_BOOLEAN,
+            "durable_fuel_persistence_enabled": MOTIVE_VEHICLE_UTILIZATION_DURABLE_FUEL_PERSISTENCE_ENABLED,
+            "unit_conversion_enabled": MOTIVE_VEHICLE_UTILIZATION_UNIT_CONVERSION_ENABLED,
+            "combine_fuel_across_unknown_unit_context": MOTIVE_VEHICLE_UTILIZATION_COMBINE_FUEL_ACROSS_UNKNOWN_UNIT_CONTEXT,
+            # -- retained legacy field names/values for compatibility with
+            # existing consumers of this endpoint.
             "metric_units_preserved": True,
-            "writer_unit_mode_certified": True,
+            "writer_unit_mode_certified": False,
             "canonical_metric_units_policy": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_METRIC_UNITS,
             "canonical_unit_system": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_UNIT_SYSTEM,
             "canonical_request_header": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER,
             "canonical_request_header_value": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER_VALUE,
             "canonical_metric_units_policy_required_before_writer_enablement": False,
             "replay_unit_mode_must_not_change_for_existing_window": True,
-            "returned_metric_units_must_match_certified_request_policy": True,
+            "returned_metric_units_must_match_certified_request_policy": False,
             "unknown_or_missing_unit_context_fails_persistence_readiness": True,
-            "unit_conversion_enabled": MOTIVE_VEHICLE_UTILIZATION_UNIT_CONVERSION_ENABLED,
             "combine_fuel_across_different_or_unknown_unit_contexts": False,
             "replay_rule": [
                 "canonical requested unit mode remains metric/true for an existing durable vehicle/window identity",
-                "returned metric_units must be true",
-                "false, missing, or unknown returned unit context fails closed",
+                "returned metric_units Boolean semantics are not yet certified",
+                "a returned False must never be interpreted as imperial",
+                "a returned True must never be treated as automatically certified",
+                "a returned None/missing value remains unresolved, not a specific semantic claim",
+                "no fuel-bearing rollup may be durably persisted while semantics remain unresolved",
                 "never overwrite a row using a different unit context",
                 "never create a second imperial row",
                 "never convert values silently",
             ],
-            "reason": "Future durable vehicle-utilization writes use a fixed Polaris-owned metric policy. This does not certify Motive's default behavior when the header is omitted.",
+            "reason": (
+                "One live controlled production validation on 2026-08-16 observed "
+                "a returned vehicle.metric_units value that did not equal the "
+                "requested Boolean, contradicting Polaris's prior assumption that "
+                "the two must be equal. This is a downgrade of the prior "
+                "certification, not a guess at what the returned value means: "
+                "the relationship between the requested and returned Boolean "
+                "remains unresolved until Motive explicitly certifies it."
+            ),
         },
         "observed_persistence_state": {
             "organization_scoped_utilization_rows": utilization_count,
@@ -333,9 +442,10 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
             "secrets_exposed": False,
         },
         "remaining_blockers": [
-            "controlled/manual provider-to-database write validation remains disabled and requires separate authorization",
+            "returned vehicle.metric_units Boolean semantics must be explicitly certified before fuel metrics can be durably persisted",
+            "historical-rollup reconciliation/update policy must be designed before broad rolling-window synchronization",
             "checkpoint advancement implementation remains disabled",
-            "exact company-configured Motive rollup timezone must be confirmed before scheduled daily ingestion",
+            "exact company-configured Motive timezone value must be confirmed before scheduled daily ingestion",
         ],
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }

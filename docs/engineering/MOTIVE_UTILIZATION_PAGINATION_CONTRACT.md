@@ -69,10 +69,16 @@ adds:
     (`premature_empty_page`);
   - fails closed on any returned rollup whose `per_page` bound is exceeded,
     that duplicates a vehicle already seen on this or an earlier page
-    (`duplicate_vehicle_observed`), that isn't in the requested/selected
-    vehicle set (`unexpected_vehicle_observed`), or whose `metric_units`
-    doesn't pass `validate_vehicle_utilization_writer_metric_units` (i.e.
-    isn't exactly `true`);
+    (`duplicate_vehicle_observed`), or that isn't in the requested/selected
+    vehicle set (`unexpected_vehicle_observed`);
+    (**2026-08-16 update:** this reader no longer performs its own returned
+    `metric_units` check. Provider schema parse success is distinct from
+    durable persistence readiness — see
+    `MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md`. The returned Boolean is
+    preserved on each rollup as observed context; a future writer that calls
+    this reader is responsible for the persistence-readiness gate,
+    `validate_vehicle_utilization_unit_persistence_readiness` in
+    `vehicle_utilization_unit_policy.py`, before any commit);
   - stops immediately on any provider HTTP failure and never requests the
     next page (no retry, no fallback call);
   - enforces a Polaris-owned safety guard, `MAX_VEHICLE_UTILIZATION_PAGES =

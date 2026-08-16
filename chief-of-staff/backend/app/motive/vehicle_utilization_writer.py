@@ -41,7 +41,7 @@ from app.connectors.motive_vehicle_utilization import (
 )
 from app.connectors.motive_vehicle_utilization_contract import MOTIVE_VEHICLE_UTILIZATION_ENDPOINT
 from app.models.motive import MotiveVehicleRecord, MotiveVehicleUtilizationRecord
-from app.motive.vehicle_utilization_unit_policy import validate_vehicle_utilization_writer_metric_units
+from app.motive.vehicle_utilization_unit_policy import validate_vehicle_utilization_unit_persistence_readiness
 
 logger = logging.getLogger(__name__)
 
@@ -343,14 +343,26 @@ def _validate_returned_vehicles_within_selected_set(
 
 
 # ---------------------------------------------------------------------------
-# Step 6 -- canonical unit context.
+# Step 6 -- durable unit-context persistence readiness.
+#
+# This is deliberately NOT the same question as "did the parser accept this
+# rollup" (see app.connectors.motive_vehicle_utilization). Motive's returned
+# vehicle.metric_units Boolean semantics are unresolved (see
+# vehicle_utilization_unit_policy.py and
+# docs/engineering/MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md) -- one live
+# controlled production observation contradicted Polaris's prior assumption
+# that the returned Boolean must equal the requested Boolean. Until that
+# relationship is explicitly certified, NO returned unit-indicator value --
+# True, False, or missing -- makes a fuel-bearing rollup ready for durable
+# persistence. This is a strengthening of the writer's fail-closed posture,
+# not a relaxation.
 # ---------------------------------------------------------------------------
 def _validate_unit_context(rollup: MotiveVehicleUtilizationRollup) -> None:
-    validation = validate_vehicle_utilization_writer_metric_units(rollup.metric_units)
-    if not validation.valid:
+    readiness = validate_vehicle_utilization_unit_persistence_readiness(rollup.metric_units)
+    if not readiness.ready_for_durable_persistence:
         raise MotiveVehicleUtilizationWriterError(
-            validation.error_code or "provider_unit_context_missing",
-            "Vehicle utilization writer rollup did not use the certified canonical metric unit policy.",
+            readiness.error_code or "provider_unit_indicator_semantics_unresolved",
+            "Vehicle utilization writer rollup did not carry a certified durable unit context.",
         )
 
 

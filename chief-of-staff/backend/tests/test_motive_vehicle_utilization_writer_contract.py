@@ -123,7 +123,11 @@ def test_vehicle_utilization_writer_contract_missing_rollup_is_not_zero_or_no_ac
     assert missing["creates_synthetic_zero_metrics"] is False
     assert missing["classifies_vehicle_inactive"] is False
     assert missing["classifies_no_activity"] is False
-    assert missing["missing_rollup_means_no_activity"] == "DEFERRED"
+    # Motive Support's 2026-08-12 written clarification confirmed this is no
+    # longer a deferred question: omitted vehicles mean only that no
+    # matching rollup was returned, never proof of inactivity.
+    assert missing["missing_rollup_means_no_activity"] == "PROVIDER_CONFIRMED_FALSE"
+    assert missing["provider_confirmed_meaning"] == "no_matching_rollup_returned_for_requested_range"
     assert status["live_bounded_evidence"]["no_activity_evidence"]["zero_activity_shaped_rollup_observed"] is False
     assert status["live_bounded_evidence"]["no_activity_evidence"]["missing_single_day_rollup_observed"] is True
     assert status["live_bounded_evidence"]["no_activity_evidence"]["missing_combined_window_rollup_observed"] is True
@@ -175,7 +179,12 @@ def test_vehicle_utilization_writer_contract_keeps_request_window_distinct_from_
     assert reporting["reporting_period_end"] == "DEFERRED"
 
 
-def test_vehicle_utilization_writer_contract_certifies_canonical_metric_unit_policy(tmp_path) -> None:
+def test_vehicle_utilization_writer_contract_downgrades_unit_policy_to_unresolved(tmp_path) -> None:
+    """2026-08-16 reconciliation gate: the request-side policy remains
+    certified, but the returned-side relationship is downgraded to
+    unresolved -- neither True nor False is treated as a certified or
+    interpreted outcome.
+    """
     TestingSession = _session_factory(tmp_path)
     with TestingSession() as session:
         status = motive_vehicle_utilization_writer_contract_status(session, "org-a")
@@ -186,19 +195,37 @@ def test_vehicle_utilization_writer_contract_certifies_canonical_metric_unit_pol
     assert identity["database_enforced"] is True
     assert status["writer_enabled"] is False
     assert status["persistence_enabled"] is False
-    assert unit_policy["writer_unit_mode_certified"] is True
+
+    # New, explicit unresolved-state fields (section 4 of the reconciliation gate).
+    assert unit_policy["unit_policy_status"] == "LIVE_PROVIDER_UNIT_INDICATOR_SEMANTICS_UNRESOLVED"
+    assert unit_policy["canonical_request_policy"] == "X-Metric-Units = true"
+    assert unit_policy["canonical_requested_unit_system"] == "metric"
+    assert unit_policy["canonical_request_policy_certified"] is True
+    assert unit_policy["returned_metric_units_boolean_semantics_certified"] is False
+    assert unit_policy["returned_metric_units_must_equal_request_boolean"] is False
+    assert unit_policy["durable_fuel_persistence_enabled"] is False
+    assert unit_policy["unit_conversion_enabled"] is False
+    assert unit_policy["combine_fuel_across_unknown_unit_context"] is False
+
+    # Legacy/compat fields: request-side facts remain certified; the
+    # returned-side "certified"/"must match" claims are downgraded.
+    assert unit_policy["writer_unit_mode_certified"] is False
     assert unit_policy["canonical_metric_units_policy"] is True
     assert unit_policy["canonical_unit_system"] == "metric"
     assert unit_policy["canonical_request_header"] == "X-Metric-Units"
     assert unit_policy["canonical_request_header_value"] == "true"
     assert unit_policy["canonical_metric_units_policy_required_before_writer_enablement"] is False
     assert unit_policy["replay_unit_mode_must_not_change_for_existing_window"] is True
-    assert unit_policy["returned_metric_units_must_match_certified_request_policy"] is True
+    assert unit_policy["returned_metric_units_must_match_certified_request_policy"] is False
     assert unit_policy["unknown_or_missing_unit_context_fails_persistence_readiness"] is True
-    assert unit_policy["unit_conversion_enabled"] is False
     assert unit_policy["combine_fuel_across_different_or_unknown_unit_contexts"] is False
     assert "canonical metric-units request policy must be fixed before writer enablement" not in status["remaining_blockers"]
+
+    # The replay rule must never assert what a returned False or True means.
+    replay_rule_text = " ".join(unit_policy["replay_rule"]).lower()
     assert "never create a second imperial row" in unit_policy["replay_rule"]
+    assert "false must never be interpreted as imperial" in replay_rule_text
+    assert "true must never be treated as automatically certified" in replay_rule_text
 
 
 def test_vehicle_utilization_writer_contract_blocks_scheduler_checkpoint_and_pagination(tmp_path) -> None:
@@ -227,11 +254,26 @@ def test_vehicle_utilization_writer_contract_blocks_scheduler_checkpoint_and_pag
     assert "broad pagination behavior must be certified before ingestion beyond bounded page 1" not in status["remaining_blockers"]
     assert "database uniqueness enforcement for the durable writer identity key is not yet implemented" not in status["remaining_blockers"]
     assert "utilization writer transaction implementation remains disabled" not in status["remaining_blockers"]
+    # 2026-08-16: controlled production validation WAS executed (and failed
+    # safely) -- it is no longer "not executed" or "requires separate
+    # authorization" as a blocker. See PRODUCTION_WRITE_VALIDATION_EVIDENCE.
     assert (
         "controlled/manual provider-to-database write validation remains disabled and requires separate authorization"
+        not in status["remaining_blockers"]
+    )
+    assert (
+        "returned vehicle.metric_units Boolean semantics must be explicitly certified before fuel metrics can be durably persisted"
+        in status["remaining_blockers"]
+    )
+    assert (
+        "historical-rollup reconciliation/update policy must be designed before broad rolling-window synchronization"
         in status["remaining_blockers"]
     )
     assert "checkpoint advancement implementation remains disabled" in status["remaining_blockers"]
+    assert (
+        "exact company-configured Motive timezone value must be confirmed before scheduled daily ingestion"
+        in status["remaining_blockers"]
+    )
     assert status["writer_transaction_implemented"] is True
     assert status["database_enforced"] is True
     assert status["runtime_writer_enabled"] is False
@@ -281,3 +323,102 @@ def test_vehicle_utilization_writer_contract_redacts_values_and_creates_no_dashb
     assert status["dashboard_daily_brief_attention_enabled"] is False
     assert not [item for item in dashboard.needs_attention if item.source.startswith("Motive")]
     assert not [item for item in dashboard.daily_brief.needs_attention if item.source.startswith("Motive")]
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-16 unit-context reconciliation gate: new sections.
+# ---------------------------------------------------------------------------
+def test_production_write_validation_evidence_is_recorded_and_sanitized(tmp_path) -> None:
+    TestingSession = _session_factory(tmp_path)
+    with TestingSession() as session:
+        status = motive_vehicle_utilization_writer_contract_status(session, "org-a")
+
+    manual = status["controlled_manual_write_validation"]
+    assert manual["production_validation_executed"] is True
+    assert manual["production_validation_succeeded"] is False
+    assert manual["production_validation_persisted_rows"] is False
+    assert manual["production_validation_failure_stage"] == "unit_context_readiness"
+    assert manual["production_validation_provider_calls"] == 1
+    assert manual["production_validation_returned_rollups"] == 1
+    assert manual["production_validation_error_code"] == "provider_unit_policy_mismatch"
+    assert manual["production_validation_safe_failure"] is True
+
+    evidence = status["production_write_validation_evidence"]
+    assert evidence["execution_date"] == "2026-08-16"
+    assert evidence["route"] == "/api/v1/motive/verify/vehicle-utilization-write"
+    assert evidence["fixed_request_window"] == {"start_date": "2026-08-13", "end_date": "2026-08-13"}
+    assert evidence["selected_vehicle_count"] == 3
+    assert evidence["provider_calls_attempted"] == 1
+    assert evidence["provider_calls_completed"] == 1
+    assert evidence["returned_rollup_count"] == 1
+    assert evidence["records_inserted"] == 0
+    assert evidence["checkpoint_advanced"] is False
+    assert evidence["sync_history_written"] is False
+    assert evidence["secrets_exposed"] is False
+    assert evidence["status"] == "failed"
+    assert evidence["error_code"] == "provider_unit_policy_mismatch"
+    assert evidence["safe_failure"] is True
+
+    # No row-level or provider-identifying evidence anywhere in this block.
+    rendered = json.dumps({"manual": manual, "evidence": evidence}, sort_keys=True, default=str)
+    for unsafe in ("vin", "vehicle_id", "utilization_percent", "idle_fuel", "driving_fuel", "authorization", "api_key"):
+        assert unsafe not in rendered.lower()
+
+
+def test_historical_rollup_mutability_reflects_provider_confirmation_without_implementing_updates(tmp_path) -> None:
+    TestingSession = _session_factory(tmp_path)
+    with TestingSession() as session:
+        status = motive_vehicle_utilization_writer_contract_status(session, "org-a")
+
+    mutability = status["historical_rollup_mutability"]
+    assert mutability["classification"] == "MAY_LEGITIMATELY_DIFFER"
+    assert mutability["provider_confirmed"] is True
+    assert mutability["current_runtime_behavior"] == "identical_replay_unchanged_conflicting_replay_fail_closed_updates_disabled"
+    assert mutability["replay_contract_classification"] == "TEMPORARY_FAIL_CLOSED_PENDING_RECONCILIATION_POLICY"
+    assert mutability["update_or_upsert_semantics_implemented"] is False
+    assert mutability["future_gate_required"] is True
+    # Runtime replay behavior itself is unchanged by this gate.
+    assert status["writer_transaction"]["conflicting_replay_policy"] == "fail_closed"
+    assert status["writer_transaction"]["identical_replay_policy"] == "unchanged"
+    assert status["writer_transaction"]["update_existing_row_enabled"] is False
+
+
+def test_timezone_and_date_window_reflect_motive_support_written_confirmation(tmp_path) -> None:
+    TestingSession = _session_factory(tmp_path)
+    with TestingSession() as session:
+        status = motive_vehicle_utilization_writer_contract_status(session, "org-a")
+
+    timezone_blocker = status["timezone_blocker"]
+    assert timezone_blocker["provider_rollup_timezone_behavior"] == "CONFIRMED_PROVIDER_SUPPORT"
+    assert timezone_blocker["company_configured_default_timezone_used"] is True
+    assert timezone_blocker["exact_company_rollup_timezone"] == "DEFERRED"
+    assert timezone_blocker["polaris_request_window_calendar_timezone"] == "America/Winnipeg"
+    assert timezone_blocker["polaris_calendar_is_provider_rollup_timezone"] is False
+    assert timezone_blocker["scheduled_daily_ingestion_enabled"] is False
+
+    date_window = status["date_window_contract"]
+    assert date_window["end_date_inclusive"] == "PROVIDER_CONFIRMED"
+    assert date_window["one_aggregate_per_vehicle_per_requested_range"] == "PROVIDER_CONFIRMED"
+    assert date_window["multiple_vehicle_ids_at_most_one_aggregate_per_matching_vehicle"] == "PROVIDER_CONFIRMED"
+
+    assert status["pagination_blocker"]["pagination_total_meaning"] == "PROVIDER_CONFIRMED_FILTERED_RESULT_ROW_COUNT"
+
+
+def test_database_identity_columns_are_unchanged_by_this_gate(tmp_path) -> None:
+    """No migration in this gate: the certified identity key must remain
+    exactly organization_id + motive_vehicle_id + request_window_start +
+    request_window_end, with no metric_units, parser version, source
+    endpoint, or provider_vehicle_id added."""
+    TestingSession = _session_factory(tmp_path)
+    with TestingSession() as session:
+        status = motive_vehicle_utilization_writer_contract_status(session, "org-a")
+
+    identity = status["request_window_identity"]
+    assert identity["database_identity_columns"] == [
+        "organization_id",
+        "motive_vehicle_id",
+        "request_window_start",
+        "request_window_end",
+    ]
+    assert identity["database_constraint"] == "uq_motive_vehicle_util_org_vehicle_request_window"
+    assert identity["metric_units_in_key"] is False

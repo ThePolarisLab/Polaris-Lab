@@ -56,7 +56,6 @@ from app.connectors.motive_vehicle_utilization_pagination import (
     parse_pagination_metadata,
     request_vehicle_utilization_page,
 )
-from app.motive.vehicle_utilization_unit_policy import validate_vehicle_utilization_writer_metric_units
 from app.motive.vehicle_utilization_writer import (
     MotiveVehicleUtilizationWriterError,
     write_vehicle_utilization_transaction,
@@ -255,16 +254,12 @@ def _execute_one_page_controlled_read(
                 returned_rollup_count=len(rollups),
             )
 
-        unit_validation = validate_vehicle_utilization_writer_metric_units(rollup.metric_units)
-        if not unit_validation.valid:
-            raise MotiveVehicleUtilizationControlledWriteError(
-                unit_validation.error_code or "provider_unit_context_invalid",
-                "Motive vehicle utilization controlled write rollup did not use the certified canonical metric unit policy.",
-                provider_calls_attempted=provider_calls_attempted,
-                provider_calls_completed=provider_calls_completed,
-                selected_vehicle_count=selected_vehicle_count,
-                returned_rollup_count=len(rollups),
-            )
+        # Deliberately no unit-readiness check here. Provider schema parse
+        # success is distinct from durable persistence readiness (see
+        # vehicle_utilization_unit_policy.py): the returned metric_units
+        # Boolean is preserved as observed context by the parser, and the
+        # writer transaction below is the single place that fails closed on
+        # unresolved returned unit-indicator semantics, before any commit.
 
     return _OnePageControlledRead(
         rollups=rollups,
