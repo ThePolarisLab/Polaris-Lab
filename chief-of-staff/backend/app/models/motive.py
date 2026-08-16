@@ -159,7 +159,16 @@ class MotiveDriverRecord(Base):
 
 class MotiveVehicleUtilizationRecord(Base):
     __tablename__ = "motive_vehicle_utilization"
-    __table_args__ = (UniqueConstraint("organization_id", "provider_vehicle_id", "reporting_period_start", "reporting_period_end", name="uq_motive_vehicle_util_org_period"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "provider_vehicle_id", "reporting_period_start", "reporting_period_end",
+            name="uq_motive_vehicle_util_org_period",
+        ),
+        UniqueConstraint(
+            "organization_id", "motive_vehicle_id", "request_window_start", "request_window_end",
+            name="uq_motive_vehicle_util_org_vehicle_request_window",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     organization_id: Mapped[str] = mapped_column(String, ForeignKey("organizations.id"), nullable=False, index=True)

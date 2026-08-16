@@ -110,9 +110,11 @@ converts units, or adds a migration.
 
 The durable writer contract (`vehicle_utilization_writer_contract.py`) now
 reflects that the pagination contract itself is certified and a read-only
-paginator exists, but broad write ingestion remains blocked on:
+paginator exists. Database uniqueness enforcement for the durable writer
+identity key (`uq_motive_vehicle_util_org_vehicle_request_window`) is now
+implemented — see `MOTIVE_UTILIZATION_DATABASE_IDENTITY.md` — but broad
+write ingestion remains blocked on:
 
-- database uniqueness enforcement for the durable writer identity key;
 - the utilization writer transaction implementation;
 - checkpoint advancement implementation;
 - the exact company-configured Motive rollup timezone, required before any
