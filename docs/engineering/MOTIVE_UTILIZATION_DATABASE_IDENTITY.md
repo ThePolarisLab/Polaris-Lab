@@ -153,3 +153,11 @@ Database uniqueness enforcement is no longer listed as a blocker.
 
 This gate makes zero Motive provider calls. It is a database/schema-contract
 gate only.
+
+> **Now exercised by the controlled write validation gate.** The
+> `uq_motive_vehicle_util_org_vehicle_request_window` constraint added here
+> is the durable identity the feature-flagged (default disabled)
+> `POST /api/v1/motive/verify/vehicle-utilization-write` route relies on when
+> it calls the writer transaction for the fixed historical day `2026-08-13`.
+> No schema change was required for that gate — see
+> `MOTIVE_UTILIZATION_CONTROLLED_WRITE_VALIDATION.md`.

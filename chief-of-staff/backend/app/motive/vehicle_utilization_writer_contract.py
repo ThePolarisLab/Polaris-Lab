@@ -22,6 +22,14 @@ from app.connectors.motive_vehicle_utilization import PARSER_VERSION
 from app.connectors.motive_vehicle_utilization_contract import MOTIVE_VEHICLE_UTILIZATION_ENDPOINT
 from app.connectors.motive_vehicle_utilization_pagination import MOTIVE_VEHICLE_UTILIZATION_PAGINATION_CANONICAL_WRITER_PAGE_SIZE
 from app.models.motive import MotiveVehicleUtilizationRecord
+from app.motive.vehicle_utilization_controlled_write import (
+    CONTROLLED_WRITE_ENABLED_ENV_VAR,
+    CONTROLLED_WRITE_MAX_PROVIDER_CALLS,
+    CONTROLLED_WRITE_MAX_SELECTED_VEHICLES,
+    CONTROLLED_WRITE_WINDOW_END,
+    CONTROLLED_WRITE_WINDOW_START,
+    controlled_write_enabled,
+)
 from app.motive.vehicle_utilization_unit_policy import (
     MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER,
     MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER_VALUE,
@@ -134,6 +142,24 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
             "checkpoint_writes": 0,
             "sync_history_writes": 0,
             "public_route_enabled": False,
+        },
+        "controlled_manual_write_validation": {
+            "implementation_present": True,
+            "route_present": True,
+            "manual_route": "/api/v1/motive/verify/vehicle-utilization-write",
+            "feature_flag": CONTROLLED_WRITE_ENABLED_ENV_VAR,
+            "feature_flag_default_enabled": False,
+            "feature_flag_currently_enabled": controlled_write_enabled(),
+            "production_validation_executed": False,
+            "provider_calls_allowed_per_execution": CONTROLLED_WRITE_MAX_PROVIDER_CALLS,
+            "selected_vehicle_limit": CONTROLLED_WRITE_MAX_SELECTED_VEHICLES,
+            "fixed_validation_window": {
+                "start_date": CONTROLLED_WRITE_WINDOW_START.isoformat(),
+                "end_date": CONTROLLED_WRITE_WINDOW_END.isoformat(),
+            },
+            "checkpoint_writes": 0,
+            "sync_history_writes": 0,
+            "scheduled_ingestion_enabled": False,
         },
         "live_bounded_evidence": LIVE_BOUNDED_EVIDENCE,
         "returned_row_policy": {
