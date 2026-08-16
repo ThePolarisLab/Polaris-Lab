@@ -9,6 +9,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -39,6 +40,12 @@ from app.models.motive import MotiveDriverRecord, MotiveSyncCheckpoint, MotiveSy
 from app.motive.driver_contract import motive_driver_classification_status, motive_driver_contract_status
 from app.motive.fleet_foundation import motive_fleet_foundation_status
 from app.motive.vehicle_contract import motive_vehicle_contract_status
+from app.motive.vehicle_utilization_controlled_write import (
+    CONTROLLED_WRITE_ENABLED_ENV_VAR,
+    MotiveVehicleUtilizationControlledWriteError,
+    controlled_write_enabled,
+    run_controlled_vehicle_utilization_write,
+)
 from app.motive.vehicle_utilization_semantics import motive_vehicle_utilization_semantics_status
 from app.motive.vehicle_utilization_writer_contract import motive_vehicle_utilization_writer_contract_status
 from app.organizations.models import Organization
@@ -50,6 +57,26 @@ router = APIRouter(prefix="/api/v1/motive", tags=["motive"])
 _DATABASE_PERSISTENCE_ERROR_CODE = "database_persistence_error"
 _DATABASE_VEHICLE_PERSISTENCE_ERROR_MESSAGE = "Motive vehicle sync failed during database persistence."
 _DATABASE_USER_PERSISTENCE_ERROR_MESSAGE = "Motive user sync failed during database persistence."
+_CONTROLLED_WRITE_WRITER_ERROR_CODES = {
+    "conflicting_existing_identity",
+    "database_identity_conflict",
+    "database_persistence_error",
+    "unknown_vehicle",
+    "invalid_writer_request",
+    "organization_context_mismatch",
+    "request_window_invalid",
+    "request_window_missing",
+    "parser_version_not_certified",
+    "source_endpoint_not_certified",
+}
+
+
+class VehicleUtilizationControlledWriteRequest(BaseModel):
+    """Minimal explicit execution confirmation. No dates, vehicle ids, page
+    sizes, metric_units, or organization_id may be accepted from the caller;
+    the authenticated tenant and certified constants control all of those."""
+
+    confirm: bool = False
 
 
 def _db() -> Session:
@@ -245,6 +272,67 @@ def verify_motive_vehicle_utilization_evidence(
     return result
 
 
+@router.post("/verify/vehicle-utilization-write")
+def verify_motive_vehicle_utilization_write(
+    body: VehicleUtilizationControlledWriteRequest = VehicleUtilizationControlledWriteRequest(),
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_WRITE)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Controlled, feature-flagged Motive vehicle-utilization WRITE validation.
+
+    This is NOT the normal production sync route. It is disabled by default
+    (``MOTIVE_VEHICLE_UTILIZATION_CONTROLLED_WRITE_ENABLED``). When disabled it
+    makes ZERO Motive provider calls, ZERO utilization writes, ZERO checkpoint
+    changes, and ZERO sync-history writes. When explicitly enabled and
+    confirmed, it connects the certified provider read to the merged writer
+    transaction for exactly ONE fixed historical day (2026-08-13..2026-08-13)
+    across at most three deterministic stored organization vehicles, making at
+    most ONE Motive provider request.
+    """
+    if not controlled_write_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_controlled_write_disabled_detail(),
+        )
+    if body.confirm is not True:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_controlled_write_confirmation_required_detail(),
+        )
+    organization = _organization(session, principal.organization_id)
+    vehicles = _vehicles_for_utilization_contract(session, principal.organization_id)
+    if not vehicles:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_controlled_write_no_stored_vehicle_detail(),
+        )
+    try:
+        result = run_controlled_vehicle_utilization_write(
+            session,
+            organization_id=principal.organization_id,
+            organization_slug=organization.slug,
+            selected_provider_vehicle_ids=[vehicle.provider_vehicle_id for vehicle in vehicles],
+        )
+    except MotiveVehicleUtilizationControlledWriteError as exc:
+        raise HTTPException(
+            status_code=_controlled_write_http_status(exc),
+            detail=_controlled_write_error_detail(exc),
+        ) from exc
+    logger.info(
+        "MOTIVE VEHICLE UTILIZATION CONTROLLED WRITE VALIDATION SUCCESS",
+        extra={
+            "motive_operation": "vehicle_utilization_controlled_write_validation",
+            "organization_id": principal.organization_id,
+            "selected_vehicle_count": result.get("selected_vehicle_count"),
+            "provider_calls_attempted": result.get("provider_calls_attempted"),
+            "provider_calls_completed": result.get("provider_calls_completed"),
+            "records_inserted": result.get("records_inserted"),
+            "records_unchanged": result.get("records_unchanged"),
+        },
+    )
+    return result
+
+
 @router.post("/sync/vehicles")
 def sync_motive_vehicles(
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_WRITE)),
@@ -422,6 +510,26 @@ def motive_verification_contract(principal: AuthenticatedPrincipal = Depends(req
             "checkpoint_advancement_enabled": False,
             "dashboard_daily_brief_attention_enabled": False,
         },
+        "vehicle_utilization_controlled_write_validation": {
+            "method": "POST",
+            "manual_route": "/api/v1/motive/verify/vehicle-utilization-write",
+            "source_endpoint": MOTIVE_VEHICLE_UTILIZATION_ENDPOINT,
+            "feature_flag": CONTROLLED_WRITE_ENABLED_ENV_VAR,
+            "feature_flag_default_enabled": False,
+            "requires_confirm_true_body": True,
+            "fixed_validation_window": {"start_date": "2026-08-13", "end_date": "2026-08-13"},
+            "max_provider_calls_per_run": 1,
+            "max_provider_vehicles": MOTIVE_VEHICLE_UTILIZATION_CONTRACT_MAX_VEHICLES,
+            "page_no": 1,
+            "per_page": 100,
+            "persistence_enabled": False,
+            "returned_only_persistence": True,
+            "checkpoint_advancement_enabled": False,
+            "sync_history_writes_enabled": False,
+            "scheduled_ingestion_enabled": False,
+            "normal_sync_route_enabled": False,
+            "dashboard_daily_brief_attention_enabled": False,
+        },
         "fleet_vehicle_utilization_writer_contract": {
             "method": "GET",
             "manual_route": "/api/v1/motive/fleet/vehicle-utilization-writer-contract",
@@ -530,6 +638,93 @@ def _vehicles_for_utilization_contract(session: Session, organization_id: str) -
         .limit(MOTIVE_VEHICLE_UTILIZATION_CONTRACT_MAX_VEHICLES)
         .all()
     )
+
+
+def _controlled_write_disabled_detail() -> dict[str, Any]:
+    return {
+        "status": "disabled",
+        "resource": "vehicle_utilization_controlled_write_validation",
+        "error_code": "controlled_write_disabled",
+        "message": (
+            "Motive vehicle utilization controlled write validation is disabled. "
+            f"Set {CONTROLLED_WRITE_ENABLED_ENV_VAR} to enable it."
+        ),
+        "provider_calls_attempted": 0,
+        "provider_calls_completed": 0,
+        "selected_vehicle_count": 0,
+        "returned_rollup_count": 0,
+        "records_inserted": 0,
+        "checkpoint_advanced": False,
+        "sync_history_written": False,
+        "secrets_exposed": False,
+    }
+
+
+def _controlled_write_confirmation_required_detail() -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "resource": "vehicle_utilization_controlled_write_validation",
+        "error_code": "confirmation_required",
+        "message": "Motive vehicle utilization controlled write validation requires an explicit confirm: true request body.",
+        "provider_calls_attempted": 0,
+        "provider_calls_completed": 0,
+        "selected_vehicle_count": 0,
+        "returned_rollup_count": 0,
+        "records_inserted": 0,
+        "checkpoint_advanced": False,
+        "sync_history_written": False,
+        "secrets_exposed": False,
+    }
+
+
+def _controlled_write_no_stored_vehicle_detail() -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "resource": "vehicle_utilization_controlled_write_validation",
+        "error_code": "no_stored_vehicle",
+        "message": "Motive vehicle utilization controlled write validation requires stored Motive vehicles for this organization.",
+        "provider_calls_attempted": 0,
+        "provider_calls_completed": 0,
+        "selected_vehicle_count": 0,
+        "returned_rollup_count": 0,
+        "records_inserted": 0,
+        "checkpoint_advanced": False,
+        "sync_history_written": False,
+        "secrets_exposed": False,
+    }
+
+
+def _controlled_write_error_detail(exc: MotiveVehicleUtilizationControlledWriteError) -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "resource": "vehicle_utilization_controlled_write_validation",
+        "error_code": exc.code,
+        "message": str(exc),
+        "provider_calls_attempted": exc.provider_calls_attempted,
+        "provider_calls_completed": exc.provider_calls_completed,
+        "selected_vehicle_count": exc.selected_vehicle_count,
+        "returned_rollup_count": exc.returned_rollup_count,
+        "records_inserted": 0,
+        "checkpoint_advanced": False,
+        "sync_history_written": False,
+        "secrets_exposed": False,
+    }
+
+
+def _controlled_write_http_status(exc: MotiveVehicleUtilizationControlledWriteError) -> int:
+    if exc.code == "no_stored_vehicle":
+        return status.HTTP_404_NOT_FOUND
+    if exc.code == "provider_timeout":
+        return status.HTTP_504_GATEWAY_TIMEOUT
+    if exc.code == "rate_limited":
+        return status.HTTP_429_TOO_MANY_REQUESTS
+    if exc.code == "authorization_required":
+        return status.HTTP_401_UNAUTHORIZED
+    if exc.code == "permission_denied":
+        return status.HTTP_403_FORBIDDEN
+    if exc.code in _CONTROLLED_WRITE_WRITER_ERROR_CODES:
+        return status.HTTP_500_INTERNAL_SERVER_ERROR
+    return status.HTTP_502_BAD_GATEWAY
 
 
 def _completed_vehicle_utilization_contract_window() -> tuple[date, date]:

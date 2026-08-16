@@ -325,3 +325,14 @@ the updated `remaining_blockers` content.
 This gate makes zero Motive provider calls. It is a pure internal
 transaction-primitive gate operating only on already-parsed, in-memory
 rollup values and a synthetic test database.
+
+## Update: Controlled Write Validation Gate
+
+A subsequent gate (`MOTIVE_UTILIZATION_CONTROLLED_WRITE_VALIDATION.md`) adds
+the first — and, deliberately, only — caller of
+`write_vehicle_utilization_transaction`: the feature-flagged (default
+disabled) `POST /api/v1/motive/verify/vehicle-utilization-write` route. That
+gate reuses this transaction **unchanged** for one fixed historical day
+(`2026-08-13`), with at most one Motive provider call per invocation. It does
+not modify anything documented above; see that document for the full
+controlled-route contract.
