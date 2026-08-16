@@ -312,3 +312,15 @@ As a result:
 See `MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md` and the updated "Unit
 Policy" sections of `MOTIVE_UTILIZATION_WRITER_TRANSACTION.md` for the full
 downgraded contract.
+
+## Update: Unit Semantics Certification Gate (2026-08-16)
+
+A follow-up documentation-review gate confirmed, from official Motive
+developer documentation, that no reconciling statement exists between
+`X-Metric-Units` and the returned `vehicle.metric_units` field for this
+endpoint. This route's behavior is unchanged: it remains disabled by
+default, makes at most one provider call per invocation, and every returned
+unit-indicator value still fails closed at the writer transaction's
+persistence-readiness gate. See
+`MOTIVE_UTILIZATION_UNIT_SEMANTICS_CERTIFICATION.md` for the full sourced
+review.

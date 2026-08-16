@@ -389,3 +389,17 @@ refresh/upsert semantics before broad scheduled ingestion; this gate adds no
 version table, no audit-history schema, and changes no existing durable row.
 
 See `MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md` for the full reconciliation.
+
+## Update: Unit Semantics Certification Gate (2026-08-16)
+
+A follow-up documentation-review gate (see
+`MOTIVE_UTILIZATION_UNIT_SEMANTICS_CERTIFICATION.md`) found no official
+Motive documentation statement reconciling `X-Metric-Units` with the
+returned `vehicle.metric_units` field for this endpoint. **No behavior
+change** to this module or its transaction contract: step 6 above still
+fails closed on every returned value, `True` included, via
+`validate_vehicle_utilization_unit_persistence_readiness`. The writer
+contract's status output (`vehicle_utilization_writer_contract.py`) gains an
+additive `unit_semantics` block that names the request-vs-response
+distinction explicitly; the existing `unit_policy` block, and every field
+inside it, is unchanged.

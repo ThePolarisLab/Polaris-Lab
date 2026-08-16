@@ -404,6 +404,50 @@ def test_timezone_and_date_window_reflect_motive_support_written_confirmation(tm
     assert status["pagination_blocker"]["pagination_total_meaning"] == "PROVIDER_CONFIRMED_FILTERED_RESULT_ROW_COUNT"
 
 
+def test_unit_semantics_block_names_request_vs_response_distinction(tmp_path) -> None:
+    """2026-08-16 unit-semantics-certification gate (section 18): the new
+    additive unit_semantics block must expose the explicit request-vs-
+    response naming without changing the existing unit_policy block or any
+    certification/readiness decision.
+    """
+    TestingSession = _session_factory(tmp_path)
+    with TestingSession() as session:
+        status = motive_vehicle_utilization_writer_contract_status(session, "org-a")
+
+    semantics = status["unit_semantics"]
+    assert semantics["request_header"] == "X-Metric-Units"
+    assert semantics["request_header_value"] is True
+    assert semantics["requested_measurement_system"] == "metric"
+    assert semantics["request_policy_certified"] is True
+
+    returned = semantics["returned_vehicle_metric_units_semantics"]
+    assert returned["field_path"] == "vehicle.metric_units"
+    assert returned["equality_with_request_required"] is False
+
+    response = semantics["response_measurement_system"]
+    assert response["classification"] == "UNRESOLVED"
+    assert isinstance(response["basis"], str) and response["basis"]
+
+    assert semantics["durable_fuel_persistence_ready"] is False
+
+    # The pre-existing unit_policy block must be untouched by this gate.
+    assert status["unit_policy"]["unit_policy_status"] == "LIVE_PROVIDER_UNIT_INDICATOR_SEMANTICS_UNRESOLVED"
+    assert status["unit_policy"]["durable_fuel_persistence_enabled"] is False
+
+
+def test_unit_semantics_block_contains_no_provider_secrets_or_values(tmp_path) -> None:
+    TestingSession = _session_factory(tmp_path)
+    with TestingSession.begin() as session:
+        session.add(_utilization_record())
+
+    with TestingSession() as session:
+        status = motive_vehicle_utilization_writer_contract_status(session, "org-a")
+
+    rendered = json.dumps(status["unit_semantics"], sort_keys=True, default=str)
+    for unsafe in ("provider-vehicle-secret", "X-API-Key", "MOTIVE_API_KEY", "fake-motive-secret"):
+        assert unsafe not in rendered
+
+
 def test_database_identity_columns_are_unchanged_by_this_gate(tmp_path) -> None:
     """No migration in this gate: the certified identity key must remain
     exactly organization_id + motive_vehicle_id + request_window_start +

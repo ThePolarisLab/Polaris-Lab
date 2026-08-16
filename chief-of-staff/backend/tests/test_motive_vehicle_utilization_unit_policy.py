@@ -8,16 +8,22 @@ from app.motive.vehicle_utilization_unit_policy import (
     MOTIVE_VEHICLE_UTILIZATION_CANONICAL_REQUEST_POLICY,
     MOTIVE_VEHICLE_UTILIZATION_CANONICAL_REQUEST_POLICY_CERTIFIED,
     MOTIVE_VEHICLE_UTILIZATION_CANONICAL_REQUESTED_UNIT_SYSTEM,
+    MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER,
     MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER_VALUE,
     MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_METRIC_UNITS,
     MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_UNIT_SYSTEM,
     MOTIVE_VEHICLE_UTILIZATION_COMBINE_FUEL_ACROSS_UNKNOWN_UNIT_CONTEXT,
     MOTIVE_VEHICLE_UTILIZATION_DURABLE_FUEL_PERSISTENCE_ENABLED,
+    MOTIVE_VEHICLE_UTILIZATION_REQUESTED_MEASUREMENT_SYSTEM,
+    MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_BASIS,
+    MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_CERTIFICATION,
     MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_BOOLEAN_SEMANTICS_CERTIFIED,
     MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_MUST_EQUAL_REQUEST_BOOLEAN,
     MOTIVE_VEHICLE_UTILIZATION_UNIT_CONVERSION_ENABLED,
     MOTIVE_VEHICLE_UTILIZATION_UNIT_POLICY_STATUS,
+    MOTIVE_VEHICLE_UTILIZATION_VEHICLE_CONFIGURED_METRIC_PREFERENCE_FIELD_PATH,
     validate_vehicle_utilization_unit_persistence_readiness,
+    vehicle_utilization_unit_semantics_contract_block,
     vehicle_utilization_writer_metric_units_header_value,
 )
 
@@ -156,3 +162,73 @@ def test_persistence_readiness_gate_can_become_certified_in_a_future_gate(monkey
     assert true_result.ready_for_durable_persistence is True
     assert false_result.ready_for_durable_persistence is False
     assert false_result.error_code == "provider_unit_indicator_semantics_unresolved"
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-16 unit-semantics-certification gate: section 6 conceptual naming.
+#
+# These tests prove the new documentation-driven conceptual distinctions
+# exist and are wired into the contract block -- they must NOT assert or
+# imply what a returned False/True/None value means, and they must NOT
+# change any persistence-readiness outcome (that is covered above).
+# ---------------------------------------------------------------------------
+def test_requested_measurement_system_is_named_and_metric() -> None:
+    assert MOTIVE_VEHICLE_UTILIZATION_REQUESTED_MEASUREMENT_SYSTEM == "metric"
+
+
+def test_response_measurement_system_certification_is_unresolved_with_a_cited_basis() -> None:
+    """Outcome B: no official documentation reconciles the request header
+    with the returned vehicle.metric_units field for this endpoint, so the
+    response measurement system stays UNRESOLVED with a documented basis
+    (not a guess, not silence).
+    """
+    assert MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_CERTIFICATION == "UNRESOLVED"
+    assert isinstance(MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_BASIS, str)
+    assert len(MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_BASIS) > 0
+    assert "developer-docs.gomotive.com" in MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_BASIS
+
+
+def test_vehicle_configured_metric_preference_field_path_is_named() -> None:
+    assert MOTIVE_VEHICLE_UTILIZATION_VEHICLE_CONFIGURED_METRIC_PREFERENCE_FIELD_PATH == "vehicle.metric_units"
+
+
+def test_unit_semantics_contract_block_shape() -> None:
+    """Proves the section-18 unit_semantics block's exact shape and that it
+    is entirely derived from the existing certified/uncertified policy
+    constants -- no new certification decision is smuggled in here.
+    """
+    block = vehicle_utilization_unit_semantics_contract_block()
+
+    assert block["request_header"] == MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER
+    assert block["request_header_value"] is True
+    assert block["requested_measurement_system"] == "metric"
+    assert block["request_policy_certified"] is True
+
+    returned = block["returned_vehicle_metric_units_semantics"]
+    assert returned["field_path"] == "vehicle.metric_units"
+    assert returned["equality_with_request_required"] is False
+
+    response = block["response_measurement_system"]
+    assert response["classification"] == "UNRESOLVED"
+    assert isinstance(response["basis"], str) and response["basis"]
+
+    assert block["durable_fuel_persistence_ready"] is False
+
+
+def test_unit_semantics_contract_block_never_asserts_false_means_imperial() -> None:
+    """No word in the block's textual content may claim a returned False (or
+    True) has a specific meaning -- only that the relationship is unresolved.
+    """
+    block = vehicle_utilization_unit_semantics_contract_block()
+    rendered = " ".join(
+        str(value)
+        for value in (
+            block["returned_vehicle_metric_units_semantics"]["classification"],
+            block["response_measurement_system"]["classification"],
+            block["response_measurement_system"]["basis"],
+        )
+    ).lower()
+
+    assert "false means imperial" not in rendered
+    assert "false implies imperial" not in rendered
+    assert "certified_metric" not in rendered
