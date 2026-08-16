@@ -1,4 +1,15 @@
-"""Read-only Motive vehicle-utilization durable writer contract gate."""
+"""Read-only Motive vehicle-utilization durable writer contract gate.
+
+The internal, all-or-nothing writer TRANSACTION PRIMITIVE now exists at
+``app.motive.vehicle_utilization_writer.write_vehicle_utilization_transaction``
+and is database-enforced via ``uq_motive_vehicle_util_org_vehicle_request_window``.
+That module makes zero Motive HTTP calls and is not reachable from any public
+route. This status function remains read-only and zero-call/zero-write: it
+never imports or calls the writer transaction, and reports only sanitized
+metadata about it. Production provider-to-database runtime, the public manual
+write route, checkpoint advancement, and scheduled ingestion all remain
+disabled.
+"""
 
 from __future__ import annotations
 
@@ -103,6 +114,27 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
         "scheduled_ingestion_enabled": False,
         "broad_sync_enabled": False,
         "dashboard_daily_brief_attention_enabled": False,
+        "writer_transaction_implemented": True,
+        "database_enforced": True,
+        "runtime_writer_enabled": False,
+        "public_manual_write_route_enabled": False,
+        "provider_to_database_runtime_enabled": False,
+        "writer_transaction": {
+            "implemented": True,
+            "internal_only": True,
+            "module": "app.motive.vehicle_utilization_writer",
+            "function": "write_vehicle_utilization_transaction",
+            "commits_once": True,
+            "all_or_nothing": True,
+            "conflicting_replay_policy": "fail_closed",
+            "identical_replay_policy": "unchanged",
+            "update_existing_row_enabled": False,
+            "zero_result_supported": True,
+            "provider_calls": 0,
+            "checkpoint_writes": 0,
+            "sync_history_writes": 0,
+            "public_route_enabled": False,
+        },
         "live_bounded_evidence": LIVE_BOUNDED_EVIDENCE,
         "returned_row_policy": {
             "classification": "persist_returned_rollups_only_after_validation",
@@ -275,9 +307,9 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
             "secrets_exposed": False,
         },
         "remaining_blockers": [
-            "utilization writer transaction implementation remains disabled",
+            "controlled/manual provider-to-database write validation remains disabled and requires separate authorization",
             "checkpoint advancement implementation remains disabled",
-            "exact company-configured rollup timezone must be confirmed before scheduled daily ingestion",
+            "exact company-configured Motive rollup timezone must be confirmed before scheduled daily ingestion",
         ],
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }

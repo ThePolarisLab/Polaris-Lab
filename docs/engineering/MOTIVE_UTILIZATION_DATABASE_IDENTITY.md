@@ -113,7 +113,7 @@ foreign key was added, and none was required for this migration.
 
 ## Remaining Blockers
 
-After this gate, `remaining_blockers` on the writer contract is:
+After this gate, `remaining_blockers` on the writer contract was:
 
 1. utilization writer transaction implementation remains disabled
 2. checkpoint advancement implementation remains disabled
@@ -121,6 +121,15 @@ After this gate, `remaining_blockers` on the writer contract is:
    scheduled daily ingestion
 
 Database uniqueness enforcement is no longer listed as a blocker.
+
+> **Superseded by the writer transaction gate.** The internal, all-or-nothing
+> writer transaction primitive (`app.motive.vehicle_utilization_writer.write_vehicle_utilization_transaction`,
+> database-enforced by the constraint added here) is now implemented. Blocker
+> 1 above was replaced with "controlled/manual provider-to-database write
+> validation remains disabled and requires separate authorization" — see
+> `MOTIVE_UTILIZATION_WRITER_TRANSACTION.md`. This is still not runtime
+> provider-to-database sync: there is no public write route, no checkpoint
+> advancement, and no scheduler.
 
 ## Tests
 
