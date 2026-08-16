@@ -111,6 +111,13 @@ def test_clean_sqlite_upgrade_head_starts_and_has_expected_schema(tmp_path: Path
         }}.issubset(utilization_columns)
         utilization_foreign_keys = {{foreign_key['name'] for foreign_key in inspector.get_foreign_keys('motive_vehicle_utilization')}}
         assert 'fk_motive_vehicle_utilization_motive_vehicle_id' in utilization_foreign_keys
+        utilization_constraints = {{constraint['name']: constraint['column_names'] for constraint in inspector.get_unique_constraints('motive_vehicle_utilization')}}
+        assert utilization_constraints['uq_motive_vehicle_util_org_vehicle_request_window'] == [
+            'organization_id', 'motive_vehicle_id', 'request_window_start', 'request_window_end',
+        ]
+        assert utilization_constraints['uq_motive_vehicle_util_org_period'] == [
+            'organization_id', 'provider_vehicle_id', 'reporting_period_start', 'reporting_period_end',
+        ]
         utilization_indexes = {{index['name'] for index in inspector.get_indexes('motive_vehicle_utilization')}}
         assert 'ix_motive_vehicle_utilization_motive_vehicle_id' in utilization_indexes
         assert 'ix_motive_vehicle_utilization_request_window_start' in utilization_indexes

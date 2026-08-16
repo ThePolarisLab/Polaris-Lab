@@ -106,6 +106,8 @@ def test_vehicle_utilization_writer_contract_is_read_only_and_tenant_scoped(tmp_
         status = motive_vehicle_utilization_writer_contract_status(session, "org-a")
 
         assert status["observed_persistence_state"]["organization_scoped_utilization_rows"] == 1
+        assert status["observed_persistence_state"]["certified_request_window_unique_constraint_enforced"] is True
+        assert status["observed_persistence_state"]["legacy_nullable_reporting_period_unique_constraint_certified_for_future_writes"] is False
         assert session.query(MotiveVehicleUtilizationRecord).count() == before_utilization
         assert session.query(MotiveSyncCheckpoint).count() == before_checkpoints
 
@@ -153,7 +155,16 @@ def test_vehicle_utilization_writer_contract_keeps_request_window_distinct_from_
     assert identity["provider_natural_key_returned"] is False
     assert identity["prefers_internal_vehicle_fk"] is True
     assert identity["migration_required_now"] is False
-    assert identity["database_enforced"] is False
+    assert identity["database_enforced"] is True
+    assert identity["database_constraint"] == "uq_motive_vehicle_util_org_vehicle_request_window"
+    assert identity["database_identity_columns"] == [
+        "organization_id",
+        "motive_vehicle_id",
+        "request_window_start",
+        "request_window_end",
+    ]
+    assert identity["legacy_reporting_period_constraint_retained"] is True
+    assert identity["legacy_reporting_period_constraint_certified_for_future_writer"] is False
     assert identity["writer_enabled"] is False
     assert identity["persistence_enabled"] is False
     assert identity["metric_units_in_key"] is False
@@ -172,7 +183,7 @@ def test_vehicle_utilization_writer_contract_certifies_canonical_metric_unit_pol
     identity = status["request_window_identity"]
     unit_policy = status["unit_policy"]
     assert identity["classification"] == "CERTIFIED_POLARIS_IDEMPOTENCY_KEY"
-    assert identity["database_enforced"] is False
+    assert identity["database_enforced"] is True
     assert status["writer_enabled"] is False
     assert status["persistence_enabled"] is False
     assert unit_policy["writer_unit_mode_certified"] is True
@@ -214,7 +225,7 @@ def test_vehicle_utilization_writer_contract_blocks_scheduler_checkpoint_and_pag
     assert status["pagination_blocker"]["broad_writer_requires_explicit_pagination_contract"] is False
     assert status["pagination_blocker"]["page_2_fetch_enabled"] is False
     assert "broad pagination behavior must be certified before ingestion beyond bounded page 1" not in status["remaining_blockers"]
-    assert "database uniqueness enforcement for the durable writer identity key is not yet implemented" in status["remaining_blockers"]
+    assert "database uniqueness enforcement for the durable writer identity key is not yet implemented" not in status["remaining_blockers"]
     assert "utilization writer transaction implementation remains disabled" in status["remaining_blockers"]
     assert "checkpoint advancement implementation remains disabled" in status["remaining_blockers"]
 

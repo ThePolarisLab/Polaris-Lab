@@ -151,11 +151,20 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
             "scope": "Preferred Polaris-owned idempotency key for returned, validated rollups from an explicit completed request window.",
             "prefers_internal_vehicle_fk": True,
             "migration_required_now": False,
-            "database_enforced": False,
+            "database_enforced": True,
+            "database_constraint": "uq_motive_vehicle_util_org_vehicle_request_window",
+            "database_identity_columns": [
+                "organization_id",
+                "motive_vehicle_id",
+                "request_window_start",
+                "request_window_end",
+            ],
+            "legacy_reporting_period_constraint_retained": True,
+            "legacy_reporting_period_constraint_certified_for_future_writer": False,
             "writer_enabled": False,
             "persistence_enabled": False,
             "metric_units_in_key": False,
-            "reason": "The key is certified as a Polaris-owned replay identity only when the future writer enforces the canonical metric X-Metric-Units policy and fails closed on missing or mismatched returned unit context.",
+            "reason": "The key is certified as a Polaris-owned replay identity only when the future writer enforces the canonical metric X-Metric-Units policy and fails closed on missing or mismatched returned unit context. Database uniqueness now enforces this identity for fully-populated rows; the writer itself remains disabled.",
         },
         "reporting_period_status": {
             "provider_reporting_period_fields_available": False,
@@ -247,7 +256,9 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
         },
         "observed_persistence_state": {
             "organization_scoped_utilization_rows": utilization_count,
+            "certified_request_window_unique_constraint_enforced": True,
             "existing_nullable_reporting_period_unique_constraint_certified_for_future_writes": False,
+            "legacy_nullable_reporting_period_unique_constraint_certified_for_future_writes": False,
         },
         "parser": {
             "version": PARSER_VERSION,
@@ -264,7 +275,6 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
             "secrets_exposed": False,
         },
         "remaining_blockers": [
-            "database uniqueness enforcement for the durable writer identity key is not yet implemented",
             "utilization writer transaction implementation remains disabled",
             "checkpoint advancement implementation remains disabled",
             "exact company-configured rollup timezone must be confirmed before scheduled daily ingestion",
