@@ -112,10 +112,17 @@ The durable writer contract (`vehicle_utilization_writer_contract.py`) now
 reflects that the pagination contract itself is certified and a read-only
 paginator exists. Database uniqueness enforcement for the durable writer
 identity key (`uq_motive_vehicle_util_org_vehicle_request_window`) is now
-implemented — see `MOTIVE_UTILIZATION_DATABASE_IDENTITY.md` — but broad
-write ingestion remains blocked on:
+implemented — see `MOTIVE_UTILIZATION_DATABASE_IDENTITY.md`.
 
-- the utilization writer transaction implementation;
+The internal, all-or-nothing writer transaction primitive
+(`app.motive.vehicle_utilization_writer.write_vehicle_utilization_transaction`)
+that consumes this paginator's output is also now implemented — see
+`MOTIVE_UTILIZATION_WRITER_TRANSACTION.md`. It makes zero Motive HTTP calls
+itself and is not reachable from any public route. Broad, scheduled write
+ingestion remains blocked on:
+
+- controlled/manual provider-to-database write validation, which remains
+  disabled and requires separate authorization;
 - checkpoint advancement implementation;
 - the exact company-configured Motive rollup timezone, required before any
   scheduled daily ingestion.

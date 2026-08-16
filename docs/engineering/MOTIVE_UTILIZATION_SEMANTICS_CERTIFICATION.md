@@ -127,7 +127,10 @@ The certified Polaris-owned replay identity is `organization_id + motive_vehicle
 - no-activity vehicle behavior
 - `pagination.total` business meaning for future ingestion
 - provider natural key not returned / not certified
-- writer transaction implementation
+- writer transaction implementation (now IMPLEMENTED internally — see
+  `MOTIVE_UTILIZATION_WRITER_TRANSACTION.md`; production provider-to-database
+  runtime, the public write route, and checkpoint advancement remain
+  disabled)
 - empty-result interpretation
 - conversion to one internal unit system
 - checkpoint advancement strategy
@@ -176,8 +179,12 @@ The proposed Polaris-owned idempotency boundary for returned, validated rollups 
 
 This key is now certified as a Polaris-owned replay/idempotency identity for a future writer only under Polaris's fixed canonical unit policy: the durable writer must request `X-Metric-Units: true`, treat the canonical unit system as metric, and require returned `vehicle.metric_units == true`. This does not certify Motive's default behavior when the header is omitted. The existing verifier/evidence request boundary may still use `POLARIS_MOTIVE_X_METRIC_UNITS` for manual probes, but that environment value is not authoritative for future durable writes.
 
-Future writes must reject replays that would change unit mode for an existing vehicle/window, fail closed if returned `metric_units` is missing, unknown, or inconsistent with the certified metric policy, and must not silently convert values. `metric_units` is not added to the durable key because Polaris should not create parallel metric and imperial rows for the same vehicle/request window. Database uniqueness for this identity is now enforced at the schema level — see `MOTIVE_UTILIZATION_DATABASE_IDENTITY.md` — while persistence, writer transactions, and checkpoint advancement remain disabled or blocked. The pagination contract itself is now certified — see `MOTIVE_UTILIZATION_PAGINATION_CONTRACT.md` — but broad writer enablement remains blocked pending the remaining writer-transaction and checkpoint work.
+Future writes must reject replays that would change unit mode for an existing vehicle/window, fail closed if returned `metric_units` is missing, unknown, or inconsistent with the certified metric policy, and must not silently convert values. `metric_units` is not added to the durable key because Polaris should not create parallel metric and imperial rows for the same vehicle/request window. Database uniqueness for this identity is now enforced at the schema level — see `MOTIVE_UTILIZATION_DATABASE_IDENTITY.md`. The pagination contract itself is now certified — see `MOTIVE_UTILIZATION_PAGINATION_CONTRACT.md`.
 
 The request window remains request context. Polaris must not copy it into provider reporting-period fields because the provider item does not return reporting-period start/end fields.
 
-Scheduled daily ingestion and automatic checkpoint-window calculation remain blocked until the exact company-configured Motive rollup timezone is known. Broad write ingestion remains blocked until the durable writer transaction, database uniqueness, and checkpoint advancement are implemented; the pagination-reader blocker itself has been resolved.
+## Writer Transaction Gate
+
+The internal, all-or-nothing writer transaction primitive described above is now implemented at `app.motive.vehicle_utilization_writer.write_vehicle_utilization_transaction` — see `MOTIVE_UTILIZATION_WRITER_TRANSACTION.md` for the full contract, replay policy, and test matrix. It makes zero Motive HTTP calls, is not reachable from any public route, never touches `MotiveSyncCheckpoint` or `MotiveSyncHistory`, and persists only returned rollups that resolve to an existing tenant-owned vehicle. This is the internal primitive only; it does not itself constitute production write enablement.
+
+Scheduled daily ingestion and automatic checkpoint-window calculation remain blocked until the exact company-configured Motive rollup timezone is known. Broad, production write ingestion remains blocked pending controlled/manual provider-to-database write validation (separately authorized) and checkpoint advancement implementation; the writer-transaction, database-uniqueness, and pagination-reader blockers have each been resolved at the primitive/enforcement level.

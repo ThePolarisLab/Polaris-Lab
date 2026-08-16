@@ -226,8 +226,29 @@ def test_vehicle_utilization_writer_contract_blocks_scheduler_checkpoint_and_pag
     assert status["pagination_blocker"]["page_2_fetch_enabled"] is False
     assert "broad pagination behavior must be certified before ingestion beyond bounded page 1" not in status["remaining_blockers"]
     assert "database uniqueness enforcement for the durable writer identity key is not yet implemented" not in status["remaining_blockers"]
-    assert "utilization writer transaction implementation remains disabled" in status["remaining_blockers"]
+    assert "utilization writer transaction implementation remains disabled" not in status["remaining_blockers"]
+    assert (
+        "controlled/manual provider-to-database write validation remains disabled and requires separate authorization"
+        in status["remaining_blockers"]
+    )
     assert "checkpoint advancement implementation remains disabled" in status["remaining_blockers"]
+    assert status["writer_transaction_implemented"] is True
+    assert status["database_enforced"] is True
+    assert status["runtime_writer_enabled"] is False
+    assert status["public_manual_write_route_enabled"] is False
+    assert status["provider_to_database_runtime_enabled"] is False
+    assert status["writer_transaction"]["implemented"] is True
+    assert status["writer_transaction"]["internal_only"] is True
+    assert status["writer_transaction"]["commits_once"] is True
+    assert status["writer_transaction"]["all_or_nothing"] is True
+    assert status["writer_transaction"]["conflicting_replay_policy"] == "fail_closed"
+    assert status["writer_transaction"]["identical_replay_policy"] == "unchanged"
+    assert status["writer_transaction"]["update_existing_row_enabled"] is False
+    assert status["writer_transaction"]["zero_result_supported"] is True
+    assert status["writer_transaction"]["provider_calls"] == 0
+    assert status["writer_transaction"]["checkpoint_writes"] == 0
+    assert status["writer_transaction"]["sync_history_writes"] == 0
+    assert status["writer_transaction"]["public_route_enabled"] is False
 
 
 def test_vehicle_utilization_writer_contract_redacts_values_and_creates_no_dashboard_noise(tmp_path) -> None:
