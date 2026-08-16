@@ -192,3 +192,20 @@ Scheduled daily ingestion and automatic checkpoint-window calculation remain blo
 ## Update: Unit-Context Reconciliation Gate (2026-08-16)
 
 The controlled/manual provider-to-database write validation referenced above was executed once, in production, and failed safely: Motive returned one rollup whose `vehicle.metric_units` did not equal the requested `True`. This is not a new deferral -- it is a certified downgrade of a prior over-broad assumption. See `MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md` for the full sanitized evidence, Motive API Support's 2026-08-12 written clarification for `GET /v1/vehicle_utilization` (date-window inclusivity, pagination.total meaning, missing-vehicle meaning, and historical-rollup mutability), and the resulting redesign of the unit-context persistence-readiness gate in `app/motive/vehicle_utilization_unit_policy.py`. The certification fields on this specific endpoint (`motive_vehicle_utilization_semantics_status`) are unchanged by this gate; the downgraded, unresolved unit-policy status lives on the durable-writer contract (`GET /api/v1/motive/fleet/vehicle-utilization-writer-contract`, `MOTIVE_UTILIZATION_WRITER_TRANSACTION.md`), which is the authoritative surface for persistence-readiness decisions.
+
+## Update: Unit Semantics Certification Gate (2026-08-16)
+
+A follow-up gate reviewed official Motive developer documentation
+(`developer-docs.gomotive.com`) to try to resolve whether `X-Metric-Units`
+governs returned fuel-value units independent of `vehicle.metric_units` for
+this endpoint. No reconciling statement was found; the unresolved status
+above stands, and durable fuel persistence remains disabled. That gate adds
+explicit request-vs-response naming (`requested_measurement_system`,
+`vehicle_configured_metric_preference`, `response_measurement_system_certification`)
+in `app/motive/vehicle_utilization_unit_policy.py` and an additive
+`unit_semantics` block on the writer contract, and documents (without
+migrating) that the persisted `metric_units` column is raw provider-observed
+vehicle metadata rather than certified fuel-unit provenance. See
+`MOTIVE_UTILIZATION_UNIT_SEMANTICS_CERTIFICATION.md` for the full sourced
+review, including source URLs, retrieval date, and a prepared-but-unsent
+provider clarification email draft.

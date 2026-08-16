@@ -230,3 +230,27 @@ one real controlled production validation described above was executed by
 a human operator, outside this gate's session, before this reconciliation
 work began; it is recorded here as sanitized evidence only, never
 re-executed or re-verified live.
+
+## Update: Unit Semantics Certification Gate (2026-08-16)
+
+A follow-up gate reviewed current official Motive developer documentation
+(`developer-docs.gomotive.com`) specifically to try to resolve whether
+`X-Metric-Units` controls returned fuel-value units independent of the
+returned `vehicle.metric_units` field for `GET /v1/vehicle_utilization`. It
+found no reconciling statement on Motive's official reference page for this
+endpoint -- the ambiguity documented above stands. That gate:
+
+- keeps every certification/readiness flag on this page exactly as recorded
+  above (no behavior change);
+- formalizes the request-vs-response distinction with explicit names
+  (`requested_measurement_system`, `vehicle_configured_metric_preference`,
+  `response_measurement_system_certification`) in
+  `app/motive/vehicle_utilization_unit_policy.py`;
+- adds an additive `unit_semantics` block to the writer contract;
+- documents (without migrating) that the persisted `metric_units` column
+  stores raw provider-observed vehicle metadata, not certified fuel-unit
+  provenance;
+- prepares (but does not send) a provider clarification email draft.
+
+See `MOTIVE_UTILIZATION_UNIT_SEMANTICS_CERTIFICATION.md` for the full
+sourced documentation review, conclusion, and draft clarification email.

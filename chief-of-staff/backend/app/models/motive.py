@@ -186,6 +186,25 @@ class MotiveVehicleUtilizationRecord(Base):
     driving_time: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     idle_fuel: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     driving_fuel: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    # 2026-08-16 unit-semantics-certification gate audit (section 11): this
+    # column currently stores the RAW PROVIDER-OBSERVED
+    # `vehicle_idle_rollups[].vehicle_idle_rollup.vehicle.metric_units`
+    # Boolean from GET /v1/vehicle_utilization -- i.e. Motive's returned
+    # vehicle-configured-metric-preference indicator (see
+    # app.motive.vehicle_utilization_unit_policy), preserved as observed
+    # provenance only. It is NOT certified proof of the actual measurement
+    # system of this row's idle_fuel/driving_fuel values -- that
+    # request-vs-response relationship remains UNRESOLVED (see
+    # docs/engineering/MOTIVE_UTILIZATION_UNIT_SEMANTICS_CERTIFICATION.md).
+    # Durable fuel persistence stays disabled
+    # (MOTIVE_VEHICLE_UTILIZATION_DURABLE_FUEL_PERSISTENCE_ENABLED = False)
+    # until that relationship is explicitly certified, so no row has ever
+    # actually been persisted under this ambiguity -- this is a
+    # forward-looking documentation finding, not a live-data cleanup
+    # concern. Do NOT overload this single Boolean with a second "measurement
+    # system of the persisted fuel values" meaning without a schema
+    # migration; a future certification gate may need a distinct
+    # provenance/measurement-system column instead of redefining this one.
     metric_units: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     distance: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     engine_hours: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)

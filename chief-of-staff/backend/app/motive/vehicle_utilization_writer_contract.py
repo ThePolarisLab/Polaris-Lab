@@ -44,6 +44,7 @@ from app.motive.vehicle_utilization_unit_policy import (
     MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_MUST_EQUAL_REQUEST_BOOLEAN,
     MOTIVE_VEHICLE_UTILIZATION_UNIT_CONVERSION_ENABLED,
     MOTIVE_VEHICLE_UTILIZATION_UNIT_POLICY_STATUS,
+    vehicle_utilization_unit_semantics_contract_block,
 )
 
 
@@ -421,6 +422,12 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
                 "remains unresolved until Motive explicitly certifies it."
             ),
         },
+        # -- 2026-08-16 unit-semantics-certification gate: the explicit
+        # request-vs-response naming from section 6. This is additive and
+        # purely presentational -- it does not change, replace, or duplicate
+        # the certification decision made by "unit_policy" above; both
+        # blocks are driven by the same underlying policy constants.
+        "unit_semantics": vehicle_utilization_unit_semantics_contract_block(),
         "observed_persistence_state": {
             "organization_scoped_utilization_rows": utilization_count,
             "certified_request_window_unique_constraint_enforced": True,
