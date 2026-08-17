@@ -12,9 +12,13 @@ This gate proves ``write_vehicle_utilization_transaction`` (see
   ``MotiveVehicleRecord``;
 - never auto-creates a vehicle, never touches ``MotiveSyncCheckpoint`` or
   ``MotiveSyncHistory``;
-- treats identical replays as no-ops, fails closed on conflicting replays,
-  and never updates an existing row in this gate (``records_updated`` stays
-  0);
+- treats identical replays as no-ops, reconciles changed APPROVED mutable
+  provider-derived fields (``utilization_percent``, ``idle_time``,
+  ``driving_time``, ``idle_fuel``, ``driving_fuel``) in place via an
+  explicit, field-by-field change set (never a blind ORM merge), and still
+  fails closed on any identity/context conflict or unapproved field
+  difference (2026-08-17 historical-rollup reconciliation gate -- see
+  ``docs/engineering/MOTIVE_UTILIZATION_HISTORICAL_RECONCILIATION.md``);
 - never exposes provider vehicle IDs, VIN, unit numbers, or metric values in
   its result type, its errors, or its logging.
 
@@ -303,9 +307,77 @@ def test_identical_replay_is_a_no_op(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 33 — conflicting replay (several dimensions).
+# Section 25/33 — historical-rollup reconciliation gate (2026-08-17):
+# a changed replay for the same certified identity now RECONCILES the
+# approved mutable provider-derived fields in place, rather than failing
+# closed, per docs/engineering/MOTIVE_UTILIZATION_HISTORICAL_RECONCILIATION.md.
 # ---------------------------------------------------------------------------
-def test_conflicting_replay_metric_value_fails_closed(tmp_path) -> None:
+@pytest.mark.parametrize(
+    "field_name",
+    ["utilization_percent", "idle_time", "driving_time", "idle_fuel", "driving_fuel"],
+)
+def test_changed_approved_mutable_field_reconciles_in_place(tmp_path, field_name: str) -> None:
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1",))
+
+    with TestingSession() as session:
+        first = write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-1"],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[_rollup("veh-1")],
+        )
+    assert first.records_inserted == 1
+
+    changed_value = Decimal("777.5000")
+    with TestingSession() as session:
+        second = write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-1"],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[_rollup("veh-1", **{field_name: changed_value})],
+        )
+    assert second.records_inserted == 0
+    assert second.records_unchanged == 0
+    assert second.records_updated == 1
+    assert second.reconciled_fields_count == 1
+    assert second.committed is True
+    # Still exactly one durable row -- reconciliation updates in place, it
+    # never creates a second row for the same certified identity.
+    assert _row_count(TestingSession) == 1
+    with TestingSession() as session:
+        row = session.query(MotiveVehicleUtilizationRecord).one()
+        assert getattr(row, field_name) == changed_value
+        # Untouched approved fields keep their original certified values.
+        for other_field, other_default in (
+            ("utilization_percent", Decimal("50.0000")),
+            ("idle_time", Decimal("100.0000")),
+            ("driving_time", Decimal("200.0000")),
+            ("idle_fuel", Decimal("1.0000")),
+            ("driving_fuel", Decimal("2.0000")),
+        ):
+            if other_field == field_name:
+                continue
+            assert getattr(row, other_field) == other_default
+        # Identity/context fields are never touched by reconciliation.
+        assert row.provider_vehicle_id == "veh-1"
+        assert row.request_window_start == WINDOW_START
+        assert row.request_window_end == WINDOW_END
+        assert row.metric_units is True
+        assert row.source_endpoint == CERTIFIED_SOURCE_ENDPOINT
+        assert row.parser_version == CERTIFIED_PARSER_VERSION
+
+
+def test_reconciliation_updates_multiple_differing_fields_in_one_row(tmp_path) -> None:
+    """Section 8: exact Decimal reconciliation, no float coercion, no
+    tolerance/epsilon -- and more than one approved field may change on the
+    same reread."""
     TestingSession = _session_factory(tmp_path)
     _seed(TestingSession, provider_vehicle_ids=("veh-1",))
 
@@ -317,8 +389,100 @@ def test_conflicting_replay_metric_value_fails_closed(tmp_path) -> None:
             selected_provider_vehicle_ids=["veh-1"],
             request_window_start=WINDOW_START,
             request_window_end=WINDOW_END,
-            rollups=[_rollup("veh-1", idle_time=Decimal("100.0000"))],
+            rollups=[_rollup("veh-1")],
         )
+
+    # Values chosen so a float round-trip (binary floating point) would
+    # corrupt them; exact Decimal arithmetic must not.
+    exact_idle_fuel = Decimal("100000000000.0001")
+    exact_driving_fuel = Decimal("100000000000.0002")
+    with TestingSession() as session:
+        result = write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-1"],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[_rollup("veh-1", idle_fuel=exact_idle_fuel, driving_fuel=exact_driving_fuel)],
+        )
+    assert result.records_updated == 1
+    assert result.reconciled_fields_count == 2
+    with TestingSession() as session:
+        row = session.query(MotiveVehicleUtilizationRecord).one()
+        # The stored value is bit-for-bit the exact Decimal we sent, not a
+        # float-rounded approximation.
+        assert row.idle_fuel == exact_idle_fuel
+        assert row.driving_fuel == exact_driving_fuel
+        assert str(row.idle_fuel) == "100000000000.0001"
+        assert str(row.driving_fuel) == "100000000000.0002"
+
+
+def test_reconciliation_does_not_touch_timestamps_when_truly_unchanged(tmp_path) -> None:
+    """Case 2 (no-op): an identical replay must not bump updated_at merely
+    to record replay activity."""
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1",))
+
+    with TestingSession() as session:
+        write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-1"],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[_rollup("veh-1")],
+        )
+    with TestingSession() as session:
+        original_updated_at = session.query(MotiveVehicleUtilizationRecord).one().updated_at
+
+    with TestingSession() as session:
+        result = write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-1"],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[_rollup("veh-1")],
+        )
+    assert result.records_unchanged == 1
+    assert result.records_updated == 0
+    with TestingSession() as session:
+        row = session.query(MotiveVehicleUtilizationRecord).one()
+        assert row.updated_at == original_updated_at
+
+
+# ---------------------------------------------------------------------------
+# Section 6/7/26 — defensive guard: reconciliation only ever applies fields
+# explicitly present in MUTABLE_ON_PROVIDER_RECONCILIATION. If the approved
+# set were ever narrowed without updating the candidate-field list in
+# lockstep, an "unapproved" field difference must fail closed with the
+# dedicated reconciliation-conflict code rather than being silently applied.
+# ---------------------------------------------------------------------------
+def test_unapproved_field_difference_fails_closed_as_reconciliation_conflict(tmp_path, monkeypatch) -> None:
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1",))
+
+    with TestingSession() as session:
+        write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-1"],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[_rollup("veh-1")],
+        )
+
+    # Narrow the approved set so idle_time is no longer approved, proving
+    # the guard is real code, not merely a comment.
+    monkeypatch.setattr(
+        writer_module,
+        "MUTABLE_ON_PROVIDER_RECONCILIATION",
+        frozenset({"utilization_percent", "driving_time", "idle_fuel", "driving_fuel"}),
+    )
 
     with TestingSession() as session:
         with pytest.raises(MotiveVehicleUtilizationWriterError) as exc_info:
@@ -331,13 +495,17 @@ def test_conflicting_replay_metric_value_fails_closed(tmp_path) -> None:
                 request_window_end=WINDOW_END,
                 rollups=[_rollup("veh-1", idle_time=Decimal("999.0000"))],
             )
-    assert exc_info.value.code == "conflicting_existing_identity"
+    assert exc_info.value.code == "provider_rollup_reconciliation_conflict"
     assert _row_count(TestingSession) == 1
     with TestingSession() as session:
         row = session.query(MotiveVehicleUtilizationRecord).one()
         assert row.idle_time == Decimal("100.0000")
 
 
+# ---------------------------------------------------------------------------
+# Section 26/33 — unsafe differences remain identity/context conflicts and
+# are never silently reconciled.
+# ---------------------------------------------------------------------------
 def test_conflicting_replay_incompatible_existing_unit_context_fails_closed(tmp_path) -> None:
     TestingSession = _session_factory(tmp_path)
     _seed(TestingSession, provider_vehicle_ids=("veh-1",))
@@ -841,15 +1009,28 @@ def test_whole_batch_rollback_when_second_rollup_conflicts_at_replay_check(tmp_p
     TestingSession = _session_factory(tmp_path)
     _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2"))
 
-    with TestingSession() as session:
-        write_vehicle_utilization_transaction(
-            session,
-            organization_id="org-a",
-            organization_slug="org-a",
-            selected_provider_vehicle_ids=["veh-2"],
-            request_window_start=WINDOW_START,
-            request_window_end=WINDOW_END,
-            rollups=[_rollup("veh-2", idle_time=Decimal("100.0000"))],
+    with TestingSession.begin() as session:
+        vehicle = session.query(MotiveVehicleRecord).filter_by(provider_vehicle_id="veh-2").one()
+        # A genuine identity/context conflict (incompatible legacy unit
+        # context) -- NOT a metric-value difference, which now reconciles
+        # rather than conflicts (see the reconciliation tests above).
+        session.add(
+            MotiveVehicleUtilizationRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_vehicle_id="veh-2",
+                motive_vehicle_id=vehicle.id,
+                source_endpoint=CERTIFIED_SOURCE_ENDPOINT,
+                request_window_start=WINDOW_START,
+                request_window_end=WINDOW_END,
+                utilization_percent=Decimal("50.0000"),
+                idle_time=Decimal("100.0000"),
+                driving_time=Decimal("200.0000"),
+                idle_fuel=Decimal("1.0000"),
+                driving_fuel=Decimal("2.0000"),
+                metric_units=False,
+                parser_version=CERTIFIED_PARSER_VERSION,
+            )
         )
     assert _row_count(TestingSession) == 1
 
@@ -870,6 +1051,224 @@ def test_whole_batch_rollback_when_second_rollup_conflicts_at_replay_check(tmp_p
     assert _row_count(TestingSession) == 1
     with TestingSession() as session:
         assert session.query(MotiveVehicleUtilizationRecord).filter_by(provider_vehicle_id="veh-1").count() == 0
+
+
+# ---------------------------------------------------------------------------
+# Section 28 — batch atomicity with reconciliation candidates mixed in.
+# ---------------------------------------------------------------------------
+def test_whole_batch_rollback_discards_a_pending_reconciliation_too(tmp_path) -> None:
+    """A batch with one safe reconciliation candidate and one hard conflict
+    must roll back the ENTIRE batch -- the safe reconciliation must not
+    persist either."""
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2"))
+
+    with TestingSession() as session:
+        write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-1", "veh-2"],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[_rollup("veh-1"), _rollup("veh-2")],
+        )
+    assert _row_count(TestingSession) == 2
+
+    with TestingSession.begin() as session:
+        vehicle = session.query(MotiveVehicleRecord).filter_by(provider_vehicle_id="veh-2").one()
+        # Make veh-2's *stored* row incompatible after the fact (simulating a
+        # legacy/incompatible row sharing the identity key), so this second
+        # write hits a hard conflict on veh-2 while veh-1 is a legitimate
+        # reconciliation candidate (idle_time differs).
+        row = (
+            session.query(MotiveVehicleUtilizationRecord)
+            .filter_by(organization_id="org-a", motive_vehicle_id=vehicle.id)
+            .one()
+        )
+        row.source_endpoint = "/v2/vehicle_utilization"
+
+    with TestingSession() as session:
+        with pytest.raises(MotiveVehicleUtilizationWriterError) as exc_info:
+            write_vehicle_utilization_transaction(
+                session,
+                organization_id="org-a",
+                organization_slug="org-a",
+                selected_provider_vehicle_ids=["veh-1", "veh-2"],
+                request_window_start=WINDOW_START,
+                request_window_end=WINDOW_END,
+                # veh-1 is a safe, otherwise-would-reconcile change; veh-2 now
+                # conflicts on provenance.
+                rollups=[_rollup("veh-1", idle_time=Decimal("999.0000")), _rollup("veh-2")],
+            )
+    assert exc_info.value.code == "conflicting_existing_identity"
+    # veh-1's reconciliation must NOT have been persisted.
+    with TestingSession() as session:
+        veh1_row = session.query(MotiveVehicleUtilizationRecord).filter_by(provider_vehicle_id="veh-1").one()
+        assert veh1_row.idle_time == Decimal("100.0000")
+    assert _row_count(TestingSession) == 2
+
+
+def test_mixed_insert_reconcile_and_unchanged_batch_commits_once_with_correct_counts(tmp_path) -> None:
+    """One insert + one reconciliation + one identical replay, all in the
+    same batch, commits exactly once with correct per-outcome counts."""
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2", "veh-3"))
+
+    with TestingSession() as session:
+        write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-2", "veh-3"],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[_rollup("veh-2"), _rollup("veh-3")],
+        )
+    assert _row_count(TestingSession) == 2
+
+    with TestingSession() as session:
+        result = write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-1", "veh-2", "veh-3"],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[
+                _rollup("veh-1"),  # new insert
+                _rollup("veh-2", idle_time=Decimal("999.0000")),  # reconcile
+                _rollup("veh-3"),  # identical replay
+            ],
+        )
+    assert result.committed is True
+    assert result.records_inserted == 1
+    assert result.records_unchanged == 1
+    assert result.records_updated == 1
+    assert result.reconciled_fields_count == 1
+    assert _row_count(TestingSession) == 3
+    with TestingSession() as session:
+        assert session.query(MotiveVehicleUtilizationRecord).filter_by(provider_vehicle_id="veh-2").one().idle_time == Decimal(
+            "999.0000"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Section 27 — omission: a vehicle/window absent from a reread must leave
+# its existing row completely untouched. No delete, no zeroing, no
+# synthesized replacement, no inactive inference.
+# ---------------------------------------------------------------------------
+def test_omitted_vehicle_row_is_left_completely_untouched(tmp_path) -> None:
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2"))
+
+    with TestingSession() as session:
+        write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-1", "veh-2"],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[_rollup("veh-1"), _rollup("veh-2")],
+        )
+    with TestingSession() as session:
+        veh2_before = session.query(MotiveVehicleUtilizationRecord).filter_by(provider_vehicle_id="veh-2").one()
+        veh2_snapshot = {
+            "utilization_percent": veh2_before.utilization_percent,
+            "idle_time": veh2_before.idle_time,
+            "driving_time": veh2_before.driving_time,
+            "idle_fuel": veh2_before.idle_fuel,
+            "driving_fuel": veh2_before.driving_fuel,
+            "updated_at": veh2_before.updated_at,
+        }
+
+    # A later reread returns only veh-1; veh-2 is entirely absent from the
+    # response (not even selected this time), simulating a rolling-window
+    # reread that only asks about a subset of previously-seen vehicles.
+    with TestingSession() as session:
+        result = write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-1"],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[_rollup("veh-1")],
+        )
+    assert result.records_inserted == 0
+    assert result.records_unchanged == 1
+    assert result.records_updated == 0
+
+    # veh-2's row must be byte-for-byte unchanged: no delete, no zeroing, no
+    # inactive/no-activity inference, no synthesized replacement.
+    assert _row_count(TestingSession) == 2
+    with TestingSession() as session:
+        veh2_after = session.query(MotiveVehicleUtilizationRecord).filter_by(provider_vehicle_id="veh-2").one()
+        assert veh2_after.utilization_percent == veh2_snapshot["utilization_percent"]
+        assert veh2_after.idle_time == veh2_snapshot["idle_time"]
+        assert veh2_after.driving_time == veh2_snapshot["driving_time"]
+        assert veh2_after.idle_fuel == veh2_snapshot["idle_fuel"]
+        assert veh2_after.driving_fuel == veh2_snapshot["driving_fuel"]
+        assert veh2_after.updated_at == veh2_snapshot["updated_at"]
+
+
+# ---------------------------------------------------------------------------
+# Section 26 — different request window is a separate identity, never an
+# overwrite of the original window's row.
+# ---------------------------------------------------------------------------
+def test_different_request_window_creates_a_separate_row_never_overwrites_original(tmp_path) -> None:
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1",))
+
+    with TestingSession() as session:
+        write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-1"],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[_rollup("veh-1")],
+        )
+    assert _row_count(TestingSession) == 1
+
+    other_start = date(2026, 9, 1)
+    other_end = date(2026, 9, 2)
+    with TestingSession() as session:
+        result = write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-1"],
+            request_window_start=other_start,
+            request_window_end=other_end,
+            rollups=[
+                _rollup(
+                    "veh-1",
+                    idle_time=Decimal("999.0000"),
+                    request_start_date=other_start,
+                    request_end_date=other_end,
+                )
+            ],
+        )
+    assert result.records_inserted == 1
+    assert result.records_updated == 0
+    # Two distinct rows now exist -- the original window's row is untouched.
+    assert _row_count(TestingSession) == 2
+    with TestingSession() as session:
+        original_row = (
+            session.query(MotiveVehicleUtilizationRecord)
+            .filter_by(request_window_start=WINDOW_START, request_window_end=WINDOW_END)
+            .one()
+        )
+        assert original_row.idle_time == Decimal("100.0000")
+        new_row = (
+            session.query(MotiveVehicleUtilizationRecord)
+            .filter_by(request_window_start=other_start, request_window_end=other_end)
+            .one()
+        )
+        assert new_row.idle_time == Decimal("999.0000")
 
 
 # ---------------------------------------------------------------------------
@@ -967,7 +1366,42 @@ def test_write_result_carries_only_sanitized_counts(tmp_path) -> None:
         "records_unchanged",
         "records_updated",
         "missing_requested_vehicle_count",
+        "reconciled_fields_count",
     }
+
+
+def test_reconciliation_error_never_leaks_provider_vehicle_ids_or_metrics(tmp_path, monkeypatch) -> None:
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=(UNSAFE_PROVIDER_VEHICLE_ID,))
+
+    with TestingSession() as session:
+        write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=[UNSAFE_PROVIDER_VEHICLE_ID],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[_rollup(UNSAFE_PROVIDER_VEHICLE_ID)],
+        )
+
+    monkeypatch.setattr(writer_module, "MUTABLE_ON_PROVIDER_RECONCILIATION", frozenset())
+
+    with TestingSession() as session:
+        with pytest.raises(MotiveVehicleUtilizationWriterError) as exc_info:
+            write_vehicle_utilization_transaction(
+                session,
+                organization_id="org-a",
+                organization_slug="org-a",
+                selected_provider_vehicle_ids=[UNSAFE_PROVIDER_VEHICLE_ID],
+                request_window_start=WINDOW_START,
+                request_window_end=WINDOW_END,
+                rollups=[_rollup(UNSAFE_PROVIDER_VEHICLE_ID, utilization_percent=Decimal("13.3700"))],
+            )
+    assert exc_info.value.code == "provider_rollup_reconciliation_conflict"
+    rendered = str(exc_info.value)
+    assert UNSAFE_PROVIDER_VEHICLE_ID not in rendered
+    assert "13.3700" not in rendered
 
 
 # ---------------------------------------------------------------------------

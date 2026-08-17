@@ -275,8 +275,15 @@ def test_vehicle_utilization_writer_contract_blocks_scheduler_checkpoint_and_pag
         "controlled write route remains feature-flagged off by default and requires separate authorization to enable"
         in status["remaining_blockers"]
     )
+    # 2026-08-17 historical-rollup reconciliation gate: the reconciliation
+    # POLICY is now implemented (see historical_rollup_mutability below), so
+    # this blocker is retired in favor of the narrower scheduling blocker.
     assert (
         "historical-rollup reconciliation/update policy must be designed before broad rolling-window synchronization"
+        not in status["remaining_blockers"]
+    )
+    assert (
+        "scheduled/automatic rolling-window ingestion (checkpoint advancement + scheduler activation) remains disabled -- the reconciliation policy itself is implemented, but nothing calls it on a schedule"
         in status["remaining_blockers"]
     )
     assert "checkpoint advancement implementation remains disabled" in status["remaining_blockers"]
@@ -293,9 +300,11 @@ def test_vehicle_utilization_writer_contract_blocks_scheduler_checkpoint_and_pag
     assert status["writer_transaction"]["internal_only"] is True
     assert status["writer_transaction"]["commits_once"] is True
     assert status["writer_transaction"]["all_or_nothing"] is True
-    assert status["writer_transaction"]["conflicting_replay_policy"] == "fail_closed"
+    assert status["writer_transaction"]["conflicting_replay_policy"] == "fail_closed_on_identity_or_context_conflict"
     assert status["writer_transaction"]["identical_replay_policy"] == "unchanged"
-    assert status["writer_transaction"]["update_existing_row_enabled"] is False
+    assert status["writer_transaction"]["update_existing_row_enabled"] is True
+    assert status["writer_transaction"]["reconciliation_policy"] == "field_level_reconciliation_of_approved_mutable_fields_only"
+    assert status["writer_transaction"]["blind_orm_merge_used"] is False
     assert status["writer_transaction"]["zero_result_supported"] is True
     assert status["writer_transaction"]["provider_calls"] == 0
     assert status["writer_transaction"]["checkpoint_writes"] == 0
@@ -375,7 +384,9 @@ def test_production_write_validation_evidence_is_recorded_and_sanitized(tmp_path
         assert unsafe not in rendered.lower()
 
 
-def test_historical_rollup_mutability_reflects_provider_confirmation_without_implementing_updates(tmp_path) -> None:
+def test_historical_rollup_mutability_reflects_the_implemented_field_level_reconciliation_policy(tmp_path) -> None:
+    """2026-08-17 historical-rollup reconciliation gate: the reconciliation
+    policy is now implemented (field-level only, never a blind upsert)."""
     TestingSession = _session_factory(tmp_path)
     with TestingSession() as session:
         status = motive_vehicle_utilization_writer_contract_status(session, "org-a")
@@ -383,14 +394,39 @@ def test_historical_rollup_mutability_reflects_provider_confirmation_without_imp
     mutability = status["historical_rollup_mutability"]
     assert mutability["classification"] == "MAY_LEGITIMATELY_DIFFER"
     assert mutability["provider_confirmed"] is True
-    assert mutability["current_runtime_behavior"] == "identical_replay_unchanged_conflicting_replay_fail_closed_updates_disabled"
-    assert mutability["replay_contract_classification"] == "TEMPORARY_FAIL_CLOSED_PENDING_RECONCILIATION_POLICY"
-    assert mutability["update_or_upsert_semantics_implemented"] is False
+    assert mutability["current_runtime_behavior"] == (
+        "identical_replay_unchanged_identity_or_context_conflict_fail_closed_"
+        "approved_mutable_fields_reconciled_in_place"
+    )
+    assert mutability["replay_contract_classification"] == "FIELD_LEVEL_RECONCILIATION_POLICY_IMPLEMENTED"
+    assert mutability["update_or_upsert_semantics_implemented"] is True
+    assert mutability["reconciliation_is_blind_upsert"] is False
+    assert mutability["reconciliation_is_field_level_only"] is True
+    assert mutability["mutable_on_provider_reconciliation"] == [
+        "utilization_percent",
+        "idle_time",
+        "driving_time",
+        "idle_fuel",
+        "driving_fuel",
+    ]
+    assert "organization_id" in mutability["immutable_identity_and_context_fields"]
+    assert "motive_vehicle_id" in mutability["immutable_identity_and_context_fields"]
+    assert "request_window_start" in mutability["immutable_identity_and_context_fields"]
+    assert "request_window_end" in mutability["immutable_identity_and_context_fields"]
+    assert "metric_units" in mutability["immutable_identity_and_context_fields"]
+    assert mutability["omission_deletes_or_zeroes_existing_rows"] is False
+    assert mutability["batch_atomicity_preserved"] is True
+    # Scheduled/automatic invocation is still a separate, later gate; the
+    # POLICY itself is what this gate implements.
     assert mutability["future_gate_required"] is True
-    # Runtime replay behavior itself is unchanged by this gate.
-    assert status["writer_transaction"]["conflicting_replay_policy"] == "fail_closed"
+    assert "scheduler" in mutability["future_gate_scope"]
+
+    # Runtime replay behavior now reconciles approved fields in place.
+    assert status["writer_transaction"]["conflicting_replay_policy"] == "fail_closed_on_identity_or_context_conflict"
     assert status["writer_transaction"]["identical_replay_policy"] == "unchanged"
-    assert status["writer_transaction"]["update_existing_row_enabled"] is False
+    assert status["writer_transaction"]["update_existing_row_enabled"] is True
+    assert status["writer_transaction"]["reconciliation_policy"] == "field_level_reconciliation_of_approved_mutable_fields_only"
+    assert status["writer_transaction"]["blind_orm_merge_used"] is False
 
 
 def test_timezone_and_date_window_reflect_motive_support_written_confirmation(tmp_path) -> None:
