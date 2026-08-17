@@ -179,11 +179,12 @@ def test_vehicle_utilization_writer_contract_keeps_request_window_distinct_from_
     assert reporting["reporting_period_end"] == "DEFERRED"
 
 
-def test_vehicle_utilization_writer_contract_downgrades_unit_policy_to_unresolved(tmp_path) -> None:
-    """2026-08-16 reconciliation gate: the request-side policy remains
-    certified, but the returned-side relationship is downgraded to
-    unresolved -- neither True nor False is treated as a certified or
-    interpreted outcome.
+def test_vehicle_utilization_writer_contract_upgrades_unit_policy_to_provider_confirmed(tmp_path) -> None:
+    """2026-08-17 authentication + unit-mismatch certification gate: the
+    request-side policy remains certified, and the returned-side
+    relationship is now provider-confirmed and fail-closed-on-mismatch --
+    True (matching the canonical request) is unit-ready, and a disagreeing,
+    missing, or malformed returned value fails closed.
     """
     TestingSession = _session_factory(tmp_path)
     with TestingSession() as session:
@@ -196,36 +197,39 @@ def test_vehicle_utilization_writer_contract_downgrades_unit_policy_to_unresolve
     assert status["writer_enabled"] is False
     assert status["persistence_enabled"] is False
 
-    # New, explicit unresolved-state fields (section 4 of the reconciliation gate).
-    assert unit_policy["unit_policy_status"] == "LIVE_PROVIDER_UNIT_INDICATOR_SEMANTICS_UNRESOLVED"
+    # Provider-confirmed state fields (2026-08-17 gate).
+    assert unit_policy["unit_policy_status"] == "PROVIDER_CONFIRMED_FAIL_CLOSED_ON_MISMATCH"
     assert unit_policy["canonical_request_policy"] == "X-Metric-Units = true"
     assert unit_policy["canonical_requested_unit_system"] == "metric"
     assert unit_policy["canonical_request_policy_certified"] is True
-    assert unit_policy["returned_metric_units_boolean_semantics_certified"] is False
-    assert unit_policy["returned_metric_units_must_equal_request_boolean"] is False
-    assert unit_policy["durable_fuel_persistence_enabled"] is False
+    assert unit_policy["returned_metric_units_boolean_semantics_certified"] is True
+    assert unit_policy["returned_metric_units_must_equal_request_boolean"] is True
+    assert unit_policy["durable_fuel_persistence_enabled"] is True
     assert unit_policy["unit_conversion_enabled"] is False
     assert unit_policy["combine_fuel_across_unknown_unit_context"] is False
+    assert unit_policy["mismatch_error_code"] == "provider_unit_policy_mismatch"
 
-    # Legacy/compat fields: request-side facts remain certified; the
-    # returned-side "certified"/"must match" claims are downgraded.
-    assert unit_policy["writer_unit_mode_certified"] is False
+    # Legacy/compat fields: request-side facts remain certified, and the
+    # returned-side "certified"/"must match" claims are now upgraded too.
+    assert unit_policy["writer_unit_mode_certified"] is True
     assert unit_policy["canonical_metric_units_policy"] is True
     assert unit_policy["canonical_unit_system"] == "metric"
     assert unit_policy["canonical_request_header"] == "X-Metric-Units"
     assert unit_policy["canonical_request_header_value"] == "true"
     assert unit_policy["canonical_metric_units_policy_required_before_writer_enablement"] is False
     assert unit_policy["replay_unit_mode_must_not_change_for_existing_window"] is True
-    assert unit_policy["returned_metric_units_must_match_certified_request_policy"] is False
+    assert unit_policy["returned_metric_units_must_match_certified_request_policy"] is True
     assert unit_policy["unknown_or_missing_unit_context_fails_persistence_readiness"] is True
     assert unit_policy["combine_fuel_across_different_or_unknown_unit_contexts"] is False
     assert "canonical metric-units request policy must be fixed before writer enablement" not in status["remaining_blockers"]
 
-    # The replay rule must never assert what a returned False or True means.
-    replay_rule_text = " ".join(unit_policy["replay_rule"]).lower()
+    # The replay rule must never claim units are silently converted or that
+    # a second, parallel imperial row is ever created.
     assert "never create a second imperial row" in unit_policy["replay_rule"]
-    assert "false must never be interpreted as imperial" in replay_rule_text
-    assert "true must never be treated as automatically certified" in replay_rule_text
+    replay_rule_text = " ".join(unit_policy["replay_rule"]).lower()
+    assert "true means metric" in replay_rule_text
+    assert "false means imperial" in replay_rule_text
+    assert "provider-confirmed mismatch" in replay_rule_text
 
 
 def test_vehicle_utilization_writer_contract_blocks_scheduler_checkpoint_and_pagination(tmp_path) -> None:
@@ -261,8 +265,14 @@ def test_vehicle_utilization_writer_contract_blocks_scheduler_checkpoint_and_pag
         "controlled/manual provider-to-database write validation remains disabled and requires separate authorization"
         not in status["remaining_blockers"]
     )
+    # 2026-08-17: unit semantics are now provider-confirmed, so this blocker
+    # is retired; the controlled route remains its own independent blocker.
     assert (
         "returned vehicle.metric_units Boolean semantics must be explicitly certified before fuel metrics can be durably persisted"
+        not in status["remaining_blockers"]
+    )
+    assert (
+        "controlled write route remains feature-flagged off by default and requires separate authorization to enable"
         in status["remaining_blockers"]
     )
     assert (
@@ -405,10 +415,9 @@ def test_timezone_and_date_window_reflect_motive_support_written_confirmation(tm
 
 
 def test_unit_semantics_block_names_request_vs_response_distinction(tmp_path) -> None:
-    """2026-08-16 unit-semantics-certification gate (section 18): the new
-    additive unit_semantics block must expose the explicit request-vs-
-    response naming without changing the existing unit_policy block or any
-    certification/readiness decision.
+    """Section 18: the additive unit_semantics block exposes the explicit
+    request-vs-response naming, now provider-confirmed (2026-08-17 gate),
+    consistent with the unit_policy block driven by the same constants.
     """
     TestingSession = _session_factory(tmp_path)
     with TestingSession() as session:
@@ -422,17 +431,20 @@ def test_unit_semantics_block_names_request_vs_response_distinction(tmp_path) ->
 
     returned = semantics["returned_vehicle_metric_units_semantics"]
     assert returned["field_path"] == "vehicle.metric_units"
-    assert returned["equality_with_request_required"] is False
+    assert returned["true_means"] == "metric"
+    assert returned["false_means"] == "imperial"
+    assert returned["equality_with_request_required"] is True
 
     response = semantics["response_measurement_system"]
-    assert response["classification"] == "UNRESOLVED"
+    assert response["classification"] == "PROVIDER_CONFIRMED_FAIL_CLOSED_ON_MISMATCH"
     assert isinstance(response["basis"], str) and response["basis"]
 
-    assert semantics["durable_fuel_persistence_ready"] is False
+    assert semantics["durable_fuel_persistence_ready"] is True
 
-    # The pre-existing unit_policy block must be untouched by this gate.
-    assert status["unit_policy"]["unit_policy_status"] == "LIVE_PROVIDER_UNIT_INDICATOR_SEMANTICS_UNRESOLVED"
-    assert status["unit_policy"]["durable_fuel_persistence_enabled"] is False
+    # The unit_policy block is driven by the same underlying constants and
+    # must be consistent with the unit_semantics block above.
+    assert status["unit_policy"]["unit_policy_status"] == "PROVIDER_CONFIRMED_FAIL_CLOSED_ON_MISMATCH"
+    assert status["unit_policy"]["durable_fuel_persistence_enabled"] is True
 
 
 def test_unit_semantics_block_contains_no_provider_secrets_or_values(tmp_path) -> None:

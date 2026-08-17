@@ -44,6 +44,7 @@ from app.motive.vehicle_utilization_unit_policy import (
     MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_MUST_EQUAL_REQUEST_BOOLEAN,
     MOTIVE_VEHICLE_UTILIZATION_UNIT_CONVERSION_ENABLED,
     MOTIVE_VEHICLE_UTILIZATION_UNIT_POLICY_STATUS,
+    UNIT_CONTEXT_MISMATCH_ERROR_CODE,
     vehicle_utilization_unit_semantics_contract_block,
 )
 
@@ -122,6 +123,16 @@ LIVE_BOUNDED_EVIDENCE: dict[str, Any] = {
 # re-derived at runtime, and it carries no provider vehicle ID, VIN,
 # utilization value, time value, fuel value, raw provider response, or
 # secret of any kind.
+#
+# 2026-08-17 update: Motive API Support's written reply confirmed that
+# X-Metric-Units=true together with a returned vehicle.metric_units=false is
+# NOT an expected/documented combination, and directed integrations to fail
+# closed. This reclassifies the evidence below from an open
+# "semantics unresolved" question to a provider-confirmed unit-context
+# mismatch. The sanitized facts themselves (provider_calls, returned
+# rollups, records_inserted, checkpoint/history writes, safe_failure) are
+# UNCHANGED -- only the classification and reason narrative are updated to
+# reflect the new provider confirmation.
 # ---------------------------------------------------------------------------
 PRODUCTION_WRITE_VALIDATION_EVIDENCE: dict[str, Any] = {
     "execution_date": "2026-08-16",
@@ -137,16 +148,21 @@ PRODUCTION_WRITE_VALIDATION_EVIDENCE: dict[str, Any] = {
     "secrets_exposed": False,
     "status": "failed",
     "error_code": "provider_unit_policy_mismatch",
+    "classification": "PROVIDER_CONFIRMED_UNIT_CONTEXT_MISMATCH",
+    "previous_classification": "SEMANTICS_UNRESOLVED",
     "failure_stage": "unit_context_readiness",
     "safe_failure": True,
     "reason": (
         "The controlled request explicitly sent X-Metric-Units: true. Motive "
         "returned one rollup that parsed successfully but whose "
-        "vehicle.metric_units did not equal True. This contradicted Polaris's "
-        "prior assumption that the returned Boolean must equal the requested "
-        "Boolean. No conclusion is drawn about what the returned value means; "
-        "zero durable rows were written and the route failed closed as "
-        "designed."
+        "vehicle.metric_units did not equal True. At the time this was "
+        "recorded as an open semantics question. Motive API Support's "
+        "2026-08-17 written reply has since confirmed that X-Metric-Units=true "
+        "together with a returned vehicle.metric_units=false is not an "
+        "expected/documented combination for GET /v1/vehicle_utilization, and "
+        "that integrations must fail closed and not persist fuel values when "
+        "the requested and returned unit context disagree. Zero durable rows "
+        "were written and the route failed closed exactly as designed."
     ),
 }
 
@@ -221,6 +237,7 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
             "production_validation_provider_calls": 1,
             "production_validation_returned_rollups": 1,
             "production_validation_error_code": "provider_unit_policy_mismatch",
+            "production_validation_classification": "PROVIDER_CONFIRMED_UNIT_CONTEXT_MISMATCH",
             "production_validation_safe_failure": True,
             "provider_calls_allowed_per_execution": CONTROLLED_WRITE_MAX_PROVIDER_CALLS,
             "selected_vehicle_limit": CONTROLLED_WRITE_MAX_SELECTED_VEHICLES,
@@ -375,10 +392,11 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
             "page_2_fetch_enabled": False,
         },
         "unit_policy": {
-            # -- 2026-08-16 reconciliation gate: certified request policy,
-            # unresolved returned-side semantics. See
-            # vehicle_utilization_unit_policy.py and
-            # docs/engineering/MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md.
+            # -- 2026-08-17 provider-confirmation gate: Motive API Support's
+            # written reply confirmed the returned vehicle.metric_units
+            # indicator's meaning and the request/response consistency rule.
+            # See vehicle_utilization_unit_policy.py and
+            # docs/engineering/MOTIVE_UTILIZATION_UNIT_SEMANTICS_CERTIFICATION.md.
             "unit_policy_status": MOTIVE_VEHICLE_UTILIZATION_UNIT_POLICY_STATUS,
             "canonical_request_policy": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_REQUEST_POLICY,
             "canonical_requested_unit_system": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_REQUESTED_UNIT_SYSTEM,
@@ -388,38 +406,46 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
             "durable_fuel_persistence_enabled": MOTIVE_VEHICLE_UTILIZATION_DURABLE_FUEL_PERSISTENCE_ENABLED,
             "unit_conversion_enabled": MOTIVE_VEHICLE_UTILIZATION_UNIT_CONVERSION_ENABLED,
             "combine_fuel_across_unknown_unit_context": MOTIVE_VEHICLE_UTILIZATION_COMBINE_FUEL_ACROSS_UNKNOWN_UNIT_CONTEXT,
+            "mismatch_error_code": UNIT_CONTEXT_MISMATCH_ERROR_CODE,
             # -- retained legacy field names/values for compatibility with
             # existing consumers of this endpoint.
             "metric_units_preserved": True,
-            "writer_unit_mode_certified": False,
+            "writer_unit_mode_certified": True,
             "canonical_metric_units_policy": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_METRIC_UNITS,
             "canonical_unit_system": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_UNIT_SYSTEM,
             "canonical_request_header": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER,
             "canonical_request_header_value": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER_VALUE,
             "canonical_metric_units_policy_required_before_writer_enablement": False,
             "replay_unit_mode_must_not_change_for_existing_window": True,
-            "returned_metric_units_must_match_certified_request_policy": False,
+            "returned_metric_units_must_match_certified_request_policy": True,
             "unknown_or_missing_unit_context_fails_persistence_readiness": True,
             "combine_fuel_across_different_or_unknown_unit_contexts": False,
             "replay_rule": [
                 "canonical requested unit mode remains metric/true for an existing durable vehicle/window identity",
-                "returned metric_units Boolean semantics are not yet certified",
-                "a returned False must never be interpreted as imperial",
-                "a returned True must never be treated as automatically certified",
-                "a returned None/missing value remains unresolved, not a specific semantic claim",
-                "no fuel-bearing rollup may be durably persisted while semantics remain unresolved",
+                "returned metric_units Boolean semantics are provider-confirmed: true means metric, false means imperial",
+                "a returned value matching the requested Boolean (true/true or false/false) may become unit-ready",
+                "a returned value disagreeing with the requested Boolean fails closed as a provider-confirmed mismatch",
+                "a returned None/missing value remains unresolved and fails closed",
+                "a non-Boolean, non-None returned value fails closed as a schema/policy error",
+                "no fuel-bearing rollup may be durably persisted while the requested and returned unit context disagree",
                 "never overwrite a row using a different unit context",
                 "never create a second imperial row",
                 "never convert values silently",
             ],
             "reason": (
-                "One live controlled production validation on 2026-08-16 observed "
-                "a returned vehicle.metric_units value that did not equal the "
-                "requested Boolean, contradicting Polaris's prior assumption that "
-                "the two must be equal. This is a downgrade of the prior "
-                "certification, not a guess at what the returned value means: "
-                "the relationship between the requested and returned Boolean "
-                "remains unresolved until Motive explicitly certifies it."
+                "Motive API Support's 2026-08-17 written reply confirmed, for "
+                "GET /v1/vehicle_utilization: X-Metric-Units=true requests "
+                "metric (idle_fuel/driving_fuel in liters); X-Metric-Units=false "
+                "requests imperial (gallons); the returned vehicle.metric_units "
+                "indicator means true=metric and false=imperial; "
+                "idle_time/driving_time are always seconds; and "
+                "X-Metric-Units=true together with a returned "
+                "vehicle.metric_units=false is not an expected/documented "
+                "combination -- integrations must fail closed and not persist "
+                "fuel values when the requested and returned unit context "
+                "disagree. This upgrades the prior UNRESOLVED classification "
+                "to a defined, provider-confirmed, fail-closed-on-mismatch "
+                "policy."
             ),
         },
         # -- 2026-08-16 unit-semantics-certification gate: the explicit
@@ -449,7 +475,7 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
             "secrets_exposed": False,
         },
         "remaining_blockers": [
-            "returned vehicle.metric_units Boolean semantics must be explicitly certified before fuel metrics can be durably persisted",
+            "controlled write route remains feature-flagged off by default and requires separate authorization to enable",
             "historical-rollup reconciliation/update policy must be designed before broad rolling-window synchronization",
             "checkpoint advancement implementation remains disabled",
             "exact company-configured Motive timezone value must be confirmed before scheduled daily ingestion",

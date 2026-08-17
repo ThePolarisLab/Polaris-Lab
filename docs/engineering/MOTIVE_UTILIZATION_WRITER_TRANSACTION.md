@@ -403,3 +403,54 @@ contract's status output (`vehicle_utilization_writer_contract.py`) gains an
 additive `unit_semantics` block that names the request-vs-response
 distinction explicitly; the existing `unit_policy` block, and every field
 inside it, is unchanged.
+
+## Update: Authentication + Unit-Mismatch Certification Gate (2026-08-17)
+
+Motive API Support's 2026-08-17 written reply confirmed the returned
+`vehicle.metric_units` indicator's meaning and the request/response
+consistency rule for `GET /v1/vehicle_utilization`. Step 6 of the
+transaction contract above is now:
+
+> validate durable unit-context **persistence readiness**
+> (`validate_vehicle_utilization_unit_persistence_readiness` in
+> `vehicle_utilization_unit_policy.py`) -- provider-confirmed and
+> fail-closed-on-mismatch. The canonical writer always requests
+> `X-Metric-Units: true`, so a returned `True` now **agrees** with the
+> request and is unit-ready (persisted, `metric_units = True` on the row,
+> as already documented above under "Durable Row Content"). A returned
+> `False` is a provider-confirmed mismatch and fails closed with
+> `provider_unit_policy_mismatch`. A missing (`None`) returned value still
+> fails closed with `provider_unit_indicator_semantics_unresolved`, and a
+> malformed (non-Boolean, non-`None`) value still fails closed with
+> `provider_unit_context_invalid_type`.
+
+This means `write_vehicle_utilization_transaction` now **accepts** an
+incoming rollup at step 6 when its `metric_units` field is `True` --
+reversing the temporary 2026-08-16-through-2026-08-17 state in which every
+value, `True` included, was rejected. This is a genuine behavior change
+sourced directly from Motive's written confirmation, not a guess: the
+transaction's other validation steps (batching, tenancy, replay,
+provenance) are unchanged, and `tests/test_motive_vehicle_utilization_writer_transaction.py`
+now proves both the successful `True`-matches-canonical-request path and
+the still-fail-closed `False`/`None`/malformed paths under the real,
+non-bypassed unit-readiness gate.
+
+The error-code list in the "Error Type" section above is updated:
+`provider_unit_policy_mismatch` is **un-retired** and is now real writer
+output (previously it existed only in the static, already-executed
+production evidence record). `provider_unit_indicator_semantics_unresolved`
+and `provider_unit_context_invalid_type` remain unchanged in meaning and
+usage.
+
+The replay/mutability contract classification, and the runtime replay
+behavior (identical -> unchanged, conflicting -> fail closed, updates
+disabled), are both **unchanged** by this update.
+
+This update enables **no** new route, feature flag, checkpoint behavior, or
+scheduled ingestion -- it only changes the outcome of the existing,
+already-disabled-by-default writer transaction's unit-readiness gate. It
+makes **no** live Motive API call and adds no database migration. See
+`docs/engineering/MOTIVE_UTILIZATION_UNIT_SEMANTICS_CERTIFICATION.md` for
+the full provider-confirmed semantics upgrade and
+`docs/engineering/MOTIVE_AUTHENTICATION_CERTIFICATION.md` for the
+authentication half of this gate.

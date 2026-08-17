@@ -1,51 +1,57 @@
-"""Canonical unit policy for future Motive vehicle-utilization writes.
+"""Canonical unit policy for Motive vehicle-utilization requests/writes.
 
 The current verifier and bounded-evidence probes may still use their existing
 environment-controlled request boundary. Durable writer enablement must use the
 fixed Polaris-owned policy below instead.
 
 --------------------------------------------------------------------------
-2026-08-16 reconciliation gate
+2026-08-16 reconciliation gate (superseded below)
 --------------------------------------------------------------------------
 A single real controlled production validation (see
 ``docs/engineering/MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md``) sent the
 certified request header (``X-Metric-Units: true``) and observed exactly one
 provider rollup whose parsed ``vehicle.metric_units`` did NOT equal ``True``.
-That single observation contradicts Polaris's prior assumption that the
-returned Boolean must equal the requested Boolean. It does **not** tell us
-what a returned ``False`` (or a returned ``None``) means -- imperial units,
-an ignored header, a parser defect, and a provider documentation gap are all
-still open possibilities, and this module must not guess among them.
-
-The request-side policy below (what Polaris sends) remains certified and
-unchanged: Polaris always requests ``X-Metric-Units: true`` / metric. What is
-now explicitly **uncertified** is the relationship between that request and
-the returned ``vehicle.metric_units`` Boolean. Until Motive explicitly
-certifies that relationship, no returned unit indicator value -- ``True``,
-``False``, or ``None`` -- makes a fuel-bearing rollup ready for durable
-persistence. See ``validate_vehicle_utilization_unit_persistence_readiness``.
+That single observation contradicted Polaris's prior assumption that the
+returned Boolean must equal the requested Boolean, and this module was
+downgraded to treat every returned value -- ``True`` included -- as
+unresolved.
 
 --------------------------------------------------------------------------
-2026-08-16 unit-semantics-certification gate (official documentation review)
+2026-08-16 unit-semantics-certification gate (superseded below)
 --------------------------------------------------------------------------
-A follow-up gate reviewed current official Motive developer documentation
-(developer-docs.gomotive.com) specifically to try to resolve the question
-left open above: does the ``X-Metric-Units`` request header control the
-unit system of the returned ``idle_fuel``/``driving_fuel`` values
-independent of the returned ``vehicle.metric_units`` field? See
-``docs/engineering/MOTIVE_UTILIZATION_UNIT_SEMANTICS_CERTIFICATION.md`` for
-the full sourced summary. The short version: no reconciling statement was
-found. The endpoint's own field description for ``metric_units`` is
-suggestively unit-system-framed ("Indicates whether metric units are used
-(e.g., false for imperial units)"), which reads differently from the more
-clearly preference/configuration-oriented description Motive uses for the
-same-named field on an unrelated, generic vehicle-details endpoint
-("Indicates if the vehicle uses metric units") -- but neither page states or
-implies whether the header and the field correspond, conflict, or operate
-independently for this endpoint. This gate does not change any validation
-behavior; it formalizes three previously-conflated concepts with explicit
-names (below) and keeps every existing readiness/status flag exactly as PR
-#163 left it.
+A follow-up gate reviewed official Motive developer documentation
+(developer-docs.gomotive.com) and found no statement reconciling the
+``X-Metric-Units`` request header with the returned ``vehicle.metric_units``
+field for this endpoint. No behavior changed; the module only formalized
+explicit names for "what we asked for" vs. "what Motive echoed back."
+
+--------------------------------------------------------------------------
+2026-08-17 provider-confirmation gate (current)
+--------------------------------------------------------------------------
+Motive API Support sent a written reply on 2026-08-17 that directly answers
+the open question above for ``GET /v1/vehicle_utilization``:
+
+- ``X-Metric-Units=true`` requests metric measurement; ``idle_fuel`` and
+  ``driving_fuel`` are therefore liters.
+- ``X-Metric-Units=false`` requests imperial measurement; ``idle_fuel`` and
+  ``driving_fuel`` are therefore gallons.
+- the returned ``vehicle.metric_units`` field is a unit INDICATOR:
+  ``true`` means metric, ``false`` means imperial.
+- ``X-Metric-Units=true`` together with a returned ``vehicle.metric_units =
+  false`` is NOT an expected/documented combination. When the requested unit
+  system and the returned indicator disagree, integrations must fail closed
+  and must not persist fuel values.
+- ``idle_time``/``driving_time`` are seconds regardless of
+  ``X-Metric-Units``.
+
+This is a genuine upgrade, not a guess: it is sourced directly from Motive's
+own written confirmation, not inferred from the single prior live
+observation or from official-docs phrasing. This module now certifies the
+returned-indicator MEANING and the request/response consistency rule, while
+remaining strictly fail-closed whenever the requested and returned unit
+context disagree, is missing, or is malformed. No unit CONVERSION is ever
+performed, and no fuel value is ever persisted across an unresolved or
+mismatched unit context.
 """
 
 from __future__ import annotations
@@ -63,91 +69,156 @@ MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_UNIT_SYSTEM = "metric"
 MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER = "X-Metric-Units"
 MOTIVE_VEHICLE_UTILIZATION_UNIT_CONVERSION_ENABLED = False
 
+# Provider-confirmed (2026-08-17) fuel-unit mapping. idle_time/driving_time
+# are always seconds, independent of X-Metric-Units.
+MOTIVE_VEHICLE_UTILIZATION_METRIC_FUEL_UNIT = "liters"
+MOTIVE_VEHICLE_UTILIZATION_IMPERIAL_FUEL_UNIT = "gallons"
+MOTIVE_VEHICLE_UTILIZATION_TIME_UNIT = "seconds"
+
 # ---------------------------------------------------------------------------
-# Returned-side policy (downgraded to unresolved by this gate). This is what
-# Polaris currently knows -- and does not know -- about what Motive sends
-# back.
+# Returned-side policy. 2026-08-17 provider written confirmation upgrades
+# this from unresolved to defined-but-fail-closed-on-mismatch semantics.
 # ---------------------------------------------------------------------------
-MOTIVE_VEHICLE_UTILIZATION_UNIT_POLICY_STATUS = "LIVE_PROVIDER_UNIT_INDICATOR_SEMANTICS_UNRESOLVED"
+MOTIVE_VEHICLE_UTILIZATION_UNIT_POLICY_STATUS = "PROVIDER_CONFIRMED_FAIL_CLOSED_ON_MISMATCH"
 MOTIVE_VEHICLE_UTILIZATION_CANONICAL_REQUEST_POLICY = "X-Metric-Units = true"
 MOTIVE_VEHICLE_UTILIZATION_CANONICAL_REQUESTED_UNIT_SYSTEM = "metric"
 MOTIVE_VEHICLE_UTILIZATION_CANONICAL_REQUEST_POLICY_CERTIFIED = True
-MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_BOOLEAN_SEMANTICS_CERTIFIED = False
-MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_MUST_EQUAL_REQUEST_BOOLEAN = False
-MOTIVE_VEHICLE_UTILIZATION_DURABLE_FUEL_PERSISTENCE_ENABLED = False
+MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_BOOLEAN_SEMANTICS_CERTIFIED = True
+MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_MUST_EQUAL_REQUEST_BOOLEAN = True
+# A fuel-bearing rollup CAN now become unit-ready when the requested and
+# returned unit context are both present and agree (see
+# validate_vehicle_utilization_unit_persistence_readiness). This flag is
+# purely descriptive/status metadata -- it does not itself gate any runtime
+# behavior. Independently-gated feature flags (the controlled write route's
+# MOTIVE_VEHICLE_UTILIZATION_CONTROLLED_WRITE_ENABLED, checkpoint
+# advancement, and scheduled ingestion) remain OFF and are unaffected by
+# this flag.
+MOTIVE_VEHICLE_UTILIZATION_DURABLE_FUEL_PERSISTENCE_ENABLED = True
 MOTIVE_VEHICLE_UTILIZATION_COMBINE_FUEL_ACROSS_UNKNOWN_UNIT_CONTEXT = False
 
-# Safe, neutral error codes. Neither implies a meaning for the returned value.
+# Safe, neutral error codes.
+# - missing (None) returned indicator: unresolved, we have no data to compare.
+# - non-Boolean, non-None returned indicator: a provider response-shape
+#   problem, not a semantics question.
+# - present Boolean that disagrees with the requested Boolean: a
+#   provider-confirmed, definitively-known mismatch.
 UNIT_INDICATOR_SEMANTICS_UNRESOLVED_ERROR_CODE = "provider_unit_indicator_semantics_unresolved"
 UNIT_CONTEXT_INVALID_TYPE_ERROR_CODE = "provider_unit_context_invalid_type"
+UNIT_CONTEXT_MISMATCH_ERROR_CODE = "provider_unit_policy_mismatch"
 
 # ---------------------------------------------------------------------------
-# 2026-08-16 unit-semantics-certification gate (section 6): explicit,
-# separately-named concepts. Polaris's code and contracts must stop treating
-# "what we asked for" and "what Motive echoed back about the vehicle" as
-# necessarily the same thing. These names are documentation/status-shaping
-# only -- see ``vehicle_utilization_unit_semantics_contract_block`` below for
-# where they are surfaced, and
-# ``validate_vehicle_utilization_unit_persistence_readiness`` above for the
-# one function that actually gates persistence. Defining these names does
-# NOT change readiness behavior and does NOT certify anything new.
+# Explicit, separately-named concepts (section 6 of the 2026-08-16
+# unit-semantics-certification gate, now provider-confirmed rather than
+# aspirational).
 #
 #   requested_measurement_system
 #       What Polaris asks Motive for via the X-Metric-Units request header.
 #       Certified and unchanged: "metric".
-#   vehicle_configured_metric_preference
-#       Motive's returned ``vehicle.metric_units`` Boolean. The raw provider
-#       field name does not itself prove what units the returned
-#       idle_fuel/driving_fuel values use -- it may describe a vehicle
-#       display/configuration preference rather than the measurement system
-#       of this response's numeric values. See the module docstring above
-#       and MOTIVE_UTILIZATION_UNIT_SEMANTICS_CERTIFICATION.md.
+#   vehicle_configured_metric_preference / provider unit indicator
+#       Motive's returned ``vehicle.metric_units`` Boolean. Now
+#       provider-confirmed: True means metric, False means imperial.
 #   response_measurement_system_certification
 #       Whether Polaris has explicitly certified the actual unit system of a
-#       response's idle_fuel/driving_fuel values. Currently UNRESOLVED.
+#       response's idle_fuel/driving_fuel values. Now
+#       PROVIDER_CONFIRMED_FAIL_CLOSED_ON_MISMATCH: certified when the
+#       requested and returned unit context agree; any disagreement, any
+#       missing returned indicator, or any malformed returned value fails
+#       closed rather than being resolved by inference.
 # ---------------------------------------------------------------------------
 MOTIVE_VEHICLE_UTILIZATION_REQUESTED_MEASUREMENT_SYSTEM = "metric"
 MOTIVE_VEHICLE_UTILIZATION_VEHICLE_CONFIGURED_METRIC_PREFERENCE_FIELD_PATH = "vehicle.metric_units"
-MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_CERTIFICATION = "UNRESOLVED"
+MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_CERTIFICATION = "PROVIDER_CONFIRMED_FAIL_CLOSED_ON_MISMATCH"
 MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_BASIS = (
-    "developer-docs.gomotive.com utilization overview and v1 vehicle-utilization "
-    "reference page (retrieved 2026-08-16): no sentence anywhere on the "
-    "official reference page reconciles the X-Metric-Units request header "
-    "with the returned vehicle.metric_units field for this endpoint. The "
-    "field's own description is suggestively unit-system-framed but is not an "
-    "explicit causation statement, and the page's worked example (a false "
-    "metric_units value paired with fuel figures the field descriptions call "
-    "liters) is consistent with more than one reading. See "
-    "docs/engineering/MOTIVE_UTILIZATION_UNIT_SEMANTICS_CERTIFICATION.md for "
-    "the full sourced summary."
+    "Motive API Support written reply (2026-08-17) confirmed GET "
+    "/v1/vehicle_utilization unit semantics directly: X-Metric-Units=true "
+    "requests metric measurement (idle_fuel/driving_fuel in liters); "
+    "X-Metric-Units=false requests imperial measurement (idle_fuel/driving_fuel "
+    "in gallons); the returned vehicle.metric_units indicator means "
+    "true=metric and false=imperial; idle_time/driving_time are always "
+    "seconds regardless of X-Metric-Units; and X-Metric-Units=true together "
+    "with a returned vehicle.metric_units=false is not an expected/documented "
+    "combination -- Motive Support directed integrations to fail closed and "
+    "not persist fuel values whenever the requested and returned unit context "
+    "disagree. This supersedes the prior UNRESOLVED classification recorded "
+    "in docs/engineering/MOTIVE_UTILIZATION_UNIT_SEMANTICS_CERTIFICATION.md."
 )
+
+
+def vehicle_utilization_requested_measurement_system(requested_metric_units: bool) -> str:
+    """Provider-confirmed mapping of the request header to a measurement system."""
+    if type(requested_metric_units) is not bool:
+        raise ValueError("Motive utilization requested_metric_units must be an explicit Boolean")
+    return "metric" if requested_metric_units else "imperial"
+
+
+def vehicle_utilization_requested_fuel_unit(requested_metric_units: bool) -> str:
+    """Provider-confirmed fuel unit for idle_fuel/driving_fuel given the request header."""
+    if type(requested_metric_units) is not bool:
+        raise ValueError("Motive utilization requested_metric_units must be an explicit Boolean")
+    return (
+        MOTIVE_VEHICLE_UTILIZATION_METRIC_FUEL_UNIT
+        if requested_metric_units
+        else MOTIVE_VEHICLE_UTILIZATION_IMPERIAL_FUEL_UNIT
+    )
+
+
+def vehicle_utilization_provider_unit_indicator(returned_metric_units: Any) -> str | None:
+    """Provider-confirmed meaning of the returned ``vehicle.metric_units`` Boolean.
+
+    Returns ``"metric"`` for ``True``, ``"imperial"`` for ``False``, and
+    ``None`` when the value is missing or malformed -- callers must never
+    guess a measurement system in that case.
+    """
+    if returned_metric_units is True:
+        return "metric"
+    if returned_metric_units is False:
+        return "imperial"
+    return None
+
+
+def vehicle_utilization_unit_context_consistent(requested_metric_units: bool, returned_metric_units: Any) -> bool:
+    """Section 9 consistency rule: does the returned indicator agree with the request?
+
+    ``True`` only when both sides are explicit, equal Booleans (true/true or
+    false/false). A missing (``None``) or malformed returned value is never
+    "consistent" -- those are distinct, separately-coded failures handled by
+    :func:`validate_vehicle_utilization_unit_persistence_readiness`.
+    """
+    if type(requested_metric_units) is not bool:
+        raise ValueError("Motive utilization requested_metric_units must be an explicit Boolean")
+    if type(returned_metric_units) is not bool:
+        return False
+    return requested_metric_units is returned_metric_units
 
 
 def vehicle_utilization_unit_semantics_contract_block() -> dict[str, Any]:
     """Build the explicit request-vs-response unit-semantics status block.
 
-    Purely presentational/documentation-shaping: every value here is derived
-    from the same module-level policy constants used by
-    ``validate_vehicle_utilization_unit_persistence_readiness``. This
-    function introduces no new certification decision -- it exists so that
-    ``app.motive.vehicle_utilization_writer_contract`` (and any future
-    caller) can expose the section-6 conceptual distinctions under clear,
-    separately-named fields instead of one ambiguous ``metric_units`` flag.
+    Every value here is derived from the same module-level policy constants
+    used by :func:`validate_vehicle_utilization_unit_persistence_readiness`.
     """
     return {
         "request_header": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER,
         "request_header_value": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_METRIC_UNITS,
         "requested_measurement_system": MOTIVE_VEHICLE_UTILIZATION_REQUESTED_MEASUREMENT_SYSTEM,
         "request_policy_certified": MOTIVE_VEHICLE_UTILIZATION_CANONICAL_REQUEST_POLICY_CERTIFIED,
+        "canonical_requested_fuel_unit": MOTIVE_VEHICLE_UTILIZATION_METRIC_FUEL_UNIT,
         "returned_vehicle_metric_units_semantics": {
             "field_path": MOTIVE_VEHICLE_UTILIZATION_VEHICLE_CONFIGURED_METRIC_PREFERENCE_FIELD_PATH,
-            "classification": "VEHICLE_CONFIGURED_METRIC_PREFERENCE_NOT_CERTIFIED_AS_RESPONSE_UNIT_PROOF",
+            "classification": "PROVIDER_CONFIRMED_UNIT_INDICATOR",
+            "true_means": "metric",
+            "false_means": "imperial",
             "equality_with_request_required": MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_MUST_EQUAL_REQUEST_BOOLEAN,
         },
         "response_measurement_system": {
             "classification": MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_CERTIFICATION,
             "basis": MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_BASIS,
         },
+        "time_unit": MOTIVE_VEHICLE_UTILIZATION_TIME_UNIT,
+        "mismatch_error_code": UNIT_CONTEXT_MISMATCH_ERROR_CODE,
+        "missing_indicator_error_code": UNIT_INDICATOR_SEMANTICS_UNRESOLVED_ERROR_CODE,
+        "invalid_type_error_code": UNIT_CONTEXT_INVALID_TYPE_ERROR_CODE,
+        "unit_conversion_enabled": MOTIVE_VEHICLE_UTILIZATION_UNIT_CONVERSION_ENABLED,
         "durable_fuel_persistence_ready": MOTIVE_VEHICLE_UTILIZATION_DURABLE_FUEL_PERSISTENCE_ENABLED,
     }
 
@@ -161,8 +232,9 @@ class VehicleUtilizationUnitPersistenceReadiness:
     success (see ``app.connectors.motive_vehicle_utilization``). A rollup can
     parse successfully -- including preserving a returned ``True``,
     ``False``, or ``None`` ``metric_units`` value as observed context -- and
-    still be ``ready_for_durable_persistence=False`` here, because Motive's
-    returned-Boolean semantics are not yet certified.
+    still be ``ready_for_durable_persistence=False`` here, because the
+    requested and returned unit context disagree, is missing, or is
+    malformed.
     """
 
     ready_for_durable_persistence: bool
@@ -170,11 +242,7 @@ class VehicleUtilizationUnitPersistenceReadiness:
 
 
 def vehicle_utilization_writer_metric_units_header_value(metric_units: bool) -> str:
-    """Return Motive's Boolean header spelling for an explicit unit mode.
-
-    This is the certified *request*-side policy and is unaffected by the
-    returned-side unit-indicator semantics being unresolved.
-    """
+    """Return Motive's Boolean header spelling for an explicit unit mode."""
     if type(metric_units) is not bool:
         raise ValueError("Motive utilization writer metric_units must be an explicit Boolean")
     return "true" if metric_units else "false"
@@ -182,43 +250,59 @@ def vehicle_utilization_writer_metric_units_header_value(metric_units: bool) -> 
 
 def validate_vehicle_utilization_unit_persistence_readiness(
     returned_metric_units: Any,
+    *,
+    requested_metric_units: bool = MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_METRIC_UNITS,
 ) -> VehicleUtilizationUnitPersistenceReadiness:
-    """Fail closed on durable persistence readiness for a returned rollup's
-    unit context.
+    """Fail-closed durable-persistence readiness gate.
 
-    This function makes NO claim about what a returned ``False`` or ``None``
-    means. It only answers: "is this rollup's unit context certified enough
-    to durably persist fuel-bearing metrics?" Today the answer is always
-    "no" for every observed value -- ``True`` included -- because Motive's
-    returned ``vehicle.metric_units`` Boolean semantics remain unresolved
-    (``MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_BOOLEAN_SEMANTICS_CERTIFIED``
-    is ``False``). A malformed (non-Boolean, non-``None``) returned value is
-    reported with a distinct, separate code, since that indicates a provider
-    response shape problem rather than an open semantics question.
+    2026-08-17 provider-confirmed semantics:
 
-    A future gate may flip
-    ``MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_BOOLEAN_SEMANTICS_CERTIFIED``
-    to ``True`` once Motive explicitly certifies the relationship between the
-    requested and returned Boolean -- at which point this function would
-    treat a returned ``True`` as ready. It must not be flipped by guessing.
+    - ``requested=True, returned=True`` -> ready (consistent, metric).
+    - ``requested=False, returned=False`` -> ready (consistent, imperial).
+    - ``requested=True, returned=False`` or ``requested=False, returned=True``
+      -> fail closed with :data:`UNIT_CONTEXT_MISMATCH_ERROR_CODE`
+      (``provider_unit_policy_mismatch``). Motive Support confirmed this
+      combination is not expected/documented and directed integrations to
+      fail closed rather than persist.
+    - ``returned=None`` -> fail closed with
+      :data:`UNIT_INDICATOR_SEMANTICS_UNRESOLVED_ERROR_CODE`: Polaris has no
+      returned indicator to compare against the request.
+    - a non-Boolean, non-``None`` returned value -> fail closed with
+      :data:`UNIT_CONTEXT_INVALID_TYPE_ERROR_CODE`: a provider response-shape
+      problem, not an open semantics question.
+
+    ``requested_metric_units`` defaults to the certified canonical writer
+    policy (always ``True``) so the real writer transaction -- which only
+    ever requests the canonical policy -- can keep calling this function
+    with a single positional argument. Tests exercising other
+    request/response combinations pass ``requested_metric_units`` explicitly.
+
+    If :data:`MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_BOOLEAN_SEMANTICS_CERTIFIED`
+    were ever reverted to ``False`` (a kill switch, not expected in normal
+    operation), every returned value -- including an otherwise-consistent
+    match -- fails closed with the neutral unresolved code, never guessing a
+    certification that has been explicitly withdrawn.
     """
+    if type(requested_metric_units) is not bool:
+        raise ValueError("Motive utilization requested_metric_units must be an explicit Boolean")
     if returned_metric_units is not None and type(returned_metric_units) is not bool:
         return VehicleUtilizationUnitPersistenceReadiness(
             ready_for_durable_persistence=False,
             error_code=UNIT_CONTEXT_INVALID_TYPE_ERROR_CODE,
+        )
+    if returned_metric_units is None:
+        return VehicleUtilizationUnitPersistenceReadiness(
+            ready_for_durable_persistence=False,
+            error_code=UNIT_INDICATOR_SEMANTICS_UNRESOLVED_ERROR_CODE,
         )
     if not MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_BOOLEAN_SEMANTICS_CERTIFIED:
         return VehicleUtilizationUnitPersistenceReadiness(
             ready_for_durable_persistence=False,
             error_code=UNIT_INDICATOR_SEMANTICS_UNRESOLVED_ERROR_CODE,
         )
-    # Unreachable while semantics remain uncertified in this gate. Retained
-    # so a future, explicitly-authorized certification gate has a defined
-    # place to encode the certified relationship rather than needing to
-    # redesign this function from scratch.
-    if returned_metric_units is True:
-        return VehicleUtilizationUnitPersistenceReadiness(ready_for_durable_persistence=True)
-    return VehicleUtilizationUnitPersistenceReadiness(
-        ready_for_durable_persistence=False,
-        error_code=UNIT_INDICATOR_SEMANTICS_UNRESOLVED_ERROR_CODE,
-    )
+    if requested_metric_units is not returned_metric_units:
+        return VehicleUtilizationUnitPersistenceReadiness(
+            ready_for_durable_persistence=False,
+            error_code=UNIT_CONTEXT_MISMATCH_ERROR_CODE,
+        )
+    return VehicleUtilizationUnitPersistenceReadiness(ready_for_durable_persistence=True)

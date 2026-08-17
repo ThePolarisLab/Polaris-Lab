@@ -254,3 +254,54 @@ endpoint -- the ambiguity documented above stands. That gate:
 
 See `MOTIVE_UTILIZATION_UNIT_SEMANTICS_CERTIFICATION.md` for the full
 sourced documentation review, conclusion, and draft clarification email.
+
+## Update: Authentication + Unit-Mismatch Certification Gate (2026-08-17)
+
+Motive API Support's written reply on 2026-08-17 directly answered the
+question this document's Section A left open. **Reclassification of the
+2026-08-16 production evidence above**, sanitized facts unchanged:
+
+| Field | Value (unchanged) |
+| --- | --- |
+| `production_validation_executed` | `true` |
+| `production_validation_succeeded` | `false` |
+| `provider_calls` | `1` |
+| `returned_rollups` | `1` |
+| `records_inserted` | `0` |
+| `checkpoint_advanced` | `false` |
+| `sync_history_written` | `false` |
+| `safe_failure` | `true` |
+
+| Classification | Value |
+| --- | --- |
+| Previous | `SEMANTICS_UNRESOLVED` |
+| **Current** | **`PROVIDER_CONFIRMED_UNIT_CONTEXT_MISMATCH`** |
+
+Motive Support confirmed that `X-Metric-Units=true` together with a
+returned `vehicle.metric_units=false` is **not** an expected/documented
+combination for `GET /v1/vehicle_utilization`, and that integrations must
+fail closed and not persist fuel values when the requested and returned
+unit context disagree. The single live observation recorded in Section A
+above is exactly this combination. It is therefore no longer an open
+semantics question -- it is a provider-confirmed mismatch that the route
+correctly, and now provably-intentionally, failed closed on. No new
+conclusion is drawn about *why* the mismatch occurred (a different
+vehicle-level preference, an account-level setting, or something else);
+only that Motive confirmed the combination is unexpected and that failing
+closed was the correct response.
+
+`app/motive/vehicle_utilization_writer_contract.py`'s
+`PRODUCTION_WRITE_VALIDATION_EVIDENCE` and
+`controlled_manual_write_validation` blocks now carry an explicit
+`classification: "PROVIDER_CONFIRMED_UNIT_CONTEXT_MISMATCH"` field
+(`production_validation_classification` in the latter) alongside the
+unchanged `error_code: "provider_unit_policy_mismatch"` and all of the
+sanitized counters in the table above.
+
+See `docs/engineering/MOTIVE_UTILIZATION_UNIT_SEMANTICS_CERTIFICATION.md`
+for the full provider-confirmed semantics upgrade (request/response
+consistency rule, durable-persistence-readiness table, and the retired
+`LIVE_PROVIDER_UNIT_INDICATOR_SEMANTICS_UNRESOLVED` status), and
+`docs/engineering/MOTIVE_AUTHENTICATION_CERTIFICATION.md` for the
+authentication half of this gate. This update makes **no** live Motive API
+call, rotates no credential, and adds no database migration.

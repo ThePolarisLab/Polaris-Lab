@@ -480,7 +480,10 @@ def test_success_insert_persists_certified_row(tmp_path, monkeypatch: pytest.Mon
 # validation recorded in
 # docs/engineering/MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md: one provider
 # call, one returned rollup, zero rows inserted, zero checkpoint/history
-# writes, safe failure.
+# writes, safe failure. The controlled route always requests
+# X-Metric-Units: true; the recorded evidence returned
+# vehicle.metric_units=false, which Motive API Support's 2026-08-17 written
+# reply confirmed is a provider-confirmed unit-context mismatch.
 # ---------------------------------------------------------------------------
 @pytest.mark.unit_readiness_gate
 def test_route_fails_closed_matching_recorded_production_evidence(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -488,12 +491,12 @@ def test_route_fails_closed_matching_recorded_production_evidence(tmp_path, monk
     TestingSession = _session_factory(tmp_path)
     _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2", "veh-3"))
     checkpoints_before, history_before = _checkpoint_and_history_counts(TestingSession)
-    pages = [_page([_rollup_item("veh-1")], total=1)]
+    pages = [_page([_rollup_item("veh-1", metric_units=False)], total=1)]
 
     with pytest.raises(MotiveVehicleUtilizationControlledWriteError) as exc_info:
         _run_controlled_write(TestingSession, pages=pages)
 
-    assert exc_info.value.code == "provider_unit_indicator_semantics_unresolved"
+    assert exc_info.value.code == "provider_unit_policy_mismatch"
     assert exc_info.value.provider_calls_attempted == 1
     assert exc_info.value.provider_calls_completed == 1
     assert exc_info.value.selected_vehicle_count == 3
@@ -529,12 +532,12 @@ def test_repeated_real_executions_each_independently_fail_closed_with_zero_rows(
     monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
     TestingSession = _session_factory(tmp_path)
     _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2", "veh-3"))
-    pages = [_page([_rollup_item("veh-1")], total=1)]
+    pages = [_page([_rollup_item("veh-1", metric_units=False)], total=1)]
 
     for _attempt in range(2):
         with pytest.raises(MotiveVehicleUtilizationControlledWriteError) as exc_info:
             _run_controlled_write(TestingSession, pages=pages)
-        assert exc_info.value.code == "provider_unit_indicator_semantics_unresolved"
+        assert exc_info.value.code == "provider_unit_policy_mismatch"
         assert _row_count(TestingSession) == 0
 
 
@@ -723,16 +726,22 @@ def test_unexpected_returned_vehicle_fails_closed(tmp_path, monkeypatch: pytest.
 # ---------------------------------------------------------------------------
 # Section 27 -- unit / parser failure.
 #
-# 2026-08-16: these fail closed at the WRITER's persistence-readiness gate
-# now (not a read-stage pre-check) -- provider schema parse success is
-# distinct from durable persistence readiness. True, False, and None (and
-# the malformed-type case) all still make zero provider calls beyond the
-# one already made and zero durable writes; True/False/None share the exact
-# same neutral, unresolved code.
+# These fail closed at the WRITER's persistence-readiness gate (not a
+# read-stage pre-check) -- provider schema parse success is distinct from
+# durable persistence readiness. The controlled route always requests
+# X-Metric-Units: true, so a returned True now agrees and is unit-ready
+# (proven separately in test_route_succeeds_when_returned_unit_matches_the_
+# canonical_request below); False and None each still fail closed, with
+# their own distinct, provider-confirmed codes.
 # ---------------------------------------------------------------------------
 @pytest.mark.unit_readiness_gate
-@pytest.mark.parametrize("metric_units", [True, False, None])
-def test_every_returned_unit_value_fails_closed_before_any_write(tmp_path, monkeypatch: pytest.MonkeyPatch, metric_units) -> None:
+@pytest.mark.parametrize(
+    ("metric_units", "expected_code"),
+    [(False, "provider_unit_policy_mismatch"), (None, "provider_unit_indicator_semantics_unresolved")],
+)
+def test_every_disagreeing_or_missing_returned_unit_value_fails_closed_before_any_write(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, metric_units, expected_code
+) -> None:
     monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
     TestingSession = _session_factory(tmp_path)
     _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2", "veh-3"))
@@ -741,9 +750,26 @@ def test_every_returned_unit_value_fails_closed_before_any_write(tmp_path, monke
     with pytest.raises(MotiveVehicleUtilizationControlledWriteError) as exc_info:
         _run_controlled_write(TestingSession, pages=pages)
 
-    assert exc_info.value.code == "provider_unit_indicator_semantics_unresolved"
+    assert exc_info.value.code == expected_code
     assert exc_info.value.returned_rollup_count == 1
     assert _row_count(TestingSession) == 0
+
+
+@pytest.mark.unit_readiness_gate
+def test_route_succeeds_when_returned_unit_matches_the_canonical_request(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A returned True agrees with the controlled route's canonical
+    X-Metric-Units: true request and is durably persisted -- the real,
+    non-bypassed unit-readiness gate, not the module-level test bypass."""
+    monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2", "veh-3"))
+    pages = [_page([_rollup_item("veh-1", metric_units=True)], total=1)]
+
+    result = _run_controlled_write(TestingSession, pages=pages)
+
+    assert result["status"] == "success"
+    assert result["records_inserted"] == 1
+    assert _row_count(TestingSession) == 1
 
 
 def test_bad_parser_shape_fails_closed_before_writer_commit(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

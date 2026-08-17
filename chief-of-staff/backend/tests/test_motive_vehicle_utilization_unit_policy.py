@@ -14,15 +14,25 @@ from app.motive.vehicle_utilization_unit_policy import (
     MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_UNIT_SYSTEM,
     MOTIVE_VEHICLE_UTILIZATION_COMBINE_FUEL_ACROSS_UNKNOWN_UNIT_CONTEXT,
     MOTIVE_VEHICLE_UTILIZATION_DURABLE_FUEL_PERSISTENCE_ENABLED,
+    MOTIVE_VEHICLE_UTILIZATION_IMPERIAL_FUEL_UNIT,
+    MOTIVE_VEHICLE_UTILIZATION_METRIC_FUEL_UNIT,
     MOTIVE_VEHICLE_UTILIZATION_REQUESTED_MEASUREMENT_SYSTEM,
     MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_BASIS,
     MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_CERTIFICATION,
     MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_BOOLEAN_SEMANTICS_CERTIFIED,
     MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_MUST_EQUAL_REQUEST_BOOLEAN,
+    MOTIVE_VEHICLE_UTILIZATION_TIME_UNIT,
     MOTIVE_VEHICLE_UTILIZATION_UNIT_CONVERSION_ENABLED,
     MOTIVE_VEHICLE_UTILIZATION_UNIT_POLICY_STATUS,
     MOTIVE_VEHICLE_UTILIZATION_VEHICLE_CONFIGURED_METRIC_PREFERENCE_FIELD_PATH,
+    UNIT_CONTEXT_INVALID_TYPE_ERROR_CODE,
+    UNIT_CONTEXT_MISMATCH_ERROR_CODE,
+    UNIT_INDICATOR_SEMANTICS_UNRESOLVED_ERROR_CODE,
     validate_vehicle_utilization_unit_persistence_readiness,
+    vehicle_utilization_provider_unit_indicator,
+    vehicle_utilization_requested_fuel_unit,
+    vehicle_utilization_requested_measurement_system,
+    vehicle_utilization_unit_context_consistent,
     vehicle_utilization_unit_semantics_contract_block,
     vehicle_utilization_writer_metric_units_header_value,
 )
@@ -72,120 +82,178 @@ def test_request_side_canonical_policy_is_still_the_certified_request_header() -
 
 
 # ---------------------------------------------------------------------------
-# 2026-08-16 reconciliation gate: downgraded, unresolved returned-side policy.
+# 2026-08-17 provider-confirmation gate: upgraded, defined,
+# fail-closed-on-mismatch returned-side policy.
 # ---------------------------------------------------------------------------
-def test_unit_policy_status_is_downgraded_to_unresolved() -> None:
-    assert MOTIVE_VEHICLE_UTILIZATION_UNIT_POLICY_STATUS == "LIVE_PROVIDER_UNIT_INDICATOR_SEMANTICS_UNRESOLVED"
-    assert MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_BOOLEAN_SEMANTICS_CERTIFIED is False
-    assert MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_MUST_EQUAL_REQUEST_BOOLEAN is False
-    assert MOTIVE_VEHICLE_UTILIZATION_DURABLE_FUEL_PERSISTENCE_ENABLED is False
+def test_unit_policy_status_is_upgraded_to_provider_confirmed() -> None:
+    assert MOTIVE_VEHICLE_UTILIZATION_UNIT_POLICY_STATUS == "PROVIDER_CONFIRMED_FAIL_CLOSED_ON_MISMATCH"
+    assert MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_BOOLEAN_SEMANTICS_CERTIFIED is True
+    assert MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_MUST_EQUAL_REQUEST_BOOLEAN is True
+    assert MOTIVE_VEHICLE_UTILIZATION_DURABLE_FUEL_PERSISTENCE_ENABLED is True
     assert MOTIVE_VEHICLE_UTILIZATION_COMBINE_FUEL_ACROSS_UNKNOWN_UNIT_CONTEXT is False
 
 
+def test_fuel_and_time_unit_mapping_is_provider_confirmed() -> None:
+    assert MOTIVE_VEHICLE_UTILIZATION_METRIC_FUEL_UNIT == "liters"
+    assert MOTIVE_VEHICLE_UTILIZATION_IMPERIAL_FUEL_UNIT == "gallons"
+    assert MOTIVE_VEHICLE_UTILIZATION_TIME_UNIT == "seconds"
+    assert vehicle_utilization_requested_fuel_unit(True) == "liters"
+    assert vehicle_utilization_requested_fuel_unit(False) == "gallons"
+    assert vehicle_utilization_requested_measurement_system(True) == "metric"
+    assert vehicle_utilization_requested_measurement_system(False) == "imperial"
+
+
+@pytest.mark.parametrize("value", [1, 0, "true", "metric", None, []])
+def test_requested_measurement_system_helpers_reject_non_boolean(value: object) -> None:
+    with pytest.raises(ValueError, match="explicit Boolean"):
+        vehicle_utilization_requested_measurement_system(value)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="explicit Boolean"):
+        vehicle_utilization_requested_fuel_unit(value)  # type: ignore[arg-type]
+
+
+def test_provider_unit_indicator_mapping() -> None:
+    assert vehicle_utilization_provider_unit_indicator(True) == "metric"
+    assert vehicle_utilization_provider_unit_indicator(False) == "imperial"
+    assert vehicle_utilization_provider_unit_indicator(None) is None
+
+
+@pytest.mark.parametrize("value", ["true", "false", 1, 0, "metric", []])
+def test_provider_unit_indicator_mapping_returns_none_for_malformed_values(value: object) -> None:
+    assert vehicle_utilization_provider_unit_indicator(value) is None
+
+
 # ---------------------------------------------------------------------------
-# Persistence-readiness validator: the redesigned gate.
-#
-# CRITICAL: none of these tests may assert or imply what a returned False or
-# None *means*. They only prove that no returned value currently makes a
-# rollup ready for durable persistence, and that a malformed (non-Boolean,
-# non-None) value is reported with a distinct, separate code.
+# Section 9: request/response consistency rule.
 # ---------------------------------------------------------------------------
-def test_returned_true_does_not_automatically_certify_persistence_readiness() -> None:
-    """A returned True must never be treated as automatically certified --
-    certification requires an explicit, separate policy flag, not merely
-    observing the same Boolean Polaris requested.
-    """
+def test_true_true_is_consistent() -> None:
+    assert vehicle_utilization_unit_context_consistent(True, True) is True
+
+
+def test_false_false_is_consistent() -> None:
+    assert vehicle_utilization_unit_context_consistent(False, False) is True
+
+
+def test_true_false_is_not_consistent() -> None:
+    assert vehicle_utilization_unit_context_consistent(True, False) is False
+
+
+def test_false_true_is_not_consistent() -> None:
+    assert vehicle_utilization_unit_context_consistent(False, True) is False
+
+
+@pytest.mark.parametrize("returned_metric_units", [None, "true", 1, 0, []])
+def test_missing_or_malformed_returned_value_is_never_consistent(returned_metric_units: object) -> None:
+    assert vehicle_utilization_unit_context_consistent(True, returned_metric_units) is False
+    assert vehicle_utilization_unit_context_consistent(False, returned_metric_units) is False
+
+
+def test_consistency_helper_requires_an_explicit_requested_boolean() -> None:
+    with pytest.raises(ValueError, match="explicit Boolean"):
+        vehicle_utilization_unit_context_consistent(1, True)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Persistence-readiness validator: provider-confirmed, fail-closed-on-mismatch.
+# ---------------------------------------------------------------------------
+def test_canonical_writer_true_true_is_ready_for_durable_persistence() -> None:
+    """The canonical writer always requests True; a returned True now agrees
+    with the request and is unit-ready (other writer conditions still apply
+    separately)."""
     result = validate_vehicle_utilization_unit_persistence_readiness(True)
 
-    assert result.ready_for_durable_persistence is False
-    assert result.error_code == "provider_unit_indicator_semantics_unresolved"
+    assert result.ready_for_durable_persistence is True
+    assert result.error_code is None
 
 
-def test_returned_false_is_not_interpreted_as_imperial() -> None:
-    """A returned False must never be interpreted as imperial, as a signal
-    that the header was ignored, or as any other specific claim -- it is
-    only unresolved, using the exact same neutral code as True and None.
-    """
+def test_canonical_writer_true_request_with_false_returned_is_a_provider_confirmed_mismatch() -> None:
+    """A returned False against the canonical True request is exactly the
+    combination Motive Support confirmed is not expected/documented -- it
+    fails closed with the mismatch code, never interpreted as imperial."""
     result = validate_vehicle_utilization_unit_persistence_readiness(False)
 
     assert result.ready_for_durable_persistence is False
-    assert result.error_code == "provider_unit_indicator_semantics_unresolved"
+    assert result.error_code == UNIT_CONTEXT_MISMATCH_ERROR_CODE
 
 
-def test_returned_none_remains_unresolved() -> None:
-    result = validate_vehicle_utilization_unit_persistence_readiness(None)
+def test_false_request_false_returned_is_ready_for_durable_persistence() -> None:
+    result = validate_vehicle_utilization_unit_persistence_readiness(False, requested_metric_units=False)
+
+    assert result.ready_for_durable_persistence is True
+    assert result.error_code is None
+
+
+def test_false_request_true_returned_is_a_provider_confirmed_mismatch() -> None:
+    result = validate_vehicle_utilization_unit_persistence_readiness(True, requested_metric_units=False)
 
     assert result.ready_for_durable_persistence is False
-    assert result.error_code == "provider_unit_indicator_semantics_unresolved"
+    assert result.error_code == UNIT_CONTEXT_MISMATCH_ERROR_CODE
 
 
-def test_true_false_and_none_all_share_the_same_neutral_unresolved_code() -> None:
-    """No returned value is treated as more or less suspicious than another
-    -- they all fail the same way, for the same stated reason (semantics
-    unresolved), never a value-specific reason.
-    """
-    codes = {
-        validate_vehicle_utilization_unit_persistence_readiness(True).error_code,
-        validate_vehicle_utilization_unit_persistence_readiness(False).error_code,
-        validate_vehicle_utilization_unit_persistence_readiness(None).error_code,
-    }
-    assert codes == {"provider_unit_indicator_semantics_unresolved"}
+@pytest.mark.parametrize("requested_metric_units", [True, False])
+def test_returned_none_remains_unresolved_and_fails_closed(requested_metric_units: bool) -> None:
+    result = validate_vehicle_utilization_unit_persistence_readiness(None, requested_metric_units=requested_metric_units)
+
+    assert result.ready_for_durable_persistence is False
+    assert result.error_code == UNIT_INDICATOR_SEMANTICS_UNRESOLVED_ERROR_CODE
 
 
 @pytest.mark.parametrize("returned_metric_units", ["true", "false", 1, 0, "metric", "imperial", []])
 def test_malformed_returned_type_fails_closed_with_a_distinct_code(returned_metric_units: object) -> None:
     """A non-Boolean, non-None returned value is a provider response-shape
-    problem, not an open semantics question, so it gets its own separate
-    code rather than being folded into the neutral unresolved code.
-    """
+    problem, not a semantics question, so it gets its own separate code."""
     result = validate_vehicle_utilization_unit_persistence_readiness(returned_metric_units)
 
     assert result.ready_for_durable_persistence is False
-    assert result.error_code == "provider_unit_context_invalid_type"
+    assert result.error_code == UNIT_CONTEXT_INVALID_TYPE_ERROR_CODE
 
 
-def test_persistence_readiness_gate_can_become_certified_in_a_future_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Explicit representation, not guesswork: flipping the module-level
-    certified flag (only appropriate in a future, separately-authorized
-    gate once Motive explicitly certifies the relationship) is the only way
-    a returned True becomes ready. This proves the gate is not hard-coded
-    to permanently reject True -- it is conditioned on an explicit policy
-    flag rather than the value itself.
-    """
+def test_missing_and_malformed_never_get_the_mismatch_code() -> None:
+    """The mismatch code is reserved for a present, well-formed, disagreeing
+    Boolean -- never for a missing or malformed value."""
+    codes = {
+        validate_vehicle_utilization_unit_persistence_readiness(None).error_code,
+        validate_vehicle_utilization_unit_persistence_readiness("not-a-bool").error_code,
+    }
+    assert UNIT_CONTEXT_MISMATCH_ERROR_CODE not in codes
+
+
+def test_persistence_readiness_gate_can_be_reverted_by_the_certification_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_BOOLEAN_SEMANTICS_CERTIFIED
+    were ever reverted to False (a kill switch, not expected in normal
+    operation), every returned value -- including an otherwise-consistent
+    match -- fails closed with the neutral unresolved code rather than
+    silently keeping the certification."""
     import app.motive.vehicle_utilization_unit_policy as unit_policy
 
-    monkeypatch.setattr(unit_policy, "MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_BOOLEAN_SEMANTICS_CERTIFIED", True)
+    monkeypatch.setattr(unit_policy, "MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_BOOLEAN_SEMANTICS_CERTIFIED", False)
 
     true_result = unit_policy.validate_vehicle_utilization_unit_persistence_readiness(True)
     false_result = unit_policy.validate_vehicle_utilization_unit_persistence_readiness(False)
 
-    assert true_result.ready_for_durable_persistence is True
+    assert true_result.ready_for_durable_persistence is False
+    assert true_result.error_code == UNIT_INDICATOR_SEMANTICS_UNRESOLVED_ERROR_CODE
     assert false_result.ready_for_durable_persistence is False
-    assert false_result.error_code == "provider_unit_indicator_semantics_unresolved"
+    assert false_result.error_code == UNIT_INDICATOR_SEMANTICS_UNRESOLVED_ERROR_CODE
 
 
 # ---------------------------------------------------------------------------
-# 2026-08-16 unit-semantics-certification gate: section 6 conceptual naming.
-#
-# These tests prove the new documentation-driven conceptual distinctions
-# exist and are wired into the contract block -- they must NOT assert or
-# imply what a returned False/True/None value means, and they must NOT
-# change any persistence-readiness outcome (that is covered above).
+# Section 6 conceptual naming, now provider-confirmed (2026-08-17 gate).
 # ---------------------------------------------------------------------------
 def test_requested_measurement_system_is_named_and_metric() -> None:
     assert MOTIVE_VEHICLE_UTILIZATION_REQUESTED_MEASUREMENT_SYSTEM == "metric"
 
 
-def test_response_measurement_system_certification_is_unresolved_with_a_cited_basis() -> None:
-    """Outcome B: no official documentation reconciles the request header
-    with the returned vehicle.metric_units field for this endpoint, so the
-    response measurement system stays UNRESOLVED with a documented basis
-    (not a guess, not silence).
+def test_response_measurement_system_certification_is_provider_confirmed_with_a_cited_basis() -> None:
+    """Motive API Support's 2026-08-17 written reply confirmed the
+    request/response relationship for this endpoint, so the response
+    measurement system upgrades from UNRESOLVED to a defined,
+    fail-closed-on-mismatch classification with a documented basis (not a
+    guess, not silence).
     """
-    assert MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_CERTIFICATION == "UNRESOLVED"
+    assert MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_CERTIFICATION == "PROVIDER_CONFIRMED_FAIL_CLOSED_ON_MISMATCH"
     assert isinstance(MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_BASIS, str)
     assert len(MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_BASIS) > 0
-    assert "developer-docs.gomotive.com" in MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_BASIS
+    assert "2026-08-17" in MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_BASIS
 
 
 def test_vehicle_configured_metric_preference_field_path_is_named() -> None:
@@ -194,8 +262,8 @@ def test_vehicle_configured_metric_preference_field_path_is_named() -> None:
 
 def test_unit_semantics_contract_block_shape() -> None:
     """Proves the section-18 unit_semantics block's exact shape and that it
-    is entirely derived from the existing certified/uncertified policy
-    constants -- no new certification decision is smuggled in here.
+    is entirely derived from the existing policy constants -- no new
+    certification decision is smuggled in here.
     """
     block = vehicle_utilization_unit_semantics_contract_block()
 
@@ -203,32 +271,41 @@ def test_unit_semantics_contract_block_shape() -> None:
     assert block["request_header_value"] is True
     assert block["requested_measurement_system"] == "metric"
     assert block["request_policy_certified"] is True
+    assert block["canonical_requested_fuel_unit"] == "liters"
 
     returned = block["returned_vehicle_metric_units_semantics"]
     assert returned["field_path"] == "vehicle.metric_units"
-    assert returned["equality_with_request_required"] is False
+    assert returned["true_means"] == "metric"
+    assert returned["false_means"] == "imperial"
+    assert returned["equality_with_request_required"] is True
 
     response = block["response_measurement_system"]
-    assert response["classification"] == "UNRESOLVED"
+    assert response["classification"] == "PROVIDER_CONFIRMED_FAIL_CLOSED_ON_MISMATCH"
     assert isinstance(response["basis"], str) and response["basis"]
 
-    assert block["durable_fuel_persistence_ready"] is False
+    assert block["time_unit"] == "seconds"
+    assert block["mismatch_error_code"] == UNIT_CONTEXT_MISMATCH_ERROR_CODE
+    assert block["unit_conversion_enabled"] is False
+    assert block["durable_fuel_persistence_ready"] is True
 
 
-def test_unit_semantics_contract_block_never_asserts_false_means_imperial() -> None:
-    """No word in the block's textual content may claim a returned False (or
-    True) has a specific meaning -- only that the relationship is unresolved.
+def test_unit_semantics_contract_block_now_explicitly_states_the_confirmed_meaning() -> None:
+    """The old, deliberately-neutral gate asserted this block never claimed
+    what a returned False meant. That neutrality is now retired on purpose:
+    Motive Support has explicitly confirmed the meaning, so the contract
+    block must say so plainly rather than staying artificially silent.
     """
     block = vehicle_utilization_unit_semantics_contract_block()
     rendered = " ".join(
         str(value)
         for value in (
-            block["returned_vehicle_metric_units_semantics"]["classification"],
+            block["returned_vehicle_metric_units_semantics"]["true_means"],
+            block["returned_vehicle_metric_units_semantics"]["false_means"],
             block["response_measurement_system"]["classification"],
             block["response_measurement_system"]["basis"],
         )
     ).lower()
 
-    assert "false means imperial" not in rendered
-    assert "false implies imperial" not in rendered
-    assert "certified_metric" not in rendered
+    assert "metric" in rendered
+    assert "imperial" in rendered
+    assert "provider_confirmed" in rendered or "confirmed" in rendered
