@@ -27,6 +27,16 @@ Scope of this module:
 This is NOT broad vehicle-utilization ingestion, NOT scheduled sync, and NOT
 checkpoint implementation. It is a tightly bounded, explicitly controlled
 production write validation path for one fixed historical day.
+
+2026-08-17 historical-rollup reconciliation gate: this module's read/validate
+bounds (one page, one provider call, fixed day, at most
+``CONTROLLED_WRITE_MAX_SELECTED_VEHICLES`` vehicles) are UNCHANGED. Only the
+underlying writer transaction's replay policy changed: a repeat invocation
+whose returned rollup differs from an already-persisted row in an approved
+mutable field (see ``MUTABLE_ON_PROVIDER_RECONCILIATION`` in
+``vehicle_utilization_writer.py``) now reconciles that row in place instead
+of failing closed. This route still makes zero checkpoint or sync-history
+writes either way.
 """
 
 from __future__ import annotations
@@ -340,6 +350,8 @@ def run_controlled_vehicle_utilization_write(
             "returned_rollup_count": len(read_result.rollups),
             "records_inserted": write_result.records_inserted,
             "records_unchanged": write_result.records_unchanged,
+            "records_updated": write_result.records_updated,
+            "reconciled_fields_count": write_result.reconciled_fields_count,
             "status": "committed",
         },
     )
@@ -359,6 +371,7 @@ def run_controlled_vehicle_utilization_write(
         "records_inserted": write_result.records_inserted,
         "records_unchanged": write_result.records_unchanged,
         "records_updated": write_result.records_updated,
+        "reconciled_fields_count": write_result.reconciled_fields_count,
         "committed": write_result.committed,
         "checkpoint_advanced": False,
         "sync_history_written": False,

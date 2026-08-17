@@ -49,6 +49,36 @@ from app.motive.vehicle_utilization_unit_policy import (
 )
 
 
+# ---------------------------------------------------------------------------
+# 2026-08-17 historical-rollup reconciliation gate: static, duplicated status
+# metadata mirroring ``MUTABLE_ON_PROVIDER_RECONCILIATION`` in
+# ``app.motive.vehicle_utilization_writer``. This module deliberately never
+# imports the writer transaction module itself (see the module docstring
+# above) -- these tuples are intentionally hardcoded here rather than
+# imported, so this file keeps reporting only sanitized, static metadata with
+# zero coupling to the writer's live code path. See
+# docs/engineering/MOTIVE_UTILIZATION_HISTORICAL_RECONCILIATION.md for the
+# full field-by-field audit these mirror.
+# ---------------------------------------------------------------------------
+HISTORICAL_ROLLUP_MUTABLE_FIELDS: tuple[str, ...] = (
+    "utilization_percent",
+    "idle_time",
+    "driving_time",
+    "idle_fuel",
+    "driving_fuel",
+)
+HISTORICAL_ROLLUP_IMMUTABLE_IDENTITY_AND_CONTEXT_FIELDS: tuple[str, ...] = (
+    "organization_id",
+    "motive_vehicle_id",
+    "request_window_start",
+    "request_window_end",
+    "provider_vehicle_id",
+    "source_endpoint",
+    "parser_version",
+    "metric_units",
+)
+
+
 LIVE_BOUNDED_EVIDENCE: dict[str, Any] = {
     "evidence_mode": "manual_bounded_read_only",
     "selected_vehicle_count": 3,
@@ -196,9 +226,11 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
             "function": "write_vehicle_utilization_transaction",
             "commits_once": True,
             "all_or_nothing": True,
-            "conflicting_replay_policy": "fail_closed",
+            "conflicting_replay_policy": "fail_closed_on_identity_or_context_conflict",
             "identical_replay_policy": "unchanged",
-            "update_existing_row_enabled": False,
+            "update_existing_row_enabled": True,
+            "reconciliation_policy": "field_level_reconciliation_of_approved_mutable_fields_only",
+            "blind_orm_merge_used": False,
             "zero_result_supported": True,
             "provider_calls": 0,
             "checkpoint_writes": 0,
@@ -217,11 +249,30 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
                 "is permanently immutable. Polaris no longer treats a conflicting "
                 "historical value as inherently invalid."
             ),
-            "current_runtime_behavior": "identical_replay_unchanged_conflicting_replay_fail_closed_updates_disabled",
-            "replay_contract_classification": "TEMPORARY_FAIL_CLOSED_PENDING_RECONCILIATION_POLICY",
-            "update_or_upsert_semantics_implemented": False,
+            # 2026-08-17 historical-rollup reconciliation gate: the temporary
+            # fail-closed-on-any-difference posture is now replaced by an
+            # explicit, field-by-field reconciliation policy. See
+            # docs/engineering/MOTIVE_UTILIZATION_HISTORICAL_RECONCILIATION.md
+            # for the full field-level audit and matrix.
+            "current_runtime_behavior": (
+                "identical_replay_unchanged_identity_or_context_conflict_fail_closed_"
+                "approved_mutable_fields_reconciled_in_place"
+            ),
+            "replay_contract_classification": "FIELD_LEVEL_RECONCILIATION_POLICY_IMPLEMENTED",
+            "update_or_upsert_semantics_implemented": True,
+            "reconciliation_is_blind_upsert": False,
+            "reconciliation_is_field_level_only": True,
+            "mutable_on_provider_reconciliation": list(HISTORICAL_ROLLUP_MUTABLE_FIELDS),
+            "immutable_identity_and_context_fields": list(HISTORICAL_ROLLUP_IMMUTABLE_IDENTITY_AND_CONTEXT_FIELDS),
+            "omission_deletes_or_zeroes_existing_rows": False,
+            "batch_atomicity_preserved": True,
             "future_gate_required": True,
-            "future_gate_scope": "controlled historical refresh/upsert semantics for broad scheduled ingestion",
+            "future_gate_scope": (
+                "scheduled rolling-window ingestion (checkpoint advancement + "
+                "scheduler activation) -- the reconciliation POLICY itself is "
+                "implemented in this gate; only its scheduled/automatic "
+                "invocation remains a separate, later gate"
+            ),
         },
         "controlled_manual_write_validation": {
             "implementation_present": True,
@@ -476,7 +527,7 @@ def motive_vehicle_utilization_writer_contract_status(db: Session, organization_
         },
         "remaining_blockers": [
             "controlled write route remains feature-flagged off by default and requires separate authorization to enable",
-            "historical-rollup reconciliation/update policy must be designed before broad rolling-window synchronization",
+            "scheduled/automatic rolling-window ingestion (checkpoint advancement + scheduler activation) remains disabled -- the reconciliation policy itself is implemented, but nothing calls it on a schedule",
             "checkpoint advancement implementation remains disabled",
             "exact company-configured Motive timezone value must be confirmed before scheduled daily ingestion",
         ],

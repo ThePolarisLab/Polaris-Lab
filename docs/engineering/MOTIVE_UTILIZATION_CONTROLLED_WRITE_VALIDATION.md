@@ -361,3 +361,24 @@ live call. See
 the full provider-confirmed semantics upgrade and
 `docs/engineering/MOTIVE_AUTHENTICATION_CERTIFICATION.md` for the
 authentication half of this gate.
+
+## Update: Historical-Rollup Reconciliation Gate (2026-08-17)
+
+This route's bounds are **unchanged**: still feature-flagged off by
+default, still exactly one fixed historical day
+(`2026-08-13..2026-08-13`), still at most three deterministic stored
+vehicles, still at most one Motive provider call, still zero checkpoint and
+zero sync-history writes. Only the underlying writer transaction's replay
+policy changed (see `MOTIVE_UTILIZATION_WRITER_TRANSACTION.md`'s own update
+section and `MOTIVE_UTILIZATION_HISTORICAL_RECONCILIATION.md` for the full
+field-level audit): a repeat invocation of this route whose returned rollup
+differs from an already-persisted row in an approved mutable field
+(`utilization_percent`, `idle_time`, `driving_time`, `idle_fuel`,
+`driving_fuel`) now reconciles that row in place (`records_updated`
+increments, `reconciled_fields_count` reports how many fields changed)
+instead of failing closed with `conflicting_existing_identity`. A genuine
+identity/context conflict (mismatched unit context, provenance, or window)
+still fails closed exactly as before. The route's response shape gains one
+additive field, `reconciled_fields_count`, alongside the existing
+`records_updated`. No live Motive call was made, no database migration was
+added, and the feature flag was not enabled during this update's tests.

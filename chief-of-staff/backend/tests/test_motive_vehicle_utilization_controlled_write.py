@@ -542,9 +542,11 @@ def test_repeated_real_executions_each_independently_fail_closed_with_zero_rows(
 
 
 # ---------------------------------------------------------------------------
-# Section 24 -- conflicting replay.
+# Section 24 -- changed replay now reconciles (2026-08-17 historical-rollup
+# reconciliation gate). A genuine identity/context conflict (never a mere
+# metric-value change) still fails closed.
 # ---------------------------------------------------------------------------
-def test_conflicting_replay_fails_closed(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_changed_replay_reconciles_the_approved_field(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
     TestingSession = _session_factory(tmp_path)
     _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2", "veh-3"))
@@ -555,14 +557,63 @@ def test_conflicting_replay_fails_closed(tmp_path, monkeypatch: pytest.MonkeyPat
     assert _row_count(TestingSession) == 1
 
     second_pages = [_page([_rollup_item("veh-1", idle_time=999)], total=1)]
+    result = _run_controlled_write(TestingSession, pages=second_pages)
+
+    assert result["records_inserted"] == 0
+    assert result["records_unchanged"] == 0
+    assert result["records_updated"] == 1
+    assert result["reconciled_fields_count"] == 1
+    assert _row_count(TestingSession) == 1
+    with TestingSession() as session:
+        row = session.query(MotiveVehicleUtilizationRecord).one()
+        assert row.idle_time == Decimal("999")
+    checkpoints_after, history_after = _checkpoint_and_history_counts(TestingSession)
+    assert checkpoints_after == checkpoints_before
+    assert history_after == history_before
+
+
+def test_conflicting_identity_context_still_fails_closed(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A metric-value difference now reconciles (see above). A genuine
+    identity/context conflict -- here, an existing row that predates the
+    certified writer contract (incompatible unit context) -- still fails
+    closed and is never silently reconciled."""
+    monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2", "veh-3"))
+    checkpoints_before, history_before = _checkpoint_and_history_counts(TestingSession)
+
+    with TestingSession.begin() as session:
+        vehicle = session.query(MotiveVehicleRecord).filter_by(provider_vehicle_id="veh-1").one()
+        session.add(
+            MotiveVehicleUtilizationRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_vehicle_id="veh-1",
+                motive_vehicle_id=vehicle.id,
+                source_endpoint=writer_module.CERTIFIED_SOURCE_ENDPOINT,
+                request_window_start=CONTROLLED_WRITE_WINDOW_START,
+                request_window_end=CONTROLLED_WRITE_WINDOW_END,
+                utilization_percent=Decimal("50"),
+                idle_time=Decimal("100"),
+                driving_time=Decimal("200"),
+                idle_fuel=Decimal("1"),
+                driving_fuel=Decimal("2"),
+                metric_units=False,
+                parser_version=writer_module.CERTIFIED_PARSER_VERSION,
+            )
+        )
+    assert _row_count(TestingSession) == 1
+
+    pages = [_page([_rollup_item("veh-1", idle_time=999)], total=1)]
     with pytest.raises(MotiveVehicleUtilizationControlledWriteError) as exc_info:
-        _run_controlled_write(TestingSession, pages=second_pages)
+        _run_controlled_write(TestingSession, pages=pages)
 
     assert exc_info.value.code == "conflicting_existing_identity"
     assert _row_count(TestingSession) == 1
     with TestingSession() as session:
         row = session.query(MotiveVehicleUtilizationRecord).one()
         assert row.idle_time == Decimal("100")
+        assert row.metric_units is False
     checkpoints_after, history_after = _checkpoint_and_history_counts(TestingSession)
     assert checkpoints_after == checkpoints_before
     assert history_after == history_before
@@ -980,6 +1031,7 @@ def test_success_response_never_leaks_unsafe_values(tmp_path, monkeypatch: pytes
         "records_inserted",
         "records_unchanged",
         "records_updated",
+        "reconciled_fields_count",
         "committed",
         "checkpoint_advanced",
         "sync_history_written",
@@ -993,14 +1045,38 @@ def test_error_response_never_leaks_unsafe_values(tmp_path, monkeypatch: pytest.
     monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
     TestingSession = _session_factory(tmp_path)
     _seed(TestingSession, provider_vehicle_ids=(UNSAFE_PROVIDER_VEHICLE_ID, "veh-2", "veh-3"))
-    # Conflicting metric value on replay triggers a sanitized writer failure.
-    first_pages = [_page([_rollup_item(UNSAFE_PROVIDER_VEHICLE_ID, idle_time=1)], total=1)]
-    _run_controlled_write(TestingSession, pages=first_pages, selected_provider_vehicle_ids=(UNSAFE_PROVIDER_VEHICLE_ID, "veh-2", "veh-3"))
+
+    # A genuine identity/context conflict (incompatible legacy unit context)
+    # -- a mere metric-value difference now reconciles rather than erroring
+    # (see test_changed_replay_reconciles_the_approved_field above), so this
+    # sanitized-error proof needs a real conflict to trigger a writer
+    # failure at all.
+    with TestingSession.begin() as session:
+        vehicle = session.query(MotiveVehicleRecord).filter_by(provider_vehicle_id=UNSAFE_PROVIDER_VEHICLE_ID).one()
+        session.add(
+            MotiveVehicleUtilizationRecord(
+                organization_id="org-a",
+                organization_slug="org-a",
+                provider_vehicle_id=UNSAFE_PROVIDER_VEHICLE_ID,
+                motive_vehicle_id=vehicle.id,
+                source_endpoint=writer_module.CERTIFIED_SOURCE_ENDPOINT,
+                request_window_start=CONTROLLED_WRITE_WINDOW_START,
+                request_window_end=CONTROLLED_WRITE_WINDOW_END,
+                utilization_percent=Decimal("50"),
+                idle_time=Decimal("1"),
+                driving_time=Decimal("200"),
+                idle_fuel=Decimal("1"),
+                driving_fuel=Decimal("2"),
+                metric_units=False,
+                parser_version=writer_module.CERTIFIED_PARSER_VERSION,
+            )
+        )
 
     second_pages = [_page([_rollup_item(UNSAFE_PROVIDER_VEHICLE_ID, idle_time=999, utilization=UNSAFE_UTILIZATION)], total=1)]
     with pytest.raises(MotiveVehicleUtilizationControlledWriteError) as exc_info:
         _run_controlled_write(TestingSession, pages=second_pages, selected_provider_vehicle_ids=(UNSAFE_PROVIDER_VEHICLE_ID, "veh-2", "veh-3"))
 
+    assert exc_info.value.code == "conflicting_existing_identity"
     rendered = str(exc_info.value)
     assert UNSAFE_PROVIDER_VEHICLE_ID not in rendered
     assert UNSAFE_UTILIZATION not in rendered

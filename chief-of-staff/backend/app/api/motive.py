@@ -59,6 +59,13 @@ _DATABASE_VEHICLE_PERSISTENCE_ERROR_MESSAGE = "Motive vehicle sync failed during
 _DATABASE_USER_PERSISTENCE_ERROR_MESSAGE = "Motive user sync failed during database persistence."
 _CONTROLLED_WRITE_WRITER_ERROR_CODES = {
     "conflicting_existing_identity",
+    # 2026-08-17 historical-rollup reconciliation gate: a defensive guard
+    # code (see MUTABLE_ON_PROVIDER_RECONCILIATION in
+    # vehicle_utilization_writer.py) -- currently unreachable through real
+    # provider data, since every non-approved field is already an
+    # identity/context field covered by "conflicting_existing_identity", but
+    # mapped here for completeness should the guard ever fire.
+    "provider_rollup_reconciliation_conflict",
     "database_identity_conflict",
     "database_persistence_error",
     "unknown_vehicle",

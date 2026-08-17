@@ -454,3 +454,125 @@ makes **no** live Motive API call and adds no database migration. See
 the full provider-confirmed semantics upgrade and
 `docs/engineering/MOTIVE_AUTHENTICATION_CERTIFICATION.md` for the
 authentication half of this gate.
+
+## Update: Historical-Rollup Reconciliation Gate (2026-08-17)
+
+Motive Support has confirmed that historical vehicle-utilization rollups may
+legitimately change slightly as provider-side processing completes, and
+recommended periodically rereading a recent rolling window. The "Idempotent
+Replay Policy" section above is now superseded:
+
+> **No existing row** → INSERT (unchanged).
+>
+> **Existing row, identical certified result** → NO-OP / UNCHANGED
+> (unchanged).
+>
+> **Existing row, context-compatible, but one or more of the five approved
+> mutable provider-derived fields differ** → RECONCILE: update only the
+> differing approved fields, in place, via an explicit field-by-field
+> change set (never a blind ORM `merge()` / broad column overwrite).
+>
+> **Existing row NOT context-compatible** (its `metric_units`,
+> `source_endpoint`, `parser_version`, `provider_vehicle_id`, or request
+> window disagree with the incoming rollup) → FAIL CLOSED
+> (`conflicting_existing_identity`), exactly as before. The existing row is
+> left completely unchanged, no second row is created, and the whole
+> transaction rolls back.
+
+The certified durable identity
+(`organization_id + motive_vehicle_id + request_window_start +
+request_window_end`) is **unchanged** and **no migration is made**. See
+`docs/engineering/MOTIVE_UTILIZATION_HISTORICAL_RECONCILIATION.md` for the
+full field-by-field audit (every persisted column on
+`MotiveVehicleUtilizationRecord`, classified `IMMUTABLE`,
+`MUTABLE_ON_PROVIDER_RECONCILIATION`, `NULL_ONLY`, `DERIVED_BUT_STABLE`, or
+`OUT_OF_SCOPE`) and the reconciliation policy design rationale.
+
+### Approved Mutable Fields
+
+`app.motive.vehicle_utilization_writer.MUTABLE_ON_PROVIDER_RECONCILIATION`
+is exactly: `utilization_percent`, `idle_time`, `driving_time`,
+`idle_fuel`, `driving_fuel`. No other persisted column is ever written
+during reconciliation. `organization_id`, `motive_vehicle_id`,
+`request_window_start`, `request_window_end`, `provider_vehicle_id`,
+`source_endpoint`, `parser_version`, and `metric_units` remain immutable
+identity/context fields; `reporting_period_start`/`reporting_period_end`,
+`distance`, `engine_hours`, and `observed_at` remain `NULL_ONLY` (the
+parser does not currently produce values for them, so there is nothing to
+reconcile); `organization_slug` and `provider_payload_metadata` are
+deliberately left untouched by reconciliation (see the field-level audit
+doc for the full rationale per column).
+
+### Decide-Then-Apply, Never A Blind Merge
+
+For the **whole batch**, every rollup's insert / unchanged / reconcile /
+conflict decision is computed first (`_plan_writes`,
+`_existing_row_context_compatible`, `_compute_mutable_field_changes`) before
+any row is staged (`session.add`) or any existing row's attributes are
+mutated (`setattr`). A hard conflict anywhere in the batch still raises
+before any mutation happens; if it raises after an earlier row's
+reconciliation change set was already applied via `setattr` (but not yet
+flushed), `session.rollback()` discards that uncommitted state along with
+everything else, so the batch remains genuinely all-or-nothing including
+reconciliations. `_compute_mutable_field_changes` only ever returns
+Decimal-safe (never float, never tolerance-based) exact differences for the
+five approved fields, and defensively raises
+`provider_rollup_reconciliation_conflict` (currently unreachable with the
+present schema/parser, but real, tested guard code) if a compared field is
+ever not in `MUTABLE_ON_PROVIDER_RECONCILIATION`.
+
+### No Deletion, No Omission Semantics
+
+A vehicle/window omitted from a later reread (not present in `rollups`)
+creates, deletes, zeroes, or reclassifies **nothing**. The writer only ever
+processes the rows it is explicitly handed; there is no code path that
+enumerates or touches previously-persisted rows that are absent from the
+current batch.
+
+### Result Type / Auditability
+
+`VehicleUtilizationWriteResult` gains an additive
+`reconciled_fields_count: int = 0` field (backward compatible: existing
+positional/keyword construction is unaffected). `records_updated` now
+counts reconciled rows (previously always `0`); `reconciled_fields_count`
+additionally sums how many individual approved fields changed across the
+whole batch. Neither field, nor any other part of the result, ever carries
+raw provider values, vehicle IDs, or payload contents -- this remains
+option B from the auditability preference order (writer-return metadata),
+with no new audit subsystem and no raw-payload storage.
+
+### Writer Contract Status Update
+
+`app/motive/vehicle_utilization_writer_contract.py`'s
+`writer_transaction` block now reports
+`conflicting_replay_policy: "fail_closed_on_identity_or_context_conflict"`,
+`update_existing_row_enabled: true`,
+`reconciliation_policy: "field_level_reconciliation_of_approved_mutable_fields_only"`,
+and `blind_orm_merge_used: false`. `historical_rollup_mutability` reports
+`replay_contract_classification: "FIELD_LEVEL_RECONCILIATION_POLICY_IMPLEMENTED"`,
+`update_or_upsert_semantics_implemented: true`, the mutable/immutable field
+lists, `omission_deletes_or_zeroes_existing_rows: false`, and
+`batch_atomicity_preserved: true`. `remaining_blockers` retires the prior
+"historical-rollup reconciliation/update policy must be designed" item in
+favor of a narrower blocker: scheduled/automatic rolling-window invocation
+(checkpoint advancement + scheduler activation) remains a separate, later
+gate -- the reconciliation **policy** itself is what this gate implements.
+
+### Tests
+
+`tests/test_motive_vehicle_utilization_writer_transaction.py` adds:
+parametrized reconciliation coverage for all five approved fields;
+multi-field reconciliation with exact (non-float-representable) Decimal
+values; a proof that a true no-op never touches `updated_at`; the
+defensive unapproved-field-difference guard (via monkeypatching a narrowed
+`MUTABLE_ON_PROVIDER_RECONCILIATION`); a genuine identity/context conflict
+(now distinguished from a mere metric-value difference); whole-batch
+rollback discarding a pending reconciliation alongside a hard conflict;
+a mixed insert/reconcile/unchanged batch committing once with correct
+counts; omission leaving an existing row byte-for-byte untouched; and a
+different request window creating a separate row rather than overwriting
+the original. `tests/test_motive_vehicle_utilization_controlled_write.py`
+and `tests/test_motive_vehicle_utilization_writer_contract.py` are updated
+to match. No live Motive call is made anywhere in this update, no
+`MotiveSyncCheckpoint`/`MotiveSyncHistory` row is ever written, and no
+database migration is added.

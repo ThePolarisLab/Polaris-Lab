@@ -21,6 +21,49 @@ Scope of this module (the durable *transaction primitive* only):
 This module does NOT enable a runtime provider-to-database sync. There is no
 public route that calls it. It is the internal primitive that a later,
 separately-authorized manual production validation route may call.
+
+--------------------------------------------------------------------------
+2026-08-17 historical-rollup reconciliation gate (current)
+--------------------------------------------------------------------------
+Motive Support has confirmed that historical vehicle-utilization rollups may
+legitimately change slightly as provider-side processing completes, and
+recommended periodically rereading a recent rolling window. Prior to this
+gate, ANY replay of an existing durable identity (``organization_id +
+motive_vehicle_id + request_window_start + request_window_end``) whose
+provider-derived values differed from the stored row was treated as a hard
+conflict and rejected -- correct before the provider clarification, but not
+compatible with safe rolling-window rereads.
+
+This gate adds a narrow, field-by-field reconciliation policy (see
+``docs/engineering/MOTIVE_UTILIZATION_HISTORICAL_RECONCILIATION.md`` for the
+full field-level audit and matrix):
+
+- durable identity (``organization_id``, ``motive_vehicle_id``,
+  ``request_window_start``, ``request_window_end``) and every other
+  identity/context/provenance field (``provider_vehicle_id``,
+  ``source_endpoint``, ``parser_version``, ``metric_units``) remain
+  IMMUTABLE. Any difference in these fields is still a hard conflict
+  (``conflicting_existing_identity``) and never silently reconciled;
+- exactly five provider-derived rollup metrics --
+  :data:`MUTABLE_ON_PROVIDER_RECONCILIATION` -- may be updated in place when
+  an existing, context-compatible row's value differs from a newly validated
+  incoming rollup: ``utilization_percent``, ``idle_time``, ``driving_time``,
+  ``idle_fuel``, ``driving_fuel``;
+- reconciliation is an explicit, field-by-field comparison and controlled
+  change set -- never a blind ORM ``merge()`` or broad column overwrite.
+  Only fields that both (a) actually differ (Decimal-safe, no float
+  coercion, no tolerance/epsilon) and (b) are in the approved mutable set are
+  ever written; any unapproved field difference fails closed with
+  :data:`RECONCILIATION_CONFLICT_ERROR_CODE` instead of being applied;
+- whole-batch atomicity is preserved: every row's insert/unchanged/reconcile
+  decision is computed BEFORE any row is staged or mutated, so a conflict on
+  any single row in a batch still rolls back the entire batch, including
+  otherwise-safe reconciliations for other rows in the same batch;
+- a vehicle/window omitted from a later reread is never deleted, zeroed, or
+  reclassified -- the writer only ever processes rows it is explicitly
+  handed; absence is not represented here at all;
+- this remains a pure, zero-HTTP-call transaction primitive with no
+  checkpoint or scheduler interaction of any kind.
 """
 
 from __future__ import annotations
@@ -51,6 +94,36 @@ logger = logging.getLogger(__name__)
 CERTIFIED_PARSER_VERSION = PARSER_VERSION
 CERTIFIED_SOURCE_ENDPOINT = MOTIVE_VEHICLE_UTILIZATION_ENDPOINT
 
+# ---------------------------------------------------------------------------
+# 2026-08-17 historical-rollup reconciliation gate: the ONLY persisted
+# columns a reread may update in place for an existing, context-compatible
+# durable identity. Every other column (identity, request-window, unit
+# indicator, provenance) is IMMUTABLE -- see
+# docs/engineering/MOTIVE_UTILIZATION_HISTORICAL_RECONCILIATION.md for the
+# complete field-by-field audit and classification of every persisted
+# column on MotiveVehicleUtilizationRecord.
+# ---------------------------------------------------------------------------
+MUTABLE_ON_PROVIDER_RECONCILIATION: frozenset[str] = frozenset(
+    {
+        "utilization_percent",
+        "idle_time",
+        "driving_time",
+        "idle_fuel",
+        "driving_fuel",
+    }
+)
+
+# Reserved for a genuine "found the right row, but an incoming difference is
+# not in the approved mutable set" conflict -- distinct from
+# ``conflicting_existing_identity`` (identity/context itself disagrees). With
+# the current schema and parser, every non-approved field is already an
+# identity/context field enforced by ``_existing_row_context_compatible``
+# before reconciliation is even considered, so this code is currently
+# unreachable through real provider data; it exists as a defensive guard
+# (see ``_compute_mutable_field_changes``) against ever silently applying an
+# unapproved field difference if the schema grows in the future.
+RECONCILIATION_CONFLICT_ERROR_CODE = "provider_rollup_reconciliation_conflict"
+
 
 class MotiveVehicleUtilizationWriterError(ValueError):
     """Safe, fail-closed writer error.
@@ -70,6 +143,14 @@ class VehicleUtilizationWriteResult:
 
     Deliberately excludes provider vehicle IDs, VIN, unit numbers, metric
     values, raw row values, and raw payload contents.
+
+    ``records_updated`` counts rows reconciled in place (see the
+    2026-08-17 historical-rollup reconciliation gate module docstring): an
+    existing, context-compatible row whose approved mutable field(s)
+    differed from the incoming validated rollup. ``reconciled_fields_count``
+    additionally sums how many individual approved fields were changed
+    across all reconciled rows in the batch, for auditability without
+    storing raw provider values.
     """
 
     committed: bool
@@ -79,11 +160,13 @@ class VehicleUtilizationWriteResult:
     records_unchanged: int
     records_updated: int
     missing_requested_vehicle_count: int
+    reconciled_fields_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
 class _WritePlan:
     rows_to_insert: list[MotiveVehicleUtilizationRecord]
+    rows_to_reconcile: list[tuple[MotiveVehicleUtilizationRecord, dict[str, Decimal | None]]]
     unchanged_count: int
 
 
@@ -154,7 +237,12 @@ def write_vehicle_utilization_transaction(
             provider_vehicle_ids=[rollup.provider_vehicle_id for rollup in rollups_list],
         )
 
-        # 9/10. Inspect existing durable identities; fail closed on conflict.
+        # 9/10. Inspect existing durable identities; decide insert / unchanged
+        # / reconcile / conflict for the WHOLE batch before mutating
+        # anything. Any conflict raises here, before any row is staged or any
+        # existing row's attributes are touched -- see
+        # _plan_writes/_existing_row_context_compatible/
+        # _compute_mutable_field_changes below.
         plan = _plan_writes(
             session,
             organization_id=organization_id,
@@ -163,9 +251,17 @@ def write_vehicle_utilization_transaction(
             vehicle_by_provider_id=vehicle_by_provider_id,
         )
 
-        # 11. Stage new rows only after the whole batch has been validated.
+        # 11. Only now -- once the ENTIRE batch is known to be safe -- stage
+        # new rows and apply approved, field-by-field reconciliation changes
+        # to existing rows. Never a blind ORM merge: only the specific
+        # differing fields already identified as approved-mutable are set.
         for row in plan.rows_to_insert:
             session.add(row)
+        reconciled_fields_count = 0
+        for existing_row, changes in plan.rows_to_reconcile:
+            for field_name, new_value in changes.items():
+                setattr(existing_row, field_name, new_value)
+            reconciled_fields_count += len(changes)
 
         # 12. Flush.
         session.flush()
@@ -197,8 +293,9 @@ def write_vehicle_utilization_transaction(
         returned_rollup_count=len(rollups_list),
         records_inserted=len(plan.rows_to_insert),
         records_unchanged=plan.unchanged_count,
-        records_updated=0,
+        records_updated=len(plan.rows_to_reconcile),
         missing_requested_vehicle_count=missing_requested_vehicle_count,
+        reconciled_fields_count=reconciled_fields_count,
     )
 
     logger.info(
@@ -212,6 +309,8 @@ def write_vehicle_utilization_transaction(
             "returned_rollup_count": result.returned_rollup_count,
             "records_inserted": result.records_inserted,
             "records_unchanged": result.records_unchanged,
+            "records_updated": result.records_updated,
+            "reconciled_fields_count": result.reconciled_fields_count,
             "status": "committed",
         },
     )
@@ -412,7 +511,21 @@ def _resolve_tenant_vehicles(
 
 
 # ---------------------------------------------------------------------------
-# Steps 9/10 -- idempotent replay policy against existing durable identities.
+# Steps 9/10 -- idempotent replay + historical-rollup reconciliation policy
+# against existing durable identities.
+#
+# For every returned rollup with an existing durable row on the certified
+# identity key, this decides -- WITHOUT mutating anything yet -- exactly one
+# of:
+#   - CASE 2 (unchanged): the existing row is context-compatible and every
+#     approved mutable field already matches -- no-op, no timestamp touch;
+#   - CASE 3 (reconcile): the existing row is context-compatible but one or
+#     more approved mutable fields differ -- a controlled, field-by-field
+#     change set is computed (never a blind overwrite) for the caller to
+#     apply only after the ENTIRE batch is known to be safe;
+#   - CASE 4 (conflict): the existing row is NOT context-compatible (its
+#     identity/provenance/unit context disagrees), or an unapproved field
+#     differs -- fail closed, whole batch rolls back, existing row untouched.
 # ---------------------------------------------------------------------------
 def _plan_writes(
     session: Session,
@@ -423,7 +536,7 @@ def _plan_writes(
     vehicle_by_provider_id: dict[str, int],
 ) -> _WritePlan:
     if not rollups:
-        return _WritePlan(rows_to_insert=[], unchanged_count=0)
+        return _WritePlan(rows_to_insert=[], rows_to_reconcile=[], unchanged_count=0)
 
     identity_keys = {
         (vehicle_by_provider_id[rollup.provider_vehicle_id], rollup.request_start_date, rollup.request_end_date)
@@ -432,6 +545,7 @@ def _plan_writes(
     existing_by_key = _load_existing_identity_rows(session, organization_id=organization_id, identity_keys=identity_keys)
 
     rows_to_insert: list[MotiveVehicleUtilizationRecord] = []
+    rows_to_reconcile: list[tuple[MotiveVehicleUtilizationRecord, dict[str, Decimal | None]]] = []
     unchanged_count = 0
     for rollup in rollups:
         motive_vehicle_id = vehicle_by_provider_id[rollup.provider_vehicle_id]
@@ -447,18 +561,32 @@ def _plan_writes(
                 )
             )
             continue
-        if _is_identical_replay(existing, rollup):
+        if not _existing_row_context_compatible(existing, rollup):
+            # Identity/provenance/unit-context disagreement (CASE 4). The
+            # existing row lacks evidence it was created under the certified
+            # writer contract, or a durable identity/context field
+            # (provider_vehicle_id, request window, source_endpoint,
+            # parser_version, metric_units) disagrees. Never reconciled --
+            # fail closed instead of silently accepting or partially
+            # applying anything.
+            raise MotiveVehicleUtilizationWriterError(
+                "conflicting_existing_identity",
+                "An existing durable vehicle-utilization row conflicts with this replay.",
+            )
+        changes = _compute_mutable_field_changes(existing, rollup)
+        if not changes:
+            # CASE 2: context-compatible and every approved mutable field
+            # already matches -- true no-op. Never touch timestamps merely
+            # to record replay activity.
             unchanged_count += 1
             continue
-        # Conflicting replay OR the existing row lacks evidence it was
-        # created under the certified writer contract -- fail closed either
-        # way rather than silently treating it as an identical replay.
-        raise MotiveVehicleUtilizationWriterError(
-            "conflicting_existing_identity",
-            "An existing durable vehicle-utilization row conflicts with this replay.",
-        )
+        # CASE 3: context-compatible, and only approved mutable
+        # provider-derived fields differ. Stage the controlled change set;
+        # it is applied only after the caller confirms the whole batch is
+        # safe.
+        rows_to_reconcile.append((existing, changes))
 
-    return _WritePlan(rows_to_insert=rows_to_insert, unchanged_count=unchanged_count)
+    return _WritePlan(rows_to_insert=rows_to_insert, rows_to_reconcile=rows_to_reconcile, unchanged_count=unchanged_count)
 
 
 def _load_existing_identity_rows(
@@ -494,16 +622,27 @@ def _load_existing_identity_rows(
     }
 
 
-def _is_identical_replay(existing: MotiveVehicleUtilizationRecord, rollup: MotiveVehicleUtilizationRollup) -> bool:
-    """Define exact same-result replay equivalence for the certified identity.
+def _existing_row_context_compatible(
+    existing: MotiveVehicleUtilizationRecord, rollup: MotiveVehicleUtilizationRollup
+) -> bool:
+    """Is the existing row's IMMUTABLE identity/context/provenance state
+    compatible with the incoming, already-validated rollup?
 
-    An existing row is treated as an identical replay only when it carries
-    evidence that it was created under the certified writer contract
-    (canonical metric units, certified source endpoint, certified parser
-    version) AND every writer-owned measurement/provenance field matches the
-    incoming rollup using Decimal-safe (non-float) equality. Mutable,
-    non-identity metadata such as ``organization_slug`` is deliberately not
-    compared, since it may change without changing the durable identity.
+    This is the single gate for CASE 4 (identity/context conflict, section 4
+    of the reconciliation policy): ``True`` only when the existing row
+    carries evidence it was created under the certified writer contract
+    (``metric_units is True``, certified ``source_endpoint``, certified
+    ``parser_version``) AND its durable identity fields
+    (``provider_vehicle_id``, ``request_window_start``,
+    ``request_window_end``) agree with the incoming rollup. This function
+    NEVER inspects the five provider-derived rollup metrics -- those are
+    compared separately by :func:`_compute_mutable_field_changes` only after
+    context compatibility is established, and only they may ever change on
+    reconciliation.
+
+    Mutable, non-identity metadata such as ``organization_slug`` is
+    deliberately not compared here, since it may change without changing the
+    durable identity.
     """
     if existing.metric_units is not True:
         return False
@@ -517,17 +656,49 @@ def _is_identical_replay(existing: MotiveVehicleUtilizationRecord, rollup: Motiv
         return False
     if existing.request_window_end != rollup.request_end_date:
         return False
-    if _decimal_differs(existing.utilization_percent, rollup.utilization_percent):
-        return False
-    if _decimal_differs(existing.idle_time, rollup.idle_time):
-        return False
-    if _decimal_differs(existing.driving_time, rollup.driving_time):
-        return False
-    if _decimal_differs(existing.idle_fuel, rollup.idle_fuel):
-        return False
-    if _decimal_differs(existing.driving_fuel, rollup.driving_fuel):
-        return False
     return True
+
+
+def _compute_mutable_field_changes(
+    existing: MotiveVehicleUtilizationRecord, rollup: MotiveVehicleUtilizationRollup
+) -> dict[str, Decimal | None]:
+    """Compute the controlled, field-by-field reconciliation change set.
+
+    Only called once :func:`_existing_row_context_compatible` has already
+    confirmed the existing row's identity/context/provenance agrees with the
+    incoming rollup. Compares each of the five approved provider-derived
+    metrics (:data:`MUTABLE_ON_PROVIDER_RECONCILIATION`) using Decimal-safe
+    (never float, never tolerance-based) equality, and returns a dict of
+    only the fields that actually differ, mapped to the new (incoming)
+    value. An empty dict means CASE 2 (identical replay, true no-op).
+
+    This is never a blind ORM ``merge()``: the caller applies exactly these
+    fields via explicit ``setattr`` calls, nothing else. As a defensive
+    guard against ever silently applying an unapproved field difference (see
+    :data:`RECONCILIATION_CONFLICT_ERROR_CODE`), this raises if a compared
+    field name is not present in :data:`MUTABLE_ON_PROVIDER_RECONCILIATION`
+    -- unreachable with the current fixed candidate list below, but kept as
+    a real, testable safety net rather than only a comment.
+    """
+    candidate_fields: dict[str, Decimal | None] = {
+        "utilization_percent": rollup.utilization_percent,
+        "idle_time": rollup.idle_time,
+        "driving_time": rollup.driving_time,
+        "idle_fuel": rollup.idle_fuel,
+        "driving_fuel": rollup.driving_fuel,
+    }
+    changes: dict[str, Decimal | None] = {}
+    for field_name, incoming_value in candidate_fields.items():
+        existing_value = getattr(existing, field_name)
+        if not _decimal_differs(existing_value, incoming_value):
+            continue
+        if field_name not in MUTABLE_ON_PROVIDER_RECONCILIATION:
+            raise MotiveVehicleUtilizationWriterError(
+                RECONCILIATION_CONFLICT_ERROR_CODE,
+                "A returned vehicle-utilization rollup differed in a field that is not approved for reconciliation.",
+            )
+        changes[field_name] = incoming_value
+    return changes
 
 
 def _decimal_differs(existing_value: Decimal | None, incoming_value: Decimal | None) -> bool:
