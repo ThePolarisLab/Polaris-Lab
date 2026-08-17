@@ -324,3 +324,40 @@ unit-indicator value still fails closed at the writer transaction's
 persistence-readiness gate. See
 `MOTIVE_UTILIZATION_UNIT_SEMANTICS_CERTIFICATION.md` for the full sourced
 review.
+
+## Update: Authentication + Unit-Mismatch Certification Gate (2026-08-17)
+
+Motive API Support's 2026-08-17 written reply confirmed the returned
+`vehicle.metric_units` indicator's meaning (`true`=metric, `false`=imperial)
+and the request/response consistency rule for `GET /v1/vehicle_utilization`.
+This route's request behavior is **unchanged**: it still makes at most one
+provider call per invocation, still always sends `X-Metric-Units: true`
+(the canonical writer policy), and the read stage still performs no
+returned-unit-indicator check of its own -- that remains the writer
+transaction's job. What changes is the writer transaction's outcome for
+that check:
+
+- a returned `vehicle.metric_units = true` now **agrees** with this route's
+  canonical `X-Metric-Units: true` request and is unit-ready -- a
+  successful invocation now durably writes the row, instead of always
+  failing closed as it did between 2026-08-16 and 2026-08-17;
+- a returned `false` is a **provider-confirmed mismatch**
+  (`provider_unit_policy_mismatch`), not a neutral "unresolved" outcome --
+  this is exactly the combination the one real 2026-08-16 production
+  execution of this route observed, and it is now understood to be
+  provider-confirmed-unexpected rather than an open question (see
+  `MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md`'s own update section);
+- a returned `None`/missing value still fails closed with
+  `provider_unit_indicator_semantics_unresolved`;
+- a malformed (non-Boolean, non-`None`) value still fails closed with
+  `provider_unit_context_invalid_type`.
+
+The feature flag (`MOTIVE_VEHICLE_UTILIZATION_CONTROLLED_WRITE_ENABLED`)
+remains disabled by default and was **not** enabled during this gate's
+implementation or tests -- this update changes only the writer's
+persistence-readiness outcome for already-mocked test scenarios, never a
+live call. See
+`docs/engineering/MOTIVE_UTILIZATION_UNIT_SEMANTICS_CERTIFICATION.md` for
+the full provider-confirmed semantics upgrade and
+`docs/engineering/MOTIVE_AUTHENTICATION_CERTIFICATION.md` for the
+authentication half of this gate.

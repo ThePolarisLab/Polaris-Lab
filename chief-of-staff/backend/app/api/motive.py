@@ -68,11 +68,17 @@ _CONTROLLED_WRITE_WRITER_ERROR_CODES = {
     "request_window_missing",
     "parser_version_not_certified",
     "source_endpoint_not_certified",
-    # Returned provider unit-indicator semantics are unresolved (see
-    # vehicle_utilization_unit_policy.py); this is a Polaris-side readiness
-    # gate, not a provider protocol failure, so it maps alongside the other
+    # Returned provider unit-indicator readiness codes (see
+    # vehicle_utilization_unit_policy.py); these are Polaris-side readiness
+    # gates, not provider protocol failures, so they map alongside the other
     # writer-originated fail-closed codes rather than a gateway/provider code.
+    # "provider_unit_indicator_semantics_unresolved" fires when the returned
+    # indicator is missing; "provider_unit_policy_mismatch" fires when a
+    # present returned indicator disagrees with the requested unit system
+    # (Motive API Support's 2026-08-17 written confirmation); "invalid_type"
+    # fires when the returned indicator is a malformed, non-Boolean value.
     "provider_unit_indicator_semantics_unresolved",
+    "provider_unit_policy_mismatch",
     "provider_unit_context_invalid_type",
 }
 
@@ -448,6 +454,29 @@ def motive_verification_contract(principal: AuthenticatedPrincipal = Depends(req
         "credential_source": MOTIVE_CREDENTIAL_SOURCE,
         "credential_configuration": "administrator_backend_environment",
         "request_authentication": "company_api_key_header_at_provider_boundary",
+        # 2026-08-17 authentication certification gate: Motive API Support's
+        # written reply confirmed the account API key against
+        # GET /v1/fuel_purchases using the x-api-key header (HTTP header
+        # names are case-insensitive; Polaris sends "X-API-Key"), and that
+        # the previously-failing client tests used Authorization: Bearer.
+        # See docs/engineering/MOTIVE_AUTHENTICATION_CERTIFICATION.md.
+        "company_api_key_authentication": {
+            "provider_confirmed": True,
+            "header": "x-api-key",
+            "bearer_prefix": False,
+            "authorization_bearer_used": False,
+            "real_secret_exposed": False,
+            "current_key_rotation_required_before_production_broad_enablement": True,
+            "rotation_status": "DEFERRED_UNTIL_MOTIVE_INTEGRATION_COMPLETION_BY_USER_DECISION",
+        },
+        "oauth_authentication": {
+            "scheme": "bearer_token",
+            "header": "Authorization",
+            "bearer_prefix": True,
+            "separate_flow": True,
+            "used_for_current_mor_internal_server_to_server_integration": False,
+            "runtime_enabled": False,
+        },
         "confirmed_endpoints": list(MOTIVE_CONFIRMED_ENDPOINTS),
         "driver_user_pagination": {"endpoint": MOTIVE_USERS_ENDPOINT, "per_page_max": MOTIVE_USERS_PER_PAGE, "page_no": "one_based", "total_field": "pagination.total"},
         "verification_endpoint": MOTIVE_VERIFICATION_ENDPOINT,

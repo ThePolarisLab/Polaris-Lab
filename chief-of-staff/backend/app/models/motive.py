@@ -186,25 +186,36 @@ class MotiveVehicleUtilizationRecord(Base):
     driving_time: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     idle_fuel: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     driving_fuel: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
-    # 2026-08-16 unit-semantics-certification gate audit (section 11): this
-    # column currently stores the RAW PROVIDER-OBSERVED
+    # 2026-08-16 unit-semantics-certification gate audit (section 11),
+    # updated 2026-08-17 (authentication + unit-mismatch certification
+    # gate): this column stores the RAW PROVIDER-OBSERVED
     # `vehicle_idle_rollups[].vehicle_idle_rollup.vehicle.metric_units`
-    # Boolean from GET /v1/vehicle_utilization -- i.e. Motive's returned
-    # vehicle-configured-metric-preference indicator (see
-    # app.motive.vehicle_utilization_unit_policy), preserved as observed
-    # provenance only. It is NOT certified proof of the actual measurement
-    # system of this row's idle_fuel/driving_fuel values -- that
-    # request-vs-response relationship remains UNRESOLVED (see
-    # docs/engineering/MOTIVE_UTILIZATION_UNIT_SEMANTICS_CERTIFICATION.md).
-    # Durable fuel persistence stays disabled
-    # (MOTIVE_VEHICLE_UTILIZATION_DURABLE_FUEL_PERSISTENCE_ENABLED = False)
-    # until that relationship is explicitly certified, so no row has ever
-    # actually been persisted under this ambiguity -- this is a
-    # forward-looking documentation finding, not a live-data cleanup
-    # concern. Do NOT overload this single Boolean with a second "measurement
-    # system of the persisted fuel values" meaning without a schema
-    # migration; a future certification gate may need a distinct
-    # provenance/measurement-system column instead of redefining this one.
+    # Boolean from GET /v1/vehicle_utilization -- Motive's returned unit
+    # INDICATOR (see app.motive.vehicle_utilization_unit_policy). Motive API
+    # Support's 2026-08-17 written reply confirmed this Boolean's meaning:
+    # `true` = metric, `false` = imperial. Every row this writer has ever
+    # inserted (and will insert while the writer stays gated to the
+    # canonical X-Metric-Units=true request policy) has -- and must have --
+    # `metric_units = True`, because a returned `False` for a `true` request
+    # is a provider-confirmed mismatch that fails closed before any commit
+    # (`validate_vehicle_utilization_unit_persistence_readiness`). So for
+    # every row that exists, or ever will exist, in this table today, this
+    # column IS now trustworthy fuel-unit provenance for that row's
+    # `idle_fuel`/`driving_fuel` values (liters), not merely a raw,
+    # unrelated vehicle-configuration echo.
+    #
+    # It still conceptually conflates two ideas that happen to coincide
+    # under the current canonical-request-only writer: "the provider's
+    # returned unit indicator for this response" and "the certified
+    # measurement-system provenance of this row's persisted fuel values."
+    # They stay numerically identical only because the writer never accepts
+    # a mismatched or non-canonical request/response pair. If a future gate
+    # ever allows requesting X-Metric-Units=false (imperial) rows, or
+    # otherwise decouples the two ideas, a distinct, explicitly-named
+    # provenance/measurement-system column would be needed instead of
+    # redefining this one -- see docs/engineering/MOTIVE_AUTHENTICATION_CERTIFICATION.md
+    # and docs/engineering/MOTIVE_UTILIZATION_UNIT_SEMANTICS_CERTIFICATION.md.
+    # NO migration is made in this gate.
     metric_units: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     distance: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     engine_hours: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)

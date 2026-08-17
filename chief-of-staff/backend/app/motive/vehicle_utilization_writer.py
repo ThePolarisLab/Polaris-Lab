@@ -346,16 +346,18 @@ def _validate_returned_vehicles_within_selected_set(
 # Step 6 -- durable unit-context persistence readiness.
 #
 # This is deliberately NOT the same question as "did the parser accept this
-# rollup" (see app.connectors.motive_vehicle_utilization). Motive's returned
-# vehicle.metric_units Boolean semantics are unresolved (see
-# vehicle_utilization_unit_policy.py and
-# docs/engineering/MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md) -- one live
-# controlled production observation contradicted Polaris's prior assumption
-# that the returned Boolean must equal the requested Boolean. Until that
-# relationship is explicitly certified, NO returned unit-indicator value --
-# True, False, or missing -- makes a fuel-bearing rollup ready for durable
-# persistence. This is a strengthening of the writer's fail-closed posture,
-# not a relaxation.
+# rollup" (see app.connectors.motive_vehicle_utilization). Motive API
+# Support's 2026-08-17 written reply confirmed the returned
+# vehicle.metric_units Boolean's meaning (true=metric, false=imperial) and
+# directed integrations to fail closed whenever the requested and returned
+# unit context disagree (see vehicle_utilization_unit_policy.py and
+# docs/engineering/MOTIVE_UTILIZATION_UNIT_SEMANTICS_CERTIFICATION.md). The
+# canonical writer always requests X-Metric-Units=true, so this call relies
+# on validate_vehicle_utilization_unit_persistence_readiness's default
+# requested_metric_units (the certified canonical policy): a returned True
+# is now ready for durable persistence; a returned False is a
+# provider-confirmed mismatch and fails closed; a missing or malformed
+# returned value fails closed with its own distinct code.
 # ---------------------------------------------------------------------------
 def _validate_unit_context(rollup: MotiveVehicleUtilizationRollup) -> None:
     readiness = validate_vehicle_utilization_unit_persistence_readiness(rollup.metric_units)

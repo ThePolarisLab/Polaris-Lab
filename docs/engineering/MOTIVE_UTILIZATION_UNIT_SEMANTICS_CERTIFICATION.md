@@ -232,3 +232,72 @@ research, not a live fetch performed by the implementing session), not
 during implementation, and not during testing. No Motive API call, live or
 otherwise, was made for "verification" purposes. All tests use static
 values and mocked/synthetic data only.
+
+## Update: Authentication + Unit-Mismatch Certification Gate (2026-08-17)
+
+Motive API Support sent a written reply on **2026-08-17** that directly
+answers the question this gate's Outcome B left open, and the draft
+clarification email above (never sent) turned out to closely match what
+Support ultimately confirmed:
+
+- `X-Metric-Units=true` requests metric measurement; `idle_fuel` and
+  `driving_fuel` are therefore **liters**.
+- `X-Metric-Units=false` requests imperial measurement; `idle_fuel` and
+  `driving_fuel` are therefore **gallons**.
+- the returned `vehicle.metric_units` field is a unit **indicator**:
+  `true` means metric, `false` means imperial.
+- `X-Metric-Units=true` together with a returned `vehicle.metric_units =
+  false` is **not** an expected/documented combination. When the requested
+  unit system and the returned indicator disagree, integrations must **fail
+  closed** and must not persist fuel values.
+- `idle_time`/`driving_time` are seconds regardless of `X-Metric-Units`
+  (independently reconfirmed).
+
+This resolves Outcome B to a new, defined outcome:
+
+```
+response_measurement_system: PROVIDER_CONFIRMED_FAIL_CLOSED_ON_MISMATCH
+```
+
+This is **not** the "Outcome A, unconditionally certified" scenario
+originally sketched when this gate was written -- it is closer, but with an
+explicit, provider-mandated fail-closed condition on mismatch. Concretely,
+in `app/motive/vehicle_utilization_unit_policy.py`:
+
+```
+unit_policy_status: PROVIDER_CONFIRMED_FAIL_CLOSED_ON_MISMATCH
+returned_metric_units_boolean_semantics_certified: true
+returned_metric_units_must_equal_request_boolean: true
+durable_fuel_persistence_enabled: true
+```
+
+`validate_vehicle_utilization_unit_persistence_readiness` is upgraded
+accordingly (request/response combination -> outcome):
+
+| `X-Metric-Units` (requested) | `vehicle.metric_units` (returned) | Outcome |
+| --- | --- | --- |
+| `true` | `true` | unit-ready (`metric`, liters) |
+| `false` | `false` | unit-ready (`imperial`, gallons) |
+| `true` | `false` | fail closed: `provider_unit_policy_mismatch` |
+| `false` | `true` | fail closed: `provider_unit_policy_mismatch` |
+| any | `None` (missing) | fail closed: `provider_unit_indicator_semantics_unresolved` |
+| any | non-Boolean | fail closed: `provider_unit_context_invalid_type` |
+
+The canonical writer still only ever requests `X-Metric-Units: true`
+(unchanged, section 12), so in practice its own persistence-readiness check
+now accepts a returned `True` and rejects everything else with the codes
+above.
+
+The one real controlled production observation described earlier in this
+document (`X-Metric-Units: true`, returned `vehicle.metric_units = false`)
+is now understood precisely: it was a provider-confirmed mismatch, not an
+open semantics question. See
+`docs/engineering/MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md`'s own update
+section for the full reclassification, and
+`docs/engineering/MOTIVE_AUTHENTICATION_CERTIFICATION.md` for the
+authentication half of this gate.
+
+This upgrade does **not** enable the controlled write route, checkpoint
+advancement, or scheduled ingestion -- those remain independently
+feature-flagged off. It makes **no** live Motive API call, rotates no
+credential, and adds no database migration.

@@ -525,39 +525,41 @@ def test_duplicate_returned_rollup_fails_closed_no_dedup(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 38 — unit policy (2026-08-16: redesigned persistence-readiness
-# gate). True, False, and None all currently fail closed with the SAME
-# neutral "unresolved" code -- none of these tests may assert or imply what
-# a returned False or None *means*.
+# Section 38 — unit policy. 2026-08-17 provider-confirmation gate: Motive API
+# Support's written reply confirmed the returned vehicle.metric_units
+# indicator's meaning and the request/response consistency rule. The
+# canonical writer always requests True, so a returned True now agrees with
+# the request and is unit-ready; False/None/malformed all still fail closed,
+# each with its own distinct, previously-established code.
 # ---------------------------------------------------------------------------
-@pytest.mark.unit_readiness_gate
-def test_metric_units_true_does_not_automatically_certify_and_fails_closed(tmp_path) -> None:
-    """Returned True must never be treated as automatically certified --
-    zero rows are written even though the returned Boolean matches the
-    requested Boolean."""
+def test_metric_units_true_matches_canonical_request_and_is_persisted(tmp_path) -> None:
+    """A returned True now agrees with the canonical True request and is
+    unit-ready: the row is written, matching Motive's 2026-08-17
+    confirmation that a matching request/response pair is expected."""
     TestingSession = _session_factory(tmp_path)
     _seed(TestingSession, provider_vehicle_ids=("veh-1",))
 
     with TestingSession() as session:
-        with pytest.raises(MotiveVehicleUtilizationWriterError) as exc_info:
-            write_vehicle_utilization_transaction(
-                session,
-                organization_id="org-a",
-                organization_slug="org-a",
-                selected_provider_vehicle_ids=["veh-1"],
-                request_window_start=WINDOW_START,
-                request_window_end=WINDOW_END,
-                rollups=[_rollup("veh-1", metric_units=True)],
-            )
-    assert exc_info.value.code == "provider_unit_indicator_semantics_unresolved"
-    assert _row_count(TestingSession) == 0
+        result = write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-1"],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[_rollup("veh-1", metric_units=True)],
+        )
+    assert result.committed is True
+    assert result.records_inserted == 1
+    assert _row_count(TestingSession) == 1
 
 
 @pytest.mark.unit_readiness_gate
-def test_metric_units_false_fails_closed_without_being_interpreted_as_imperial(tmp_path) -> None:
-    """Returned False fails closed using the SAME neutral code as True and
-    None -- it is never interpreted as imperial or as evidence the header
-    was ignored."""
+def test_metric_units_false_fails_closed_as_a_provider_confirmed_mismatch(tmp_path) -> None:
+    """Returned False against the canonical True request is the exact
+    combination Motive Support confirmed is not expected/documented -- it
+    fails closed with the mismatch code, never interpreted as some other
+    meaning."""
     TestingSession = _session_factory(tmp_path)
     _seed(TestingSession, provider_vehicle_ids=("veh-1",))
 
@@ -572,7 +574,7 @@ def test_metric_units_false_fails_closed_without_being_interpreted_as_imperial(t
                 request_window_end=WINDOW_END,
                 rollups=[_rollup("veh-1", metric_units=False)],
             )
-    assert exc_info.value.code == "provider_unit_indicator_semantics_unresolved"
+    assert exc_info.value.code == "provider_unit_policy_mismatch"
     assert _row_count(TestingSession) == 0
 
 
@@ -597,14 +599,30 @@ def test_metric_units_none_remains_unresolved_and_fails_closed(tmp_path) -> None
 
 
 @pytest.mark.unit_readiness_gate
-def test_no_returned_unit_value_is_ready_for_durable_persistence_in_this_gate(tmp_path) -> None:
-    """Writer persists zero rows in this state, for every observed returned
-    value, no checkpoint/history writes either way."""
+def test_only_a_consistent_returned_unit_value_is_ready_for_durable_persistence(tmp_path) -> None:
+    """True (matching the canonical request) persists; False (mismatch) and
+    None (missing) both still fail closed with zero writes and zero
+    checkpoint/history changes."""
     TestingSession = _session_factory(tmp_path)
     _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2", "veh-3"))
     checkpoints_before, history_before = _checkpoint_and_history_counts(TestingSession)
 
-    for provider_vehicle_id, metric_units in (("veh-1", True), ("veh-2", False), ("veh-3", None)):
+    with TestingSession() as session:
+        result = write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-1"],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[_rollup("veh-1", metric_units=True)],
+        )
+    assert result.records_inserted == 1
+
+    for provider_vehicle_id, metric_units, expected_code in (
+        ("veh-2", False, "provider_unit_policy_mismatch"),
+        ("veh-3", None, "provider_unit_indicator_semantics_unresolved"),
+    ):
         with TestingSession() as session:
             with pytest.raises(MotiveVehicleUtilizationWriterError) as exc_info:
                 write_vehicle_utilization_transaction(
@@ -616,9 +634,9 @@ def test_no_returned_unit_value_is_ready_for_durable_persistence_in_this_gate(tm
                     request_window_end=WINDOW_END,
                     rollups=[_rollup(provider_vehicle_id, metric_units=metric_units)],
                 )
-        assert exc_info.value.code == "provider_unit_indicator_semantics_unresolved"
+        assert exc_info.value.code == expected_code
 
-    assert _row_count(TestingSession) == 0
+    assert _row_count(TestingSession) == 1
     checkpoints_after, history_after = _checkpoint_and_history_counts(TestingSession)
     assert checkpoints_after == checkpoints_before
     assert history_after == history_before
