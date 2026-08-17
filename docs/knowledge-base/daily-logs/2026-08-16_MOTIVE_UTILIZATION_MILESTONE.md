@@ -1,77 +1,117 @@
 # Polaris Knowledge Base — Motive Vehicle Utilization Milestone
 
-**Date:** 2026-08-16
+**Milestone date:** 2026-08-16  
+**Updated:** 2026-08-17 after Motive API Support clarification and PR #166
 
 ## Final State
 
-Polaris crossed an important Motive vehicle-utilization gate today: the controlled provider-to-writer validation was executed in production and failed closed before durable persistence when returned unit provenance could not be certified. Follow-up reconciliation incorporated Motive API Support evidence and a review of official documentation. The resulting architecture deliberately separates request-side measurement policy, provider-observed vehicle metadata, and durable response measurement-system certification.
+Polaris completed the bounded Motive vehicle-utilization production-write validation safely. The controlled route made one provider call, returned one utilization rollup, and failed closed before durable persistence because the request used `X-Metric-Units: true` while the returned `vehicle.metric_units` indicator was `false`. Zero utilization rows were inserted, and no checkpoint or sync-history state was mutated.
 
-Durable utilization fuel persistence remains disabled. This is the intended safety outcome until Motive explicitly reconciles `X-Metric-Units` request semantics with the returned `vehicle.metric_units` Boolean for `GET /v1/vehicle_utilization`.
+On 2026-08-17, Motive API Support explicitly clarified the expected unit semantics for `GET /v1/vehicle_utilization`: `X-Metric-Units: true` requests metric values, with `idle_fuel` and `driving_fuel` expected in liters; `X-Metric-Units: false` requests imperial values, with fuel expected in gallons; and returned `vehicle.metric_units` is the provider unit indicator (`true` metric, `false` imperial). Motive further confirmed that a request/response disagreement is not an expected or documented combination and should be treated as unit-inconsistent rather than persisted as definitively metric or imperial.
+
+PR #166 incorporated that provider clarification. Response-unit semantics are therefore no longer unresolved. The canonical request policy remains metric, and unit readiness now requires the returned provider indicator to agree with the requested measurement system. Durable broad utilization ingestion remains disabled pending the remaining rollout gates.
 
 ## Official Decisions
 
-- Keep `X-Metric-Units: true` as the canonical request-side metric policy.
-- Treat returned `vehicle.metric_units` only as raw provider-observed vehicle metadata; do not infer durable fuel-unit provenance from `True`, `False`, or `None`.
-- Keep `response_measurement_system` unresolved and durable fuel persistence disabled until authoritative semantics are available.
-- Preserve fail-closed behavior: ambiguous unit provenance must stop persistence before any utilization row, checkpoint, or sync-history mutation.
-- Historical rollups may change; conflicting-replay fail-closed behavior is therefore temporary pending a dedicated reconciliation/update policy.
+- Keep `X-Metric-Units: true` as the canonical vehicle-utilization request policy.
+- For the canonical metric request, `vehicle.metric_units: true` is the expected consistent response indicator and fuel values are treated as liters.
+- `X-Metric-Units: true` plus `vehicle.metric_units: false` is a provider-confirmed unit-context mismatch and must fail closed.
+- `X-Metric-Units: false` plus `vehicle.metric_units: false` is the documented imperial-consistent case, with fuel values in gallons.
+- Missing or malformed `vehicle.metric_units` remains fail-closed for durable fuel persistence.
+- `idle_time` and `driving_time` are seconds regardless of metric-unit setting.
+- Do not auto-convert or guess fuel units when request and response indicators disagree.
+- Historical rollups may change; conflicting-replay fail-closed behavior remains temporary pending a dedicated reconciliation/update policy.
+
+## Authentication Certification
+
+Motive API Support also confirmed Company API Key authentication by successfully testing a Motive endpoint with the `x-api-key` header.
+
+The Polaris audit in PR #166 confirmed that production Company-API-Key request paths already used `x-api-key`; no production authentication-code correction was required. Motive OAuth remains a separate credential path and may legitimately use Bearer tokens when enabled.
+
+The current Motive Company API key must be rotated before broad production enablement because it was echoed in plaintext by provider support. Rotation is intentionally deferred until the Motive integration work is complete. No real credential is recorded in this Knowledge Base entry.
 
 ## Principles Reaffirmed
 
 - Provider evidence before semantic inference.
-- Fail closed at the persistence boundary when durable meaning is unresolved.
-- Separate transport/request policy from provider payload metadata and Polaris-certified persistence semantics.
+- Fail closed at the persistence boundary when request and response measurement context disagree.
+- Separate API request policy, provider-returned metadata, and durable persistence provenance.
 - Production validation is evidence collection, not automatic activation of broad runtime behavior.
-- Do not convert or guess measurement units.
-
-## Roadmap Change
-
-The controlled production-write validation gate is complete as an evidence-gathering milestone. It did not authorize normal utilization ingestion. The next gate is explicit certification of response measurement-system semantics, followed by a deliberate reconciliation/update policy for historical rollups before checkpointing, scheduling, or broad sync can be enabled.
+- Never synthesize missing requested vehicles as zero-activity rows.
+- Never convert or guess measurement units for a mismatched response.
 
 ## Engineering Decisions
 
-The controlled route made at most one Motive request against a fixed historical window and existing organization-owned vehicles. The production execution completed one provider call and returned one rollup, then stopped with `provider_unit_policy_mismatch`: zero rows were inserted and no checkpoint or sync-history state was mutated.
+The controlled production route remains feature-flagged off by default. The prior validation evidence is retained as:
 
-PR #163 reconciled this evidence with Motive API Support's written clarification. Provider-confirmed semantics now include inclusive end dates, omitted vehicles, `pagination.total`, one aggregate per vehicle/range, and company-configured/default timezone behavior. Parsing and durable-persistence readiness are separate concerns.
+- provider calls completed: 1
+- returned utilization rollups: 1
+- durable utilization rows inserted: 0
+- checkpoint mutations: 0
+- sync-history mutations: 0
+- result: safe fail-closed `provider_unit_policy_mismatch`
+- evidence classification after PR #166: `PROVIDER_CONFIRMED_UNIT_CONTEXT_MISMATCH`
 
-PR #164 completed the documentation/source review and confirmed that currently available official Motive documentation does not explicitly reconcile the request header with the returned Boolean. The existing database `metric_units` field is therefore audited as raw provider-observed metadata, not certified response measurement-system provenance.
+PR #163 reconciled the initial production evidence with Motive Support's earlier written clarification. Provider-confirmed semantics include inclusive end dates, omitted vehicles, `pagination.total`, one aggregate per vehicle/range, and company-configured/default timezone behavior.
 
-## Research / Verification Notes
+PR #164 completed the official-documentation review and correctly held response-unit certification unresolved because the public documentation did not explicitly reconcile `X-Metric-Units` with `vehicle.metric_units`.
 
-Controlled production evidence:
+PR #166 closed that semantic gap using Motive API Support's direct 2026-08-17 reply. It also confirmed that Polaris Company API Key requests already use `x-api-key`, added regression coverage, reclassified the production mismatch evidence, and preserved the controlled route, checkpoints, scheduling, and broad utilization sync as disabled.
 
-- 1 provider call completed.
-- 1 utilization rollup returned.
-- 0 durable utilization rows inserted.
-- 0 checkpoint mutations.
-- 0 sync-history mutations.
-- Safe result: `provider_unit_policy_mismatch`.
+## Unit Readiness Matrix
 
-Validation reported by the merged reconciliation work reached 620 backend tests for PR #163 and 627 backend tests for PR #164, with no additional live Motive calls during implementation/testing and no migration introduced by either reconciliation gate.
+| Request policy | Returned `vehicle.metric_units` | Result |
+| --- | --- | --- |
+| `X-Metric-Units: true` | `true` | consistent; unit-ready; fuel in liters |
+| `X-Metric-Units: true` | `false` | `provider_unit_policy_mismatch`; no fuel persistence |
+| `X-Metric-Units: false` | `false` | consistent; unit-ready; fuel in gallons |
+| `X-Metric-Units: false` | `true` | `provider_unit_policy_mismatch`; no fuel persistence |
+| known request policy | `None` | fail closed |
+| known request policy | malformed/non-Boolean | fail closed |
+
+## Timezone Status
+
+Motive previously confirmed that v1 vehicle-utilization date boundaries use the company configured/default timezone. The Motive account UI has been observed with the account preference set to **Central Time - Chicago**, selected for the Manitoba-based operation.
+
+This is strong operational evidence, but Polaris has not yet independently certified that this exact account-preference setting is the authoritative timezone source used by `GET /v1/vehicle_utilization` rollup boundaries. Do not add `X-Time-Zone` to this endpoint and do not treat `America/Chicago` or `America/Winnipeg` as a fully certified rollup-zone binding until that final source relationship is resolved.
 
 ## Completed Work
 
 - Executed the bounded production utilization-write validation.
-- Recorded sanitized production evidence without persisting ambiguous data.
-- Merged PR #163, reconciling production evidence with Motive API Support semantics.
-- Merged PR #164, certifying the remaining unit-semantics ambiguity and documenting the provider clarification needed.
-- Preserved the existing database identity while keeping runtime persistence disabled.
+- Recorded sanitized production evidence without persisting unit-inconsistent data.
+- Merged PR #163 for evidence/semantics reconciliation.
+- Merged PR #164 for official-documentation unit-semantics certification.
+- Obtained direct Motive API Support clarification of vehicle-utilization unit behavior.
+- Merged PR #166 for Company API Key authentication certification and provider-confirmed unit-mismatch handling.
+- Preserved tenant isolation, database identity, returned-only persistence, transaction boundaries, and fail-closed behavior.
+- Kept the controlled route, checkpoints, scheduling, and broad utilization runtime disabled.
 
 ## Remaining Gates
 
-- Obtain authoritative clarification that reconciles `X-Metric-Units` with returned `vehicle.metric_units` for this endpoint.
-- Certify durable response measurement-system provenance before fuel persistence.
-- Define a reconciliation/update policy for historical rollups that may legitimately change.
-- Only after those gates, separately review checkpoint advancement, scheduling, and broad utilization runtime activation.
+- Define the historical-rollup reconciliation/update policy for legitimately changing Motive rollups.
+- Resolve/certify the exact source relationship between Motive's company configured/default rollup timezone and the observed account preference before scheduled daily ingestion.
+- Implement and certify checkpoint advancement only after persistence/reconciliation behavior is complete.
+- Perform any further controlled live validation only under a separately authorized, bounded gate.
+- Rotate the Motive Company API key before broad production enablement.
+- Only after those gates, separately review scheduling and broad vehicle-utilization runtime activation.
 
 ## Status
 
 **Controlled production evidence:** complete.
 
-**Request-side metric policy:** certified (`X-Metric-Units: true`).
+**Company API Key authentication:** certified as `x-api-key`; existing Polaris production request paths already complied.
 
-**Response measurement-system semantics:** unresolved.
+**Canonical request-side metric policy:** certified (`X-Metric-Units: true`).
 
-**Durable fuel persistence:** disabled.
+**Response measurement-system semantics:** provider-confirmed; request/response mismatch fails closed.
+
+**Prior production observation:** provider-confirmed unit-context mismatch.
+
+**Durable broad utilization ingestion:** disabled.
+
+**Historical reconciliation policy:** pending.
+
+**Exact scheduled-rollup timezone binding:** pending final certification.
 
 **Checkpoints / scheduling / broad utilization sync:** disabled.
+
+**Motive API key rotation:** required before broad production enablement; intentionally deferred until Motive integration completion.
