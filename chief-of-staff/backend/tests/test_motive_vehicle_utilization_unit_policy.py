@@ -28,14 +28,23 @@ from app.motive.vehicle_utilization_unit_policy import (
     UNIT_CONTEXT_INVALID_TYPE_ERROR_CODE,
     UNIT_CONTEXT_MISMATCH_ERROR_CODE,
     UNIT_INDICATOR_SEMANTICS_UNRESOLVED_ERROR_CODE,
+    MotiveVehicleUtilizationUnitRequestMode,
     validate_vehicle_utilization_unit_persistence_readiness,
     vehicle_utilization_provider_unit_indicator,
     vehicle_utilization_requested_fuel_unit,
     vehicle_utilization_requested_measurement_system,
     vehicle_utilization_unit_context_consistent,
+    vehicle_utilization_unit_request_mode_expected_fuel_unit,
+    vehicle_utilization_unit_request_mode_from_bool,
+    vehicle_utilization_unit_request_mode_header_value,
+    vehicle_utilization_unit_request_mode_measurement_system,
     vehicle_utilization_unit_semantics_contract_block,
     vehicle_utilization_writer_metric_units_header_value,
 )
+
+METRIC = MotiveVehicleUtilizationUnitRequestMode.METRIC
+IMPERIAL = MotiveVehicleUtilizationUnitRequestMode.IMPERIAL
+ACCOUNT_DEFAULT = MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT
 
 
 # ---------------------------------------------------------------------------
@@ -309,3 +318,188 @@ def test_unit_semantics_contract_block_now_explicitly_states_the_confirmed_meani
     assert "metric" in rendered
     assert "imperial" in rendered
     assert "provider_confirmed" in rendered or "confirmed" in rendered
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-17 account-default unit-request-mode audit gate: the explicit
+# 3-value MotiveVehicleUtilizationUnitRequestMode representation. See the
+# module docstring for the full rationale -- a plain bool cannot represent
+# "no X-Metric-Units header was sent at all".
+# ---------------------------------------------------------------------------
+def test_unit_request_mode_has_exactly_three_values() -> None:
+    assert {mode.value for mode in MotiveVehicleUtilizationUnitRequestMode} == {"metric", "imperial", "account_default"}
+
+
+def test_account_default_basis_documents_the_fuel_ifta_evidence_without_overclaiming() -> None:
+    from app.motive.vehicle_utilization_unit_policy import (
+        MOTIVE_VEHICLE_UTILIZATION_UNIT_REQUEST_MODE_ACCOUNT_DEFAULT_BASIS as basis,
+    )
+
+    lowered = basis.lower()
+    assert "fuel_purchases" in lowered or "fuel/ifta" in lowered
+    assert "does not certify" in lowered or "does not" in lowered
+    assert "never been made" in lowered or "never" in lowered
+
+
+@pytest.mark.parametrize(
+    ("requested_metric_units", "expected_mode"),
+    [(True, METRIC), (False, IMPERIAL)],
+)
+def test_unit_request_mode_from_bool(requested_metric_units: bool, expected_mode: MotiveVehicleUtilizationUnitRequestMode) -> None:
+    assert vehicle_utilization_unit_request_mode_from_bool(requested_metric_units) is expected_mode
+
+
+@pytest.mark.parametrize("value", [1, 0, "true", "metric", None, []])
+def test_unit_request_mode_from_bool_rejects_non_boolean(value: object) -> None:
+    with pytest.raises(ValueError, match="explicit Boolean"):
+        vehicle_utilization_unit_request_mode_from_bool(value)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Section 3: header emission rule.
+#   METRIC          -> X-Metric-Units: true
+#   IMPERIAL        -> X-Metric-Units: false
+#   ACCOUNT_DEFAULT -> header omitted entirely (represented as None)
+# ---------------------------------------------------------------------------
+def test_metric_mode_header_value_is_true() -> None:
+    assert vehicle_utilization_unit_request_mode_header_value(METRIC) == "true"
+
+
+def test_imperial_mode_header_value_is_false() -> None:
+    assert vehicle_utilization_unit_request_mode_header_value(IMPERIAL) == "false"
+
+
+def test_account_default_mode_header_value_is_none_meaning_omit_entirely() -> None:
+    assert vehicle_utilization_unit_request_mode_header_value(ACCOUNT_DEFAULT) is None
+
+
+@pytest.mark.parametrize("value", [True, False, "metric", "account_default", None, 1])
+def test_unit_request_mode_header_value_rejects_non_enum(value: object) -> None:
+    with pytest.raises(ValueError, match="MotiveVehicleUtilizationUnitRequestMode"):
+        vehicle_utilization_unit_request_mode_header_value(value)  # type: ignore[arg-type]
+
+
+def test_unit_request_mode_measurement_system_mapping() -> None:
+    assert vehicle_utilization_unit_request_mode_measurement_system(METRIC) == "metric"
+    assert vehicle_utilization_unit_request_mode_measurement_system(IMPERIAL) == "imperial"
+    assert vehicle_utilization_unit_request_mode_measurement_system(ACCOUNT_DEFAULT) is None
+
+
+def test_unit_request_mode_expected_fuel_unit_mapping() -> None:
+    """ACCOUNT_DEFAULT never invents an expected fuel unit before the
+    provider responds -- only METRIC/IMPERIAL have a forced expectation."""
+    assert vehicle_utilization_unit_request_mode_expected_fuel_unit(METRIC) == "liters"
+    assert vehicle_utilization_unit_request_mode_expected_fuel_unit(IMPERIAL) == "gallons"
+    assert vehicle_utilization_unit_request_mode_expected_fuel_unit(ACCOUNT_DEFAULT) is None
+
+
+# ---------------------------------------------------------------------------
+# Persistence-readiness validator with an explicit requested_mode. Section 7
+# test matrix: validation.
+# ---------------------------------------------------------------------------
+def test_metric_mode_true_returned_is_ready() -> None:
+    result = validate_vehicle_utilization_unit_persistence_readiness(True, requested_mode=METRIC)
+    assert result.ready_for_durable_persistence is True
+    assert result.error_code is None
+    assert result.resolved_metric_units is True
+
+
+def test_metric_mode_false_returned_is_a_mismatch() -> None:
+    result = validate_vehicle_utilization_unit_persistence_readiness(False, requested_mode=METRIC)
+    assert result.ready_for_durable_persistence is False
+    assert result.error_code == UNIT_CONTEXT_MISMATCH_ERROR_CODE
+    assert result.resolved_metric_units is None
+
+
+def test_imperial_mode_false_returned_is_ready() -> None:
+    result = validate_vehicle_utilization_unit_persistence_readiness(False, requested_mode=IMPERIAL)
+    assert result.ready_for_durable_persistence is True
+    assert result.error_code is None
+    assert result.resolved_metric_units is False
+
+
+def test_imperial_mode_true_returned_is_a_mismatch() -> None:
+    result = validate_vehicle_utilization_unit_persistence_readiness(True, requested_mode=IMPERIAL)
+    assert result.ready_for_durable_persistence is False
+    assert result.error_code == UNIT_CONTEXT_MISMATCH_ERROR_CODE
+    assert result.resolved_metric_units is None
+
+
+def test_account_default_mode_true_returned_is_ready_as_metric() -> None:
+    """No unit system was forced, so a returned True is simply ready --
+    never a 'mismatch' against anything, because Polaris made no request-side
+    claim to disagree with."""
+    result = validate_vehicle_utilization_unit_persistence_readiness(True, requested_mode=ACCOUNT_DEFAULT)
+    assert result.ready_for_durable_persistence is True
+    assert result.error_code is None
+    assert result.resolved_metric_units is True
+
+
+def test_account_default_mode_false_returned_is_ready_as_imperial() -> None:
+    result = validate_vehicle_utilization_unit_persistence_readiness(False, requested_mode=ACCOUNT_DEFAULT)
+    assert result.ready_for_durable_persistence is True
+    assert result.error_code is None
+    assert result.resolved_metric_units is False
+
+
+def test_account_default_mode_none_returned_still_fails_closed() -> None:
+    """Account-default trusts only an explicit, well-formed returned
+    Boolean -- a missing indicator is never treated as 'no claim to
+    disagree with, so anything goes'."""
+    result = validate_vehicle_utilization_unit_persistence_readiness(None, requested_mode=ACCOUNT_DEFAULT)
+    assert result.ready_for_durable_persistence is False
+    assert result.error_code == UNIT_INDICATOR_SEMANTICS_UNRESOLVED_ERROR_CODE
+    assert result.resolved_metric_units is None
+
+
+@pytest.mark.parametrize("returned_metric_units", ["true", "false", 1, 0, "metric", "imperial", []])
+def test_account_default_mode_malformed_returned_still_fails_closed(returned_metric_units: object) -> None:
+    result = validate_vehicle_utilization_unit_persistence_readiness(returned_metric_units, requested_mode=ACCOUNT_DEFAULT)
+    assert result.ready_for_durable_persistence is False
+    assert result.error_code == UNIT_CONTEXT_INVALID_TYPE_ERROR_CODE
+    assert result.resolved_metric_units is None
+
+
+def test_requested_mode_takes_precedence_over_requested_metric_units() -> None:
+    """When both are supplied, the explicit mode wins -- this lets a caller
+    migrate to the mode-based call shape without also having to update
+    requested_metric_units in lockstep."""
+    result = validate_vehicle_utilization_unit_persistence_readiness(
+        False, requested_metric_units=True, requested_mode=IMPERIAL
+    )
+    assert result.ready_for_durable_persistence is True
+    assert result.resolved_metric_units is False
+
+
+def test_invalid_requested_mode_type_is_rejected() -> None:
+    with pytest.raises(ValueError, match="MotiveVehicleUtilizationUnitRequestMode"):
+        validate_vehicle_utilization_unit_persistence_readiness(True, requested_mode="account_default")  # type: ignore[arg-type]
+
+
+def test_omitted_requested_mode_derives_from_legacy_boolean_and_matches_prior_behavior() -> None:
+    """No requested_mode passed at all (the default) must reproduce the
+    exact pre-account-default-gate resolved values for every legacy caller."""
+    canonical_true_true = validate_vehicle_utilization_unit_persistence_readiness(True)
+    canonical_false_false = validate_vehicle_utilization_unit_persistence_readiness(False, requested_metric_units=False)
+
+    assert canonical_true_true.ready_for_durable_persistence is True
+    assert canonical_true_true.resolved_metric_units is True
+    assert canonical_false_false.ready_for_durable_persistence is True
+    assert canonical_false_false.resolved_metric_units is False
+
+
+def test_account_default_also_fails_closed_when_certification_kill_switch_reverted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The kill switch (MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_BOOLEAN_SEMANTICS_CERTIFIED)
+    gates every mode uniformly, including ACCOUNT_DEFAULT: it is about
+    whether the returned Boolean's meaning is trusted at all, independent of
+    whether a unit system was forced on the request."""
+    import app.motive.vehicle_utilization_unit_policy as unit_policy
+
+    monkeypatch.setattr(unit_policy, "MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_BOOLEAN_SEMANTICS_CERTIFIED", False)
+
+    result = unit_policy.validate_vehicle_utilization_unit_persistence_readiness(True, requested_mode=ACCOUNT_DEFAULT)
+
+    assert result.ready_for_durable_persistence is False
+    assert result.error_code == UNIT_INDICATOR_SEMANTICS_UNRESOLVED_ERROR_CODE
