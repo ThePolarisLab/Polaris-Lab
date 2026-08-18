@@ -18,9 +18,14 @@ from app.connectors.motive_vehicle_utilization_pagination import (
     read_vehicle_utilization_pages,
     request_vehicle_utilization_page,
 )
+from app.motive.vehicle_utilization_unit_policy import MotiveVehicleUtilizationUnitRequestMode
 
 START_DATE = date(2026, 8, 12)
 END_DATE = date(2026, 8, 12)
+
+METRIC = MotiveVehicleUtilizationUnitRequestMode.METRIC
+IMPERIAL = MotiveVehicleUtilizationUnitRequestMode.IMPERIAL
+ACCOUNT_DEFAULT = MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT
 
 
 def _rollup(provider_vehicle_id: str, *, metric_units: Any = True) -> dict[str, Any]:
@@ -639,3 +644,164 @@ def test_request_page_sends_certified_headers_and_no_time_zone_or_user_id(monkey
     assert request.headers["X-API-Key"] == "fake-motive-key"
     assert "X-Time-Zone" not in request.headers
     assert "X-User-Id" not in request.headers
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-17 account-default unit-request-mode audit gate: header emission
+# rule for the explicit MotiveVehicleUtilizationUnitRequestMode parameter.
+# Section 7 test matrix: request construction.
+# ---------------------------------------------------------------------------
+def _single_call_client(calls: list[httpx.Request]) -> httpx.Client:
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json=_page([_rollup("vehicle-a")], page_no=1, per_page=1, total=1))
+
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_metric_mode_sends_header_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    calls: list[httpx.Request] = []
+    request_vehicle_utilization_page(
+        organization_id="org-a",
+        provider_vehicle_ids=["vehicle-a"],
+        start_date=START_DATE,
+        end_date=END_DATE,
+        page_no=1,
+        per_page=1,
+        unit_request_mode=METRIC,
+        http_client=_single_call_client(calls),
+    )
+    assert calls[0].headers["X-Metric-Units"] == "true"
+
+
+def test_imperial_mode_sends_header_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    calls: list[httpx.Request] = []
+    request_vehicle_utilization_page(
+        organization_id="org-a",
+        provider_vehicle_ids=["vehicle-a"],
+        start_date=START_DATE,
+        end_date=END_DATE,
+        page_no=1,
+        per_page=1,
+        unit_request_mode=IMPERIAL,
+        http_client=_single_call_client(calls),
+    )
+    assert calls[0].headers["X-Metric-Units"] == "false"
+
+
+def test_account_default_mode_omits_the_header_entirely(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    calls: list[httpx.Request] = []
+    request_vehicle_utilization_page(
+        organization_id="org-a",
+        provider_vehicle_ids=["vehicle-a"],
+        start_date=START_DATE,
+        end_date=END_DATE,
+        page_no=1,
+        per_page=1,
+        unit_request_mode=ACCOUNT_DEFAULT,
+        http_client=_single_call_client(calls),
+    )
+    assert "X-Metric-Units" not in calls[0].headers
+
+
+def test_account_default_mode_still_sends_no_time_zone_or_user_id_and_keeps_api_key_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    calls: list[httpx.Request] = []
+    request_vehicle_utilization_page(
+        organization_id="org-a",
+        provider_vehicle_ids=["vehicle-a"],
+        start_date=START_DATE,
+        end_date=END_DATE,
+        page_no=1,
+        per_page=1,
+        unit_request_mode=ACCOUNT_DEFAULT,
+        http_client=_single_call_client(calls),
+    )
+    request = calls[0]
+    assert request.headers["X-API-Key"] == "fake-motive-key"
+    assert "X-Time-Zone" not in request.headers
+    assert "X-User-Id" not in request.headers
+
+
+def test_account_default_mode_bypasses_the_legacy_metric_units_true_restriction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a unit_request_mode, metric_units must be exactly True (the
+    legacy canonical-only restriction). Passing unit_request_mode is an
+    explicit, separately-typed opt-in that bypasses that legacy restriction
+    -- it does not weaken it for callers who never pass the new parameter."""
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    calls: list[httpx.Request] = []
+    # metric_units is left at its default (True) but is irrelevant once an
+    # explicit unit_request_mode is supplied.
+    request_vehicle_utilization_page(
+        organization_id="org-a",
+        provider_vehicle_ids=["vehicle-a"],
+        start_date=START_DATE,
+        end_date=END_DATE,
+        page_no=1,
+        per_page=1,
+        unit_request_mode=ACCOUNT_DEFAULT,
+        http_client=_single_call_client(calls),
+    )
+    assert len(calls) == 1
+
+
+def test_legacy_metric_units_false_still_rejected_when_unit_request_mode_is_not_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Backward compatibility: existing callers that never pass
+    unit_request_mode keep the exact pre-gate behavior, including rejecting
+    a plain metric_units=False."""
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    with pytest.raises(MotiveConnectorError):
+        request_vehicle_utilization_page(
+            organization_id="org-a",
+            provider_vehicle_ids=["vehicle-a"],
+            start_date=START_DATE,
+            end_date=END_DATE,
+            page_no=1,
+            per_page=1,
+            metric_units=False,
+        )
+
+
+def test_invalid_unit_request_mode_type_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    with pytest.raises(MotiveConnectorError):
+        request_vehicle_utilization_page(
+            organization_id="org-a",
+            provider_vehicle_ids=["vehicle-a"],
+            start_date=START_DATE,
+            end_date=END_DATE,
+            page_no=1,
+            per_page=1,
+            unit_request_mode="account_default",  # type: ignore[arg-type]
+        )
+
+
+def test_read_vehicle_utilization_pages_passes_unit_request_mode_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The certified paginated reader passes unit_request_mode straight
+    through to the underlying request primitive for every page."""
+    monkeypatch.setenv("MOTIVE_API_KEY", "fake-motive-key")
+    calls: list[httpx.Request] = []
+    client = _client_for_pages(
+        [_page([_rollup("vehicle-a", metric_units=False)], page_no=1, per_page=1, total=1)],
+        calls,
+    )
+    result = read_vehicle_utilization_pages(
+        organization_id="org-a",
+        organization_slug="org-a",
+        provider_vehicle_ids=["vehicle-a"],
+        start_date=START_DATE,
+        end_date=END_DATE,
+        per_page=1,
+        unit_request_mode=ACCOUNT_DEFAULT,
+        http_client=client,
+    )
+    assert len(calls) == 1
+    assert "X-Metric-Units" not in calls[0].headers
+    assert result.rollups[0].metric_units is False

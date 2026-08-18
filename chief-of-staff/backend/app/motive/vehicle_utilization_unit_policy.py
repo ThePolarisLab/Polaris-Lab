@@ -52,11 +52,55 @@ remaining strictly fail-closed whenever the requested and returned unit
 context disagree, is missing, or is malformed. No unit CONVERSION is ever
 performed, and no fuel value is ever persisted across an unresolved or
 mismatched unit context.
+
+--------------------------------------------------------------------------
+2026-08-17 account-default unit-request-mode audit gate (current)
+--------------------------------------------------------------------------
+A separate, working local Motive Fuel/IFTA integration on the same Motive
+account (NOT part of this repo -- see
+``docs/engineering/MOTIVE_UTILIZATION_ACCOUNT_DEFAULT_UNIT_MODE.md`` for the
+full writeup) authenticates with the same certified ``X-API-Key`` pattern,
+never sends an ``X-Metric-Units`` header at all for ``/v1/fuel_purchases`` or
+``/v1/ifta/summary``, and simply trusts whatever unit the provider returns.
+That is supporting evidence for a plausible *account-default* request mode
+for ``/v1/vehicle_utilization`` -- it is NOT proof that this endpoint behaves
+the same way as those other endpoints.
+
+Prior to this gate, "what Polaris requested" was represented everywhere as a
+plain ``bool`` (``requested_metric_units``). A ``bool`` cannot represent a
+third state -- "no X-Metric-Units header was sent at all" -- so this gate
+introduces an explicit three-value representation,
+:class:`MotiveVehicleUtilizationUnitRequestMode`, alongside the existing
+Boolean-based API rather than replacing it:
+
+- ``METRIC``: send ``X-Metric-Units: true``; a returned
+  ``vehicle.metric_units`` of anything other than ``True`` is a
+  provider-confirmed mismatch and fails closed, exactly as the existing
+  canonical (``requested_metric_units=True``) behavior always has.
+- ``IMPERIAL``: send ``X-Metric-Units: false``; symmetric to ``METRIC`` with
+  the Boolean flipped. Not used by any real caller yet.
+- ``ACCOUNT_DEFAULT``: omit ``X-Metric-Units`` entirely. No unit system is
+  forced, so no mismatch is possible: a returned ``True`` or ``False`` is
+  ready for durable persistence exactly as returned (``True`` => metric,
+  ``False`` => imperial). A missing (``None``) or malformed returned
+  indicator still fails closed -- account-default trusts the returned
+  Boolean, never a guess.
+
+Every existing caller that only ever passes the plain ``bool``
+``requested_metric_units`` parameter (the writer transaction's canonical
+policy call, in particular) is completely unaffected: the new
+``requested_mode`` parameter defaults to ``None``, in which case this module
+derives the mode from the legacy Boolean and reproduces the exact prior
+behavior, including the exact prior error codes. Nothing described above
+enables account-default in the live controlled write route; see
+``app/motive/vehicle_utilization_controlled_write.py`` and the account-default
+engineering doc for the explicit scope decision.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 
@@ -128,6 +172,93 @@ UNIT_CONTEXT_MISMATCH_ERROR_CODE = "provider_unit_policy_mismatch"
 MOTIVE_VEHICLE_UTILIZATION_REQUESTED_MEASUREMENT_SYSTEM = "metric"
 MOTIVE_VEHICLE_UTILIZATION_VEHICLE_CONFIGURED_METRIC_PREFERENCE_FIELD_PATH = "vehicle.metric_units"
 MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_CERTIFICATION = "PROVIDER_CONFIRMED_FAIL_CLOSED_ON_MISMATCH"
+# ---------------------------------------------------------------------------
+# 2026-08-17 account-default unit-request-mode audit gate: explicit 3-value
+# request-mode representation. See the module docstring above for the full
+# rationale. This is additive; every function below that predates this gate
+# keeps its exact prior ``bool``-based signature and behavior.
+# ---------------------------------------------------------------------------
+
+
+class MotiveVehicleUtilizationUnitRequestMode(str, Enum):
+    """The three explicit request modes Polaris may use for
+    ``GET /v1/vehicle_utilization``.
+
+    A plain ``bool`` can only ever represent ``METRIC``/``IMPERIAL`` -- it
+    structurally cannot represent "no X-Metric-Units header was sent at
+    all". This enum exists so ``ACCOUNT_DEFAULT`` is a first-class, named
+    state rather than an overload of the existing Boolean semantics.
+    """
+
+    METRIC = "metric"
+    IMPERIAL = "imperial"
+    ACCOUNT_DEFAULT = "account_default"
+
+
+MOTIVE_VEHICLE_UTILIZATION_UNIT_REQUEST_MODE_ACCOUNT_DEFAULT_BASIS = (
+    "A separate, working local Motive Fuel/IFTA integration on the same "
+    "Motive account authenticates with the same certified X-API-Key "
+    "pattern and never sends an X-Metric-Units header for /v1/fuel_purchases "
+    "or /v1/ifta/summary, trusting whatever unit the provider returns. This "
+    "motivates offering an account-default request mode for "
+    "/v1/vehicle_utilization but does NOT certify that this endpoint's "
+    "account-default behavior matches those other endpoints -- no "
+    "account-default vehicle_utilization request has ever been made live."
+)
+
+
+def vehicle_utilization_unit_request_mode_from_bool(requested_metric_units: bool) -> "MotiveVehicleUtilizationUnitRequestMode":
+    """Map the legacy explicit-Boolean request policy onto the new 3-mode enum."""
+    if type(requested_metric_units) is not bool:
+        raise ValueError("Motive utilization requested_metric_units must be an explicit Boolean")
+    return (
+        MotiveVehicleUtilizationUnitRequestMode.METRIC
+        if requested_metric_units
+        else MotiveVehicleUtilizationUnitRequestMode.IMPERIAL
+    )
+
+
+def vehicle_utilization_unit_request_mode_header_value(mode: "MotiveVehicleUtilizationUnitRequestMode") -> str | None:
+    """Return the exact ``X-Metric-Units`` header value for ``mode``.
+
+    Returns ``None`` for :attr:`MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT`
+    -- callers must interpret ``None`` as "omit the header entirely", never as
+    an empty-string header value.
+    """
+    if not isinstance(mode, MotiveVehicleUtilizationUnitRequestMode):
+        raise ValueError("Motive utilization unit request mode must be an explicit MotiveVehicleUtilizationUnitRequestMode")
+    if mode is MotiveVehicleUtilizationUnitRequestMode.METRIC:
+        return MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_HEADER_VALUE
+    if mode is MotiveVehicleUtilizationUnitRequestMode.IMPERIAL:
+        return "false"
+    return None
+
+
+def vehicle_utilization_unit_request_mode_measurement_system(mode: "MotiveVehicleUtilizationUnitRequestMode") -> str | None:
+    """The measurement system Polaris is explicitly requesting, or ``None``
+    when ``ACCOUNT_DEFAULT`` means no measurement system is being forced --
+    the actual system is only known once the response is observed."""
+    if not isinstance(mode, MotiveVehicleUtilizationUnitRequestMode):
+        raise ValueError("Motive utilization unit request mode must be an explicit MotiveVehicleUtilizationUnitRequestMode")
+    if mode is MotiveVehicleUtilizationUnitRequestMode.METRIC:
+        return "metric"
+    if mode is MotiveVehicleUtilizationUnitRequestMode.IMPERIAL:
+        return "imperial"
+    return None
+
+
+def vehicle_utilization_unit_request_mode_expected_fuel_unit(mode: "MotiveVehicleUtilizationUnitRequestMode") -> str | None:
+    """The fuel unit Polaris expects for a forced mode, or ``None`` for
+    ``ACCOUNT_DEFAULT`` -- do not invent an expected fuel unit before the
+    provider responds; see :func:`vehicle_utilization_provider_unit_indicator`
+    for the returned-side mapping instead."""
+    if not isinstance(mode, MotiveVehicleUtilizationUnitRequestMode):
+        raise ValueError("Motive utilization unit request mode must be an explicit MotiveVehicleUtilizationUnitRequestMode")
+    if mode is MotiveVehicleUtilizationUnitRequestMode.METRIC:
+        return MOTIVE_VEHICLE_UTILIZATION_METRIC_FUEL_UNIT
+    if mode is MotiveVehicleUtilizationUnitRequestMode.IMPERIAL:
+        return MOTIVE_VEHICLE_UTILIZATION_IMPERIAL_FUEL_UNIT
+    return None
 MOTIVE_VEHICLE_UTILIZATION_RESPONSE_MEASUREMENT_SYSTEM_BASIS = (
     "Motive API Support written reply (2026-08-17) confirmed GET "
     "/v1/vehicle_utilization unit semantics directly: X-Metric-Units=true "
@@ -239,6 +370,17 @@ class VehicleUtilizationUnitPersistenceReadiness:
 
     ready_for_durable_persistence: bool
     error_code: str | None = None
+    resolved_metric_units: bool | None = None
+    """The unit-context Boolean a caller should persist when ready.
+
+    Always equal to the (already-validated) returned value when
+    ``ready_for_durable_persistence`` is ``True``: for a forced mode
+    (``METRIC``/``IMPERIAL``) this is necessarily the same as the certified
+    requested Boolean, since readiness requires them to agree; for
+    ``ACCOUNT_DEFAULT`` it is whichever Boolean the provider actually
+    returned (no unit system was forced, so both ``True`` and ``False`` can
+    be ready). ``None`` whenever ``ready_for_durable_persistence`` is
+    ``False`` -- never a value to persist."""
 
 
 def vehicle_utilization_writer_metric_units_header_value(metric_units: bool) -> str:
@@ -252,18 +394,23 @@ def validate_vehicle_utilization_unit_persistence_readiness(
     returned_metric_units: Any,
     *,
     requested_metric_units: bool = MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_METRIC_UNITS,
+    requested_mode: "MotiveVehicleUtilizationUnitRequestMode | None" = None,
 ) -> VehicleUtilizationUnitPersistenceReadiness:
     """Fail-closed durable-persistence readiness gate.
 
-    2026-08-17 provider-confirmed semantics:
+    2026-08-17 provider-confirmed semantics for the two FORCED modes
+    (``METRIC``/``IMPERIAL``, i.e. an explicit ``X-Metric-Units`` header was
+    sent):
 
-    - ``requested=True, returned=True`` -> ready (consistent, metric).
-    - ``requested=False, returned=False`` -> ready (consistent, imperial).
-    - ``requested=True, returned=False`` or ``requested=False, returned=True``
-      -> fail closed with :data:`UNIT_CONTEXT_MISMATCH_ERROR_CODE`
-      (``provider_unit_policy_mismatch``). Motive Support confirmed this
-      combination is not expected/documented and directed integrations to
-      fail closed rather than persist.
+    - requested METRIC (``True``), returned ``True`` -> ready (metric).
+    - requested IMPERIAL (``False``), returned ``False`` -> ready (imperial).
+    - requested METRIC, returned ``False`` (or requested IMPERIAL, returned
+      ``True``) -> fail closed with :data:`UNIT_CONTEXT_MISMATCH_ERROR_CODE`
+      (``provider_unit_policy_mismatch``). Motive Support confirmed the
+      true-request/false-response combination is not expected/documented and
+      directed integrations to fail closed rather than persist; the same
+      fail-closed treatment applies symmetrically to false-request/
+      true-response.
     - ``returned=None`` -> fail closed with
       :data:`UNIT_INDICATOR_SEMANTICS_UNRESOLVED_ERROR_CODE`: Polaris has no
       returned indicator to compare against the request.
@@ -271,20 +418,43 @@ def validate_vehicle_utilization_unit_persistence_readiness(
       :data:`UNIT_CONTEXT_INVALID_TYPE_ERROR_CODE`: a provider response-shape
       problem, not an open semantics question.
 
+    2026-08-17 account-default unit-request-mode audit gate semantics for
+    ``requested_mode=MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT``
+    (i.e. no ``X-Metric-Units`` header was sent at all): no unit system was
+    forced, so a returned ``True`` or ``False`` is ALWAYS ready -- there is no
+    mismatch to fail closed on, because Polaris made no request-side claim to
+    disagree with. The returned Boolean becomes the observed unit context
+    (``True`` => metric, ``False`` => imperial) and is reported back via
+    ``resolved_metric_units``. A missing (``None``) or malformed returned
+    indicator still fails closed exactly as it does for the forced modes --
+    account-default trusts only an explicit, well-formed returned Boolean,
+    never a guess.
+
     ``requested_metric_units`` defaults to the certified canonical writer
     policy (always ``True``) so the real writer transaction -- which only
     ever requests the canonical policy -- can keep calling this function
-    with a single positional argument. Tests exercising other
-    request/response combinations pass ``requested_metric_units`` explicitly.
+    with a single positional argument. When ``requested_mode`` is omitted
+    (``None``, the default), it is derived from ``requested_metric_units``
+    via :func:`vehicle_utilization_unit_request_mode_from_bool`, which
+    reproduces this function's exact prior (pre-account-default-gate)
+    behavior and error codes for every existing caller. Passing
+    ``requested_mode`` explicitly (e.g. ``ACCOUNT_DEFAULT``) takes
+    precedence over ``requested_metric_units``.
 
     If :data:`MOTIVE_VEHICLE_UTILIZATION_RETURNED_METRIC_UNITS_BOOLEAN_SEMANTICS_CERTIFIED`
     were ever reverted to ``False`` (a kill switch, not expected in normal
     operation), every returned value -- including an otherwise-consistent
-    match -- fails closed with the neutral unresolved code, never guessing a
-    certification that has been explicitly withdrawn.
+    match, and including every ``ACCOUNT_DEFAULT`` value -- fails closed with
+    the neutral unresolved code, never guessing a certification that has
+    been explicitly withdrawn.
     """
-    if type(requested_metric_units) is not bool:
-        raise ValueError("Motive utilization requested_metric_units must be an explicit Boolean")
+    if requested_mode is not None and not isinstance(requested_mode, MotiveVehicleUtilizationUnitRequestMode):
+        raise ValueError("Motive utilization requested_mode must be an explicit MotiveVehicleUtilizationUnitRequestMode")
+    if requested_mode is None:
+        resolved_mode = vehicle_utilization_unit_request_mode_from_bool(requested_metric_units)
+    else:
+        resolved_mode = requested_mode
+
     if returned_metric_units is not None and type(returned_metric_units) is not bool:
         return VehicleUtilizationUnitPersistenceReadiness(
             ready_for_durable_persistence=False,
@@ -300,9 +470,22 @@ def validate_vehicle_utilization_unit_persistence_readiness(
             ready_for_durable_persistence=False,
             error_code=UNIT_INDICATOR_SEMANTICS_UNRESOLVED_ERROR_CODE,
         )
-    if requested_metric_units is not returned_metric_units:
+
+    if resolved_mode is MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT:
+        # No unit system was forced -- both True and False are ready, and
+        # the returned Boolean IS the observed unit context.
+        return VehicleUtilizationUnitPersistenceReadiness(
+            ready_for_durable_persistence=True,
+            resolved_metric_units=returned_metric_units,
+        )
+
+    expected_returned = resolved_mode is MotiveVehicleUtilizationUnitRequestMode.METRIC
+    if expected_returned is not returned_metric_units:
         return VehicleUtilizationUnitPersistenceReadiness(
             ready_for_durable_persistence=False,
             error_code=UNIT_CONTEXT_MISMATCH_ERROR_CODE,
         )
-    return VehicleUtilizationUnitPersistenceReadiness(ready_for_durable_persistence=True)
+    return VehicleUtilizationUnitPersistenceReadiness(
+        ready_for_durable_persistence=True,
+        resolved_metric_units=returned_metric_units,
+    )

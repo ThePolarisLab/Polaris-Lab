@@ -64,6 +64,26 @@ full field-level audit and matrix):
   handed; absence is not represented here at all;
 - this remains a pure, zero-HTTP-call transaction primitive with no
   checkpoint or scheduler interaction of any kind.
+
+--------------------------------------------------------------------------
+2026-08-17 account-default unit-request-mode audit gate (current)
+--------------------------------------------------------------------------
+This transaction gained an additive, optional ``unit_request_mode``
+parameter (see ``app.motive.vehicle_utilization_unit_policy``). When omitted
+(``None``, the default), behavior is byte-for-byte identical to before this
+gate: the canonical metric policy is enforced and every persisted row's
+``metric_units`` is the certified ``True``. When a caller explicitly passes
+``MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT``, no unit system
+was forced on the request, so the writer no longer requires the returned
+indicator to equal a fixed Boolean -- both ``True`` and ``False`` are ready,
+and whichever Boolean the provider actually returned is what gets durably
+persisted on the row (never a hardcoded ``True``, never a silent
+conversion). A missing or malformed returned indicator still fails closed
+exactly as before, for every mode.
+
+Nothing here enables the live controlled write route to use account-default;
+that route still calls this transaction without ``unit_request_mode``, so it
+keeps behaving exactly as it did before this gate.
 """
 
 from __future__ import annotations
@@ -84,7 +104,10 @@ from app.connectors.motive_vehicle_utilization import (
 )
 from app.connectors.motive_vehicle_utilization_contract import MOTIVE_VEHICLE_UTILIZATION_ENDPOINT
 from app.models.motive import MotiveVehicleRecord, MotiveVehicleUtilizationRecord
-from app.motive.vehicle_utilization_unit_policy import validate_vehicle_utilization_unit_persistence_readiness
+from app.motive.vehicle_utilization_unit_policy import (
+    MotiveVehicleUtilizationUnitRequestMode,
+    validate_vehicle_utilization_unit_persistence_readiness,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +202,7 @@ def write_vehicle_utilization_transaction(
     request_window_start: date,
     request_window_end: date,
     rollups: Sequence[MotiveVehicleUtilizationRollup],
+    unit_request_mode: MotiveVehicleUtilizationUnitRequestMode | None = None,
 ) -> VehicleUtilizationWriteResult:
     """Persist validated, already-parsed vehicle-utilization rollups.
 
@@ -186,6 +210,12 @@ def write_vehicle_utilization_transaction(
     staged. This function owns exactly one commit and rolls back the whole
     transaction on any failure. It never mutates ``MotiveSyncCheckpoint`` or
     ``MotiveSyncHistory``.
+
+    ``unit_request_mode`` defaults to ``None``, reproducing the exact
+    pre-account-default-gate canonical-metric-only behavior. Pass
+    ``MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT`` to persist
+    rollups read without an ``X-Metric-Units`` header -- see the module
+    docstring's 2026-08-17 account-default gate section.
     """
     rollups_list = list(rollups)
     selected_vehicle_set: set[str] = set()
@@ -222,9 +252,11 @@ def write_vehicle_utilization_transaction(
         # 5. Every returned vehicle must be within the selected set.
         _validate_returned_vehicles_within_selected_set(rollups_list, selected_vehicle_set=selected_vehicle_set)
 
-        # 6. Canonical unit context (fail closed on False/None/unknown).
+        # 6. Canonical unit context (fail closed on False/None/unknown), or
+        # -- when the caller explicitly opted into ACCOUNT_DEFAULT -- the
+        # account-default readiness rule (fail closed only on None/unknown).
         for rollup in rollups_list:
-            _validate_unit_context(rollup)
+            _validate_unit_context(rollup, unit_request_mode=unit_request_mode)
 
         # 7. Certified parser/source provenance only.
         for rollup in rollups_list:
@@ -458,8 +490,20 @@ def _validate_returned_vehicles_within_selected_set(
 # provider-confirmed mismatch and fails closed; a missing or malformed
 # returned value fails closed with its own distinct code.
 # ---------------------------------------------------------------------------
-def _validate_unit_context(rollup: MotiveVehicleUtilizationRollup) -> None:
-    readiness = validate_vehicle_utilization_unit_persistence_readiness(rollup.metric_units)
+def _validate_unit_context(
+    rollup: MotiveVehicleUtilizationRollup,
+    *,
+    unit_request_mode: MotiveVehicleUtilizationUnitRequestMode | None = None,
+) -> None:
+    if unit_request_mode is None:
+        # Exact pre-account-default-gate call shape: a single positional
+        # argument, so tests/monkeypatches written against the old signature
+        # keep working unmodified.
+        readiness = validate_vehicle_utilization_unit_persistence_readiness(rollup.metric_units)
+    else:
+        readiness = validate_vehicle_utilization_unit_persistence_readiness(
+            rollup.metric_units, requested_mode=unit_request_mode
+        )
     if not readiness.ready_for_durable_persistence:
         raise MotiveVehicleUtilizationWriterError(
             readiness.error_code or "provider_unit_indicator_semantics_unresolved",
@@ -631,7 +675,9 @@ def _existing_row_context_compatible(
     This is the single gate for CASE 4 (identity/context conflict, section 4
     of the reconciliation policy): ``True`` only when the existing row
     carries evidence it was created under the certified writer contract
-    (``metric_units is True``, certified ``source_endpoint``, certified
+    (a well-formed ``metric_units`` Boolean that agrees with the incoming,
+    already-validated rollup's own ``metric_units`` -- see the 2026-08-17
+    account-default gate note below, certified ``source_endpoint``, certified
     ``parser_version``) AND its durable identity fields
     (``provider_vehicle_id``, ``request_window_start``,
     ``request_window_end``) agree with the incoming rollup. This function
@@ -643,8 +689,19 @@ def _existing_row_context_compatible(
     Mutable, non-identity metadata such as ``organization_slug`` is
     deliberately not compared here, since it may change without changing the
     durable identity.
+
+    2026-08-17 account-default unit-request-mode audit gate: prior to this
+    gate every persisted row's ``metric_units`` was always ``True`` (the
+    canonical-only writer), so comparing the existing row's ``metric_units``
+    against the fixed literal ``True`` was equivalent to comparing it against
+    the incoming rollup's own (always-``True``) ``metric_units``. Now that
+    ``ACCOUNT_DEFAULT`` rows may legitimately be persisted with
+    ``metric_units=False``, this compares against the incoming rollup's
+    ``metric_units`` directly -- identical behavior for every existing
+    canonical-only caller (both sides are always ``True`` there), and correct
+    for account-default replays of either unit context.
     """
-    if existing.metric_units is not True:
+    if existing.metric_units is not rollup.metric_units:
         return False
     if existing.source_endpoint != CERTIFIED_SOURCE_ENDPOINT:
         return False
@@ -717,7 +774,17 @@ def _build_new_row(
     rollup: MotiveVehicleUtilizationRollup,
     motive_vehicle_id: int,
 ) -> MotiveVehicleUtilizationRecord:
-    """Minimal, certified-only persistence. No inference, no raw payload."""
+    """Minimal, certified-only persistence. No inference, no raw payload.
+
+    ``metric_units`` persists the rollup's own (already durable-persistence-
+    validated by ``_validate_unit_context`` before this is ever called)
+    returned value rather than a hardcoded ``True``. For every canonical
+    (non-account-default) caller this is always ``True`` -- validation would
+    already have failed closed on anything else -- so this is a no-behavior-
+    change for existing callers. It is what makes ACCOUNT_DEFAULT rollups
+    persist their actual observed unit context (``True`` or ``False``)
+    instead of a silently-wrong hardcoded value.
+    """
     return MotiveVehicleUtilizationRecord(
         organization_id=organization_id,
         organization_slug=organization_slug,
@@ -734,7 +801,7 @@ def _build_new_row(
         driving_time=rollup.driving_time,
         idle_fuel=rollup.idle_fuel,
         driving_fuel=rollup.driving_fuel,
-        metric_units=True,
+        metric_units=rollup.metric_units,
         distance=None,
         engine_hours=None,
         observed_at=None,

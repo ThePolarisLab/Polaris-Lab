@@ -46,7 +46,10 @@ from app.models.motive import (
     MotiveVehicleUtilizationRecord,
 )
 from app.motive import vehicle_utilization_writer as writer_module
-from app.motive.vehicle_utilization_unit_policy import VehicleUtilizationUnitPersistenceReadiness
+from app.motive.vehicle_utilization_unit_policy import (
+    MotiveVehicleUtilizationUnitRequestMode,
+    VehicleUtilizationUnitPersistenceReadiness,
+)
 from app.motive.vehicle_utilization_writer import (
     CERTIFIED_PARSER_VERSION,
     CERTIFIED_SOURCE_ENDPOINT,
@@ -60,6 +63,8 @@ register_models()
 
 WINDOW_START = date(2026, 8, 12)
 WINDOW_END = date(2026, 8, 13)
+
+ACCOUNT_DEFAULT = MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT
 
 UNSAFE_PROVIDER_VEHICLE_ID = "provider-vehicle-should-not-leak-9911"
 
@@ -1488,4 +1493,268 @@ def test_rollup_organization_mismatch_fails_closed(tmp_path) -> None:
                 rollups=[_rollup("veh-1", organization_id="org-b")],
             )
     assert exc_info.value.code == "organization_context_mismatch"
+    assert _row_count(TestingSession) == 0
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-17 account-default unit-request-mode audit gate.
+#
+# unit_request_mode=ACCOUNT_DEFAULT is the writer's opt-in half of the new
+# 3-mode request representation (app/motive/vehicle_utilization_unit_policy.py).
+# When omitted (every test above), behavior is unchanged. These tests pass
+# it explicitly and are marked unit_readiness_gate to exercise the REAL
+# persistence-readiness gate rather than the always-ready bypass.
+# Section 7 test matrix: writer.
+# ---------------------------------------------------------------------------
+@pytest.mark.unit_readiness_gate
+def test_account_default_true_returned_persists_exact_rollup_as_metric(tmp_path) -> None:
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1",))
+
+    with TestingSession() as session:
+        result = write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-1"],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[_rollup("veh-1", metric_units=True, idle_fuel=Decimal("1.2500"), driving_fuel=Decimal("3.7500"))],
+            unit_request_mode=ACCOUNT_DEFAULT,
+        )
+    assert result.committed is True
+    assert result.records_inserted == 1
+    with TestingSession() as session:
+        row = session.query(MotiveVehicleUtilizationRecord).one()
+        assert row.metric_units is True
+        # No conversion: the persisted fuel values are exactly what the
+        # rollup carried, never scaled or transformed.
+        assert row.idle_fuel == Decimal("1.2500")
+        assert row.driving_fuel == Decimal("3.7500")
+
+
+@pytest.mark.unit_readiness_gate
+def test_account_default_false_returned_persists_exact_rollup_as_imperial(tmp_path) -> None:
+    """No unit system was forced on the request, so a returned False is not
+    a mismatch -- it is durably persisted exactly as returned, with
+    metric_units=False (never silently coerced to True)."""
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1",))
+
+    with TestingSession() as session:
+        result = write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-1"],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[_rollup("veh-1", metric_units=False, idle_fuel=Decimal("0.3300"), driving_fuel=Decimal("0.9900"))],
+            unit_request_mode=ACCOUNT_DEFAULT,
+        )
+    assert result.committed is True
+    assert result.records_inserted == 1
+    with TestingSession() as session:
+        row = session.query(MotiveVehicleUtilizationRecord).one()
+        assert row.metric_units is False
+        assert row.idle_fuel == Decimal("0.3300")
+        assert row.driving_fuel == Decimal("0.9900")
+
+
+@pytest.mark.unit_readiness_gate
+def test_account_default_none_returned_still_fails_closed_no_rows(tmp_path) -> None:
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1",))
+
+    with TestingSession() as session:
+        with pytest.raises(MotiveVehicleUtilizationWriterError) as exc_info:
+            write_vehicle_utilization_transaction(
+                session,
+                organization_id="org-a",
+                organization_slug="org-a",
+                selected_provider_vehicle_ids=["veh-1"],
+                request_window_start=WINDOW_START,
+                request_window_end=WINDOW_END,
+                rollups=[_rollup("veh-1", metric_units=None)],
+                unit_request_mode=ACCOUNT_DEFAULT,
+            )
+    assert exc_info.value.code == "provider_unit_indicator_semantics_unresolved"
+    assert _row_count(TestingSession) == 0
+
+
+@pytest.mark.unit_readiness_gate
+def test_account_default_malformed_returned_still_fails_closed_no_rows(tmp_path) -> None:
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1",))
+
+    with TestingSession() as session:
+        with pytest.raises(MotiveVehicleUtilizationWriterError) as exc_info:
+            write_vehicle_utilization_transaction(
+                session,
+                organization_id="org-a",
+                organization_slug="org-a",
+                selected_provider_vehicle_ids=["veh-1"],
+                request_window_start=WINDOW_START,
+                request_window_end=WINDOW_END,
+                rollups=[_rollup("veh-1", metric_units="metric")],
+                unit_request_mode=ACCOUNT_DEFAULT,
+            )
+    assert exc_info.value.code == "provider_unit_context_invalid_type"
+    assert _row_count(TestingSession) == 0
+
+
+@pytest.mark.unit_readiness_gate
+def test_account_default_identical_imperial_replay_is_a_no_op(tmp_path) -> None:
+    """Replay identity stability for account-default: an unchanged
+    metric_units=False row replayed again is CASE 2 (true no-op), not a
+    conflict -- proving _existing_row_context_compatible now compares
+    against the incoming rollup's own metric_units rather than a hardcoded
+    True."""
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1",))
+    kwargs = dict(
+        organization_id="org-a",
+        organization_slug="org-a",
+        selected_provider_vehicle_ids=["veh-1"],
+        request_window_start=WINDOW_START,
+        request_window_end=WINDOW_END,
+        rollups=[_rollup("veh-1", metric_units=False)],
+        unit_request_mode=ACCOUNT_DEFAULT,
+    )
+
+    with TestingSession() as session:
+        first = write_vehicle_utilization_transaction(session, **kwargs)
+    with TestingSession() as session:
+        second = write_vehicle_utilization_transaction(session, **kwargs)
+
+    assert first.records_inserted == 1
+    assert second.records_inserted == 0
+    assert second.records_unchanged == 1
+    assert second.records_updated == 0
+    assert _row_count(TestingSession) == 1
+    with TestingSession() as session:
+        row = session.query(MotiveVehicleUtilizationRecord).one()
+        assert row.metric_units is False
+
+
+@pytest.mark.unit_readiness_gate
+def test_account_default_reread_switching_observed_unit_context_is_a_conflict_not_silent_overwrite(tmp_path) -> None:
+    """If a later account-default reread for the SAME identity returns a
+    different observed unit context than what is already persisted (e.g. the
+    account's default unit setting changed between reads), the writer must
+    never silently overwrite metric_units in place -- it fails closed as an
+    identity/context conflict, exactly like every other immutable-context
+    disagreement."""
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1",))
+
+    with TestingSession() as session:
+        write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-1"],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[_rollup("veh-1", metric_units=True)],
+            unit_request_mode=ACCOUNT_DEFAULT,
+        )
+    assert _row_count(TestingSession) == 1
+
+    with TestingSession() as session:
+        with pytest.raises(MotiveVehicleUtilizationWriterError) as exc_info:
+            write_vehicle_utilization_transaction(
+                session,
+                organization_id="org-a",
+                organization_slug="org-a",
+                selected_provider_vehicle_ids=["veh-1"],
+                request_window_start=WINDOW_START,
+                request_window_end=WINDOW_END,
+                rollups=[_rollup("veh-1", metric_units=False)],
+                unit_request_mode=ACCOUNT_DEFAULT,
+            )
+    assert exc_info.value.code == "conflicting_existing_identity"
+    # The original row is left completely untouched, not partially or fully
+    # overwritten.
+    assert _row_count(TestingSession) == 1
+    with TestingSession() as session:
+        row = session.query(MotiveVehicleUtilizationRecord).one()
+        assert row.metric_units is True
+
+
+@pytest.mark.unit_readiness_gate
+def test_account_default_cross_tenant_vehicle_is_still_unknown_for_caller_organization(tmp_path) -> None:
+    """Tenant isolation is unchanged by account-default: a vehicle owned by
+    a different organization is still unresolvable for the caller, before
+    unit context is even relevant."""
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, organization_id="org-a", organization_slug="org-a", provider_vehicle_ids=())
+    _seed(TestingSession, organization_id="org-b", organization_slug="org-b", provider_vehicle_ids=("shared-vehicle-id",))
+
+    with TestingSession() as session:
+        with pytest.raises(MotiveVehicleUtilizationWriterError) as exc_info:
+            write_vehicle_utilization_transaction(
+                session,
+                organization_id="org-a",
+                organization_slug="org-a",
+                selected_provider_vehicle_ids=["shared-vehicle-id"],
+                request_window_start=WINDOW_START,
+                request_window_end=WINDOW_END,
+                rollups=[_rollup("shared-vehicle-id", metric_units=False)],
+                unit_request_mode=ACCOUNT_DEFAULT,
+            )
+    assert exc_info.value.code == "unknown_vehicle"
+    assert _row_count(TestingSession) == 0
+    with TestingSession() as session:
+        org_a_rows = (
+            session.query(MotiveVehicleUtilizationRecord).filter(MotiveVehicleUtilizationRecord.organization_id == "org-a").count()
+        )
+        assert org_a_rows == 0
+
+
+@pytest.mark.unit_readiness_gate
+def test_account_default_omitted_requested_vehicle_creates_no_row(tmp_path) -> None:
+    """A selected-but-not-returned vehicle under account-default creates no
+    row, no zero metrics, and no inactive/no-activity classification --
+    identical to the canonical-mode policy."""
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2"))
+
+    with TestingSession() as session:
+        result = write_vehicle_utilization_transaction(
+            session,
+            organization_id="org-a",
+            organization_slug="org-a",
+            selected_provider_vehicle_ids=["veh-1", "veh-2"],
+            request_window_start=WINDOW_START,
+            request_window_end=WINDOW_END,
+            rollups=[_rollup("veh-1", metric_units=False)],
+            unit_request_mode=ACCOUNT_DEFAULT,
+        )
+    assert result.records_inserted == 1
+    assert result.missing_requested_vehicle_count == 1
+    assert _row_count(TestingSession) == 1
+
+
+@pytest.mark.unit_readiness_gate
+def test_account_default_default_unit_request_mode_none_matches_canonical_behavior(tmp_path) -> None:
+    """Sanity check that omitting unit_request_mode entirely (None, the
+    default) still enforces the canonical metric-only policy even under the
+    real (non-bypassed) readiness gate -- a returned False fails closed
+    exactly as it always has."""
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1",))
+
+    with TestingSession() as session:
+        with pytest.raises(MotiveVehicleUtilizationWriterError) as exc_info:
+            write_vehicle_utilization_transaction(
+                session,
+                organization_id="org-a",
+                organization_slug="org-a",
+                selected_provider_vehicle_ids=["veh-1"],
+                request_window_start=WINDOW_START,
+                request_window_end=WINDOW_END,
+                rollups=[_rollup("veh-1", metric_units=False)],
+            )
+    assert exc_info.value.code == "provider_unit_policy_mismatch"
     assert _row_count(TestingSession) == 0

@@ -39,6 +39,8 @@ from app.connectors.motive_vehicle_utilization_contract import (
 )
 from app.motive.vehicle_utilization_unit_policy import (
     MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_METRIC_UNITS,
+    MotiveVehicleUtilizationUnitRequestMode,
+    vehicle_utilization_unit_request_mode_header_value,
     vehicle_utilization_writer_metric_units_header_value,
 )
 
@@ -111,12 +113,26 @@ def request_vehicle_utilization_page(
     page_no: int,
     per_page: int,
     metric_units: bool = True,
+    unit_request_mode: MotiveVehicleUtilizationUnitRequestMode | None = None,
     http_client: httpx.Client | None = None,
 ) -> tuple[Any, int]:
     """Perform one no-retry, read-only paginated vehicle-utilization request.
 
     Not exposed as a public API route. Callers are responsible for validating
     the returned pagination envelope with :func:`parse_pagination_metadata`.
+
+    ``unit_request_mode`` is the 2026-08-17 account-default unit-request-mode
+    audit gate's additive 3-mode request representation (see
+    ``app.motive.vehicle_utilization_unit_policy``). It defaults to ``None``,
+    in which case this function reproduces its exact prior behavior:
+    ``metric_units`` must be exactly ``True`` (the certified canonical
+    writer policy) and the ``X-Metric-Units: true`` header is always sent.
+    Passing ``unit_request_mode`` explicitly opts a caller into the new
+    3-mode header-emission rule (METRIC -> ``X-Metric-Units: true``,
+    IMPERIAL -> ``X-Metric-Units: false``, ACCOUNT_DEFAULT -> the header is
+    omitted entirely) and bypasses the legacy ``metric_units is not True``
+    restriction, since the caller has made an explicit, separately-typed
+    request-mode choice instead.
     """
     selected_provider_vehicle_ids = [provider_vehicle_id for provider_vehicle_id in provider_vehicle_ids if provider_vehicle_id]
     if not selected_provider_vehicle_ids:
@@ -142,7 +158,13 @@ def request_vehicle_utilization_page(
             status=ConnectorStatus.FAILED,
             code="invalid_pagination_request",
         )
-    if metric_units is not True:
+    if unit_request_mode is not None and not isinstance(unit_request_mode, MotiveVehicleUtilizationUnitRequestMode):
+        raise MotiveConnectorError(
+            "Motive vehicle utilization pagination unit_request_mode must be an explicit MotiveVehicleUtilizationUnitRequestMode",
+            status=ConnectorStatus.FAILED,
+            code="invalid_pagination_request",
+        )
+    if unit_request_mode is None and metric_units is not True:
         raise MotiveConnectorError(
             "Motive vehicle utilization pagination requires the certified canonical metric unit policy",
             status=ConnectorStatus.FAILED,
@@ -158,11 +180,17 @@ def request_vehicle_utilization_page(
             ("page_no", str(page_no)),
         ]
     )
+    header_value = (
+        vehicle_utilization_unit_request_mode_header_value(unit_request_mode)
+        if unit_request_mode is not None
+        else vehicle_utilization_writer_metric_units_header_value(metric_units)
+    )
     headers = {
         "Accept": "application/json",
         "X-API-Key": _api_key(),
-        "X-Metric-Units": vehicle_utilization_writer_metric_units_header_value(metric_units),
     }
+    if header_value is not None:
+        headers["X-Metric-Units"] = header_value
     owns_client = http_client is None
     client = http_client or httpx.Client(timeout=_timeout_seconds())
     try:
@@ -271,6 +299,7 @@ def read_vehicle_utilization_pages(
     end_date: date,
     per_page: int = MOTIVE_VEHICLE_UTILIZATION_PAGINATION_CANONICAL_WRITER_PAGE_SIZE,
     metric_units: bool = MOTIVE_VEHICLE_UTILIZATION_CANONICAL_WRITER_METRIC_UNITS,
+    unit_request_mode: MotiveVehicleUtilizationUnitRequestMode | None = None,
     http_client: httpx.Client | None = None,
 ) -> VehicleUtilizationPaginatedRead:
     """Read every provider page for one request window and fail closed on any
@@ -278,6 +307,11 @@ def read_vehicle_utilization_pages(
 
     NO persistence. NO checkpoint. NO commit. NO flush. NO add. This function
     performs only read-only HTTP requests and in-memory validation.
+
+    ``unit_request_mode`` is passed straight through to
+    :func:`request_vehicle_utilization_page` for every page in the read; see
+    that function's docstring for the exact backward-compatible default
+    behavior when it is left as ``None``.
     """
     selected_provider_vehicle_ids = [provider_vehicle_id for provider_vehicle_id in provider_vehicle_ids if provider_vehicle_id]
     if not selected_provider_vehicle_ids:
@@ -315,6 +349,7 @@ def read_vehicle_utilization_pages(
             page_no=page_no,
             per_page=per_page,
             metric_units=metric_units,
+            unit_request_mode=unit_request_mode,
             http_client=http_client,
         )
 
