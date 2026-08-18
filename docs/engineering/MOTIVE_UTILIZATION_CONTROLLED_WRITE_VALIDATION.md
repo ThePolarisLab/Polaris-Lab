@@ -441,13 +441,154 @@ now uses `ACCOUNT_DEFAULT`:
   and `metric_units` can be verified independently against the database in
   tests).
 
-**This does NOT certify vehicle_utilization account-default behavior.** No
-live `/v1/vehicle_utilization` call, in any mode, has been made as part of
-this gate — every claim above is proven by `httpx.MockTransport` tests only,
-and the feature flag was not enabled during this gate's implementation or
-tests. The next required step before any broader decision is exactly ONE
-separately-authorized live-staging call with the feature flag deliberately
-enabled for that single invocation (see
-`MOTIVE_UTILIZATION_ACCOUNT_DEFAULT_UNIT_MODE.md` section 9). Scheduled
-ingestion and checkpoint advancement remain fully disabled and are
-unaffected by this gate.
+At the time this section was written, no live `/v1/vehicle_utilization`
+call, in any mode, had been made as part of this gate — every claim above
+was proven by `httpx.MockTransport` tests only. **Superseded 2026-08-18: see
+"Update: Account-Default Live-Staging Validation Success" immediately
+below — the required single live call has since been made and succeeded.**
+
+## Update: Account-Default Live-Staging Validation Success (2026-08-18)
+
+**HISTORICAL** (unchanged, retained as evidence, not erased): the one prior
+real controlled production validation, executed while this route still
+forced `X-Metric-Units: true`, failed safely on a provider-confirmed
+unit-context mismatch (`provider_calls_completed = 1`,
+`returned_rollup_count = 1`, `records_inserted = 0`). See
+`MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md` for the full sanitized record
+of that earlier, forced-metric attempt. That result is not overwritten or
+reinterpreted by this section — it remains accurate for the request mode
+that was actually in effect at the time it was recorded.
+
+**CURRENT:** a single, separately-authorized live-staging controlled
+validation was executed after PR #174 deployed this route's switch to
+`MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT`, and it succeeded.
+
+Request bounds (unchanged from every prior invocation of this route):
+
+- `request_window_start` / `request_window_end`: `2026-08-13` (fixed,
+  single day)
+- `selected_vehicle_count`: `3`
+- request mode: `ACCOUNT_DEFAULT` — `X-Metric-Units` omitted entirely
+- `provider_calls_attempted`: `1` (maximum for this route)
+- no retry
+
+Sanitized result:
+
+```
+status = success
+resource = vehicle_utilization_controlled_write_validation
+validation_mode = controlled_manual_write_validation
+
+provider_calls_attempted = 1
+provider_calls_completed = 1
+
+pagination_total = 1
+returned_rollup_count = 1
+missing_requested_vehicle_count = 2
+
+records_inserted = 1
+records_unchanged = 0
+records_updated = 0
+reconciled_fields_count = 0
+
+committed = true
+
+checkpoint_advanced = false
+sync_history_written = false
+scheduled_ingestion_enabled = false
+secrets_exposed = false
+```
+
+No provider vehicle ID, VIN, unit number, driver information, raw metric
+value, raw provider payload, API key, Polaris bearer token, or database row
+ID is recorded here or was recorded anywhere in the sanitized evidence
+gathered for this validation. The controlled feature flag
+(`MOTIVE_VEHICLE_UTILIZATION_CONTROLLED_WRITE_ENABLED`) was returned to
+`false` and redeployed immediately after this single invocation.
+
+### What this validation proves
+
+1. Polaris successfully made one live `/v1/vehicle_utilization` request
+   through the bounded controlled path using `ACCOUNT_DEFAULT`.
+2. The request completed successfully without Polaris forcing
+   `X-Metric-Units`.
+3. Motive returned one rollup for the three selected vehicles.
+4. Polaris accepted the returned unit context under `ACCOUNT_DEFAULT` and
+   durably inserted one utilization row.
+5. The database transaction committed successfully.
+6. Two requested vehicles were omitted by Motive, and Polaris did **not**
+   synthesize zero rows, an inactive classification, or a no-activity
+   classification for either of them — only the sanitized
+   `missing_requested_vehicle_count = 2`.
+7. No checkpoint was advanced.
+8. No sync-history row was written.
+9. Scheduled ingestion remained disabled throughout.
+10. No retry occurred.
+11. No secret was exposed in the sanitized response.
+
+### What this validation does NOT prove
+
+- **It does not prove all Motive vehicles, or this organization's other
+  vehicles, behave the same way.** One rollup, for one of three selected
+  vehicles, on one fixed historical day, was observed.
+- **Omission does not mean zero activity.** The two omitted vehicles are
+  `provider_rollup_absent`, nothing more.
+- **`ACCOUNT_DEFAULT` is not certified for every account.** This is one
+  successful observation on this Motive account, not a general provider
+  behavior guarantee.
+- **The exact provider company-rollup timezone field is still not
+  certified.** See `MOTIVE_UTILIZATION_TIMEZONE_CERTIFICATION.md` — this
+  validation proceeded under that document's provisional operational
+  assumption, which remains provisional.
+- **Broad historical ingestion is not ready**, and scheduled ingestion is
+  **not** enabled by this validation or this document.
+- **Pagination behavior beyond this one-result observation is not newly
+  proven.** `pagination_total = 1` for this specific call; nothing broader
+  is inferred.
+- **Fuel values are not claimed to be universally imperial or metric** as a
+  result of this single observation.
+- **The exact returned `metric_units` Boolean is not recorded here**, because
+  no read-only, provider-call-free proof of the persisted row's stored value
+  was independently available at documentation time. Per the evidence
+  constraints for this record: returned unit context was accepted and
+  persisted under `ACCOUNT_DEFAULT`. A future audit with direct, read-only
+  access to the staging database could record this precisely (as
+  `observed_unit_context = metric` or `observed_unit_context = imperial`,
+  never a raw Boolean, ID, or metric value) without requiring another live
+  provider call.
+
+### Doc/contract reconciliation
+
+`app/motive/vehicle_utilization_writer_contract.py`'s
+`controlled_manual_write_validation` block's `production_validation_executed`
+and related fields should be read alongside this record as reflecting the
+**current** (`ACCOUNT_DEFAULT`) state, not the earlier forced-metric failure
+recorded in `MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md`. Both records are
+accurate for the request mode that was in effect when each was captured;
+neither supersedes or erases the other as a historical fact.
+
+### Next gate
+
+The next proposed engineering gate is **not** scheduled ingestion. It is:
+
+**Bounded recent-window reconciliation design.**
+
+That design gate must determine (design only — no implementation in that
+gate either, until it is itself separately authorized):
+
+- how many recent days to reread on a bounded, non-scheduled basis;
+- batching and vehicle-count limits for a reread;
+- pagination bounds for a reread (page count, per-page size);
+- reconciliation/update semantics for a bounded reread (building on, not
+  replacing, the existing `MUTABLE_ON_PROVIDER_RECONCILIATION` policy — see
+  `MOTIVE_UTILIZATION_HISTORICAL_RECONCILIATION.md`);
+- transaction boundaries for a multi-window reread;
+- failure isolation (one window's failure must not corrupt or abandon
+  others);
+- checkpoint policy — deliberately still not implemented by this or any
+  prior gate.
+
+Scheduled ingestion, checkpoint advancement, broader feature-flag
+enablement, and any further live Motive call all remain separately
+authorized, later decisions — none of them is authorized by this
+documentation update.
