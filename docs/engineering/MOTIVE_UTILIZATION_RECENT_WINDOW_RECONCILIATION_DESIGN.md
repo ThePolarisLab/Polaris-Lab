@@ -457,3 +457,83 @@ ingestion remains a later gate**, contingent on that manual runner's own
 successful bounded validation and on the still-open timezone-binding
 question (`MOTIVE_UTILIZATION_TIMEZONE_CERTIFICATION.md`) being resolved
 first.
+
+## 16. Implementation Status (2026-08-18)
+
+**The runner designed above is now implemented**, in
+`chief-of-staff/backend/app/motive/vehicle_utilization_recent_reconciliation.py`
+(`run_recent_vehicle_utilization_reconciliation`), with a focused 85-test
+suite in
+`chief-of-staff/backend/tests/test_motive_vehicle_utilization_recent_reconciliation.py`.
+This section records what changed and, more importantly, what still has
+not:
+
+- **Still internal/manual only.** The runner is a plain Python callable.
+  This gate adds no FastAPI route, no scheduler, no cron job, no CLI
+  command, and no worker job. It is not reachable over HTTP.
+- **Feature flag default off, everywhere.** A new, genuinely separate flag,
+  `MOTIVE_VEHICLE_UTILIZATION_RECENT_RECONCILIATION_ENABLED`, gates the
+  runner and defaults to disabled using the exact strict-boolean-parse
+  pattern already established by the controlled-write route's own flag —
+  but is never the same flag and never implies it. The gate is checked, and
+  fails closed, before any vehicle selection or provider HTTP request. This
+  flag is not enabled anywhere in Render by this gate.
+- **Zero live provider calls in this gate.** Every one of the 85 focused
+  tests mocks all provider interaction via `httpx.MockTransport`, matching
+  every existing Motive test file's convention. No live
+  `GET /v1/vehicle_utilization` request, in any mode, was made while
+  building or validating this implementation.
+- **No scheduler.** Nothing in this gate wires the runner to any recurring
+  or automatic invocation. It runs only when explicitly called.
+- **No checkpoint.** The module never imports, reads, or writes
+  `MotiveSyncCheckpoint` — confirmed both by a direct source audit and by a
+  dedicated test (`test_no_checkpoint_or_sync_history_reference_in_module_source`)
+  that inspects the module's actual imports via `ast`, not merely its
+  docstring prose. The sanitized result always reports
+  `checkpoint_advanced=false`.
+- **No sync-history write.** Symmetric to the checkpoint point above:
+  `MotiveSyncHistory` is never imported, read, or written; the result
+  always reports `sync_history_written=false`.
+- **No public route.** `test_no_new_public_route_added` confirms neither
+  `/api/v1/motive/sync/vehicle-utilization` nor
+  `/api/v1/motive/reconcile/vehicle-utilization` (nor any route containing
+  "reconcil") exists on the Motive router.
+- **Design decisions implemented as specified, not reinvented:** the
+  7-day default / 14-day hard-maximum horizon; one `start == end`
+  calendar-day window per day, oldest → newest; tenant-scoped vehicle
+  selection ordered by `MotiveVehicleRecord.id` ascending (not reusing the
+  controlled route's 3-vehicle-capped helper); up-to-100-vehicle batching;
+  reuse (never duplication) of the general certified pagination reader
+  (`read_vehicle_utilization_pages`) and the existing writer transaction
+  (`write_vehicle_utilization_transaction`), each called exactly once per
+  `(day, batch)` unit; `ACCOUNT_DEFAULT` unit mode; one writer transaction
+  per vehicle-batch-per-day; per-unit failure isolation with no automatic
+  retry and no rollback of already-committed earlier units; and a
+  runner-owned pre-flight call-budget guard (`D x B x P`, runner-owned
+  `P = 1`, runner-owned ceiling `RUNNER_MAX_AUTHORIZED_PROVIDER_CALLS = 200`
+  — deliberately smaller than the general reader's own 100-page defensive
+  bound, per Section 12's "do not casually authorize hundreds of calls"
+  guidance) that fails closed before any provider HTTP if exceeded.
+- **No blanket exception swallowing.** Only the already-typed, certified
+  safe-failure taxonomy (`MotiveConnectorError`,
+  `MotiveVehicleUtilizationPaginationError`,
+  `MotiveVehicleUtilizationWriterError`) is caught per unit; a genuinely
+  unexpected exception propagates and aborts the whole run rather than
+  being absorbed. `test_no_blanket_except_exception_continue_in_module_source`
+  parses the module's AST to confirm no bare `except:` or `except
+  Exception:` handler exists anywhere in the module.
+- **No migration.** No genuine schema/code contradiction was found during
+  the fresh pre-implementation audit; none was expected, and none was
+  needed.
+- **Existing controlled-write route untouched.** No change was made to
+  `app/motive/vehicle_utilization_controlled_write.py`; its own test suite
+  remains green, and its 3-vehicle / fixed-window / one-provider-call
+  bounds are unchanged.
+
+**Next gate**: mocked/CI review of this implementation (this PR), followed
+by a separately authorized, bounded live-staging validation mechanism for
+this runner specifically — distinct from, and later than, the controlled
+route's own already-completed 2026-08-18 live-staging validation. Scheduled
+ingestion remains further out still, contingent on both that live
+validation and the still-open timezone-binding question
+(`MOTIVE_UTILIZATION_TIMEZONE_CERTIFICATION.md`).

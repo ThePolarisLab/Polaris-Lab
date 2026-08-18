@@ -169,6 +169,70 @@ call). **Scheduled ingestion remains a later gate still**, after that
 runner's own bounded validation and after the timezone-binding question
 (`MOTIVE_UTILIZATION_TIMEZONE_CERTIFICATION.md`) is resolved.
 
+## 4C.2C+ Update: Bounded Recent-Window Reconciliation Runner Implementation (2026-08-18)
+
+This gate implements the internal runner designed by the gate above:
+`app.motive.vehicle_utilization_recent_reconciliation.run_recent_vehicle_utilization_reconciliation`
+(`chief-of-staff/backend/app/motive/vehicle_utilization_recent_reconciliation.py`).
+It is a plain Python callable only -- no new FastAPI route, no scheduler, no
+CLI command, no worker job. It is disabled by default behind its own,
+genuinely separate feature gate,
+`MOTIVE_VEHICLE_UTILIZATION_RECENT_RECONCILIATION_ENABLED` (never reused
+from, never implying, the controlled-write route's own flag), which is
+checked and fails closed before any vehicle selection or provider HTTP.
+
+It implements the design's decisions exactly: default 7-day / hard-maximum
+14-day trailing horizon ending at "yesterday" (`_generate_day_windows`,
+strict positive/maximum validation via `_validate_horizon_days`); one
+independent `start == end` calendar-day window per horizon day, oldest to
+newest; tenant-scoped vehicle selection ordered by `MotiveVehicleRecord.id`
+ascending (`_select_tenant_vehicles`, deliberately not reusing the
+controlled route's 3-vehicle-capped helper); deterministic batching up to
+100 vehicles per batch (`_batch_provider_vehicle_ids`, correctly exercised
+at 0/1/99/100/101/250); a runner-owned pre-flight call-budget guard
+(`max_provider_calls = D x B x P`, with a runner-owned `P = 1` -- not the
+general reader's much larger 100-page defensive bound -- and a runner-owned
+ceiling of 200 total calls) that fails closed before any provider HTTP if
+exceeded; and exactly one call each to the unmodified general certified
+reader (`read_vehicle_utilization_pages`, always `ACCOUNT_DEFAULT`, page
+size 100, no `X-Metric-Units`/`X-Time-Zone` invention) and the unmodified
+merged writer transaction (`write_vehicle_utilization_transaction`) per
+`(day, vehicle batch)` unit -- one writer transaction per unit, never one
+giant multi-day or multi-batch transaction. A known, already-typed, safe
+operational failure (`MotiveConnectorError`,
+`MotiveVehicleUtilizationPaginationError`,
+`MotiveVehicleUtilizationWriterError`) at either stage is recorded as a
+sanitized per-unit failure (day/window, batch ordinal, safe error code
+only -- never a vehicle identity) and processing continues with the next
+independent unit, with no automatic retry and with already-committed
+earlier units never rolled back; a genuinely unexpected exception is
+deliberately not caught by this runner and propagates, aborting the whole
+run rather than being silently absorbed as "just another failed unit" --
+there is no blanket `except Exception:` anywhere in this module. The
+runner never imports, reads, or writes `MotiveSyncCheckpoint` or
+`MotiveSyncHistory`; its sanitized result explicitly reports
+`checkpoint_advanced=false`, `sync_history_written=false`, and
+`scheduled_ingestion_enabled=false` on every outcome (`success`,
+`partial_success`, `failed`, or `no_op` for zero eligible vehicles).
+
+The existing controlled-write validation route
+(`app/motive/vehicle_utilization_controlled_write.py`) was not modified in
+any way by this gate; its own tests remain green and its 3-vehicle /
+fixed-window / one-provider-call bounds are unchanged.
+
+This is implementation readiness only: the feature flag remains disabled
+everywhere, including Render (no Render or environment configuration was
+changed by this gate); no live Motive provider call was made by this gate
+or by any of its 85 focused tests (all mocked via `httpx.MockTransport`,
+matching every existing test file's convention); there is still no
+scheduler, no checkpoint advancement, and no public route reaching this
+runner. The next gate is mocked/CI review of this implementation, followed
+by a separately authorized bounded live-staging validation mechanism for
+this runner specifically (distinct from, and later than, the controlled
+route's own already-completed live-staging validation). See
+`MOTIVE_UTILIZATION_RECENT_WINDOW_RECONCILIATION_DESIGN.md`'s
+"Implementation Status" section for the full detail.
+
 Before broader sync is implemented, Polaris must complete design and verification for:
 
 - durable vehicle-utilization persistence mapping, identity/period semantics, units, checkpoint strategy, unknown vehicle handling, KPI interpretation, and production ingestion certification
