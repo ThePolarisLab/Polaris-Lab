@@ -44,7 +44,10 @@ from app.motive.vehicle_utilization_controlled_write import (
     controlled_write_enabled,
     run_controlled_vehicle_utilization_write,
 )
-from app.motive.vehicle_utilization_unit_policy import VehicleUtilizationUnitPersistenceReadiness
+from app.motive.vehicle_utilization_unit_policy import (
+    MotiveVehicleUtilizationUnitRequestMode,
+    VehicleUtilizationUnitPersistenceReadiness,
+)
 from app.organizations.models import Organization
 from app.security.models import AuthenticatedPrincipal, Permission
 
@@ -82,7 +85,11 @@ def _bypass_unresolved_unit_gate_for_unrelated_concerns(request: pytest.FixtureR
     monkeypatch.setattr(
         writer_module,
         "validate_vehicle_utilization_unit_persistence_readiness",
-        lambda returned_metric_units: VehicleUtilizationUnitPersistenceReadiness(ready_for_durable_persistence=True),
+        # Accepts and ignores the additive ``requested_mode`` keyword the
+        # controlled route now passes (2026-08-17 controlled-route
+        # account-default validation gate) so this bypass keeps working for
+        # every test not explicitly exercising the real unit-readiness gate.
+        lambda returned_metric_units, **_kwargs: VehicleUtilizationUnitPersistenceReadiness(ready_for_durable_persistence=True),
     )
     yield
 
@@ -404,7 +411,15 @@ def test_exact_request_bounds(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None
     assert request.url.params["end_date"] == "2026-08-13"
     assert request.url.params["page_no"] == "1"
     assert request.url.params["per_page"] == "100"
-    assert request.headers["X-Metric-Units"] == "true"
+    # 2026-08-17 controlled-route account-default validation gate: this
+    # route now requests ACCOUNT_DEFAULT, so X-Metric-Units must be
+    # genuinely ABSENT from the outgoing headers dict -- never sent as an
+    # empty string, never sent with a "None" string value, never present as
+    # a key at all.
+    assert "X-Metric-Units" not in request.headers
+    assert "x-metric-units" not in request.headers
+    header_keys_lower = {key.lower() for key in request.headers.keys()}
+    assert "x-metric-units" not in header_keys_lower
     assert "X-Time-Zone" not in request.headers
     assert "X-User-Id" not in request.headers
     assert result["selected_vehicle_count"] == 3
@@ -412,6 +427,22 @@ def test_exact_request_bounds(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None
     assert result["provider_calls_completed"] == 1
     assert result["request_window_start"] == "2026-08-13"
     assert result["request_window_end"] == "2026-08-13"
+
+
+def test_controlled_read_explicitly_selects_account_default_mode() -> None:
+    """Direct source-level proof that the controlled route's one provider
+    request explicitly opts into ACCOUNT_DEFAULT (rather than, say, silently
+    omitting the header some other way that would be an accident of
+    ``metric_units`` defaults rather than a deliberate, named request-mode
+    choice)."""
+    from app.motive import vehicle_utilization_controlled_write as controlled_write_module
+
+    read_source = inspect.getsource(controlled_write_module._execute_one_page_controlled_read)
+    assert "unit_request_mode=MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT" in read_source
+    assert "metric_units=True" not in read_source
+
+    write_source = inspect.getsource(controlled_write_module.run_controlled_vehicle_utilization_write)
+    assert "unit_request_mode=MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT" in write_source
 
 
 def test_selected_vehicle_count_is_capped_at_three(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -476,48 +507,81 @@ def test_success_insert_persists_certified_row(tmp_path, monkeypatch: pytest.Mon
 
 # ---------------------------------------------------------------------------
 # Section 1/17 -- this is the real, non-bypassed shape of the route today.
-# It reproduces the sanitized facts of the one real controlled production
-# validation recorded in
-# docs/engineering/MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md: one provider
-# call, one returned rollup, zero rows inserted, zero checkpoint/history
-# writes, safe failure. The controlled route always requests
-# X-Metric-Units: true; the recorded evidence returned
-# vehicle.metric_units=false, which Motive API Support's 2026-08-17 written
-# reply confirmed is a provider-confirmed unit-context mismatch.
+#
+# HISTORICAL CONTEXT (superseded 2026-08-17 by the controlled-route
+# account-default validation gate): this test used to reproduce the
+# sanitized facts of the one real controlled production validation recorded
+# in docs/engineering/MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md -- one
+# provider call, one returned rollup, zero rows inserted, safe failure --
+# because at that time the controlled route always requested
+# X-Metric-Units: true, and the recorded evidence's returned
+# vehicle.metric_units=false was a provider-confirmed unit-context mismatch
+# under that forced-metric policy.
+#
+# This route no longer sends X-Metric-Units at all (it explicitly requests
+# ACCOUNT_DEFAULT), so there is no forced request-side claim left to
+# disagree with: a returned metric_units=False is now READY for durable
+# persistence, not a mismatch. This test now proves that current, correct
+# behavior -- exercising the real, non-bypassed writer unit-readiness gate,
+# not the module-level test bypass.
 # ---------------------------------------------------------------------------
 @pytest.mark.unit_readiness_gate
-def test_route_fails_closed_matching_recorded_production_evidence(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_route_persists_returned_imperial_context_under_account_default(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
     TestingSession = _session_factory(tmp_path)
     _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2", "veh-3"))
     checkpoints_before, history_before = _checkpoint_and_history_counts(TestingSession)
     pages = [_page([_rollup_item("veh-1", metric_units=False)], total=1)]
 
-    with pytest.raises(MotiveVehicleUtilizationControlledWriteError) as exc_info:
-        _run_controlled_write(TestingSession, pages=pages)
+    result = _run_controlled_write(TestingSession, pages=pages)
 
-    assert exc_info.value.code == "provider_unit_policy_mismatch"
-    assert exc_info.value.provider_calls_attempted == 1
-    assert exc_info.value.provider_calls_completed == 1
-    assert exc_info.value.selected_vehicle_count == 3
-    assert exc_info.value.returned_rollup_count == 1
-    assert _row_count(TestingSession) == 0
+    assert result["status"] == "success"
+    assert result["provider_calls_attempted"] == 1
+    assert result["provider_calls_completed"] == 1
+    assert result["records_inserted"] == 1
+    assert result["committed"] is True
+    with TestingSession() as session:
+        row = session.query(MotiveVehicleUtilizationRecord).one()
+        assert row.metric_units is False
     checkpoints_after, history_after = _checkpoint_and_history_counts(TestingSession)
     assert checkpoints_after == checkpoints_before
     assert history_after == history_before
 
 
+@pytest.mark.unit_readiness_gate
+def test_route_persists_returned_metric_context_under_account_default(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Symmetric to the imperial case above: a returned metric_units=True is
+    also ready for durable persistence under ACCOUNT_DEFAULT (it always was,
+    even under the old forced-metric policy, but this proves it explicitly
+    against the real, non-bypassed gate for the current request mode)."""
+    monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2", "veh-3"))
+    pages = [_page([_rollup_item("veh-1", metric_units=True)], total=1)]
+
+    result = _run_controlled_write(TestingSession, pages=pages)
+
+    assert result["status"] == "success"
+    assert result["records_inserted"] == 1
+    with TestingSession() as session:
+        row = session.query(MotiveVehicleUtilizationRecord).one()
+        assert row.metric_units is True
+
+
 # ---------------------------------------------------------------------------
 # 2026-08-17 controlled-utilization live-staging 500 diagnosis gate.
 #
-# The test above proves run_controlled_vehicle_utilization_write raises
+# HISTORICAL CONTEXT (partially superseded 2026-08-17 by the controlled-
+# route account-default validation gate): the test that used to sit here
+# proved run_controlled_vehicle_utilization_write raised
 # MotiveVehicleUtilizationControlledWriteError(code="provider_unit_policy_mismatch")
-# for exactly this scenario -- matching the one real live controlled-route
-# attempt made against staging on 2026-08-17, which returned a raw HTTP 500
-# with no traceback in Render logs. Root cause (found and fixed by this
-# gate): app.api.motive._controlled_write_http_status special-cased every
-# writer-originated fail-closed code -- including "provider_unit_policy_mismatch"
-# and "provider_unit_indicator_semantics_unresolved" -- to
+# for a returned metric_units=False -- matching the one real live
+# controlled-route attempt made against staging on 2026-08-17, which
+# returned a raw HTTP 500 with no traceback in Render logs. Root cause
+# (found and fixed by this gate): app.api.motive._controlled_write_http_status
+# special-cased every writer-originated fail-closed code -- including
+# "provider_unit_policy_mismatch" and
+# "provider_unit_indicator_semantics_unresolved" -- to
 # HTTP_500_INTERNAL_SERVER_ERROR, a status HTTP convention reserves for
 # genuine server defects, not expected, safely-handled provider rejections
 # (the disabled/confirmation-required/no-stored-vehicle paths already used
@@ -531,35 +595,65 @@ def test_route_fails_closed_matching_recorded_production_evidence(tmp_path, monk
 # provider's data could not be safely used" is an accurate description of
 # every code in this bucket, read-stage or write-stage alike.
 #
-# These two tests now serve as regression tests for the fix: they prove
-# that a real provider round trip occurred (provider_calls_attempted ==
-# provider_calls_completed == 1, matching the one-call budget), that the
-# writer still correctly failed closed with zero rows written and zero
-# checkpoint/history mutation, and that the route now reports this as
-# HTTP 502 rather than HTTP 500.
+# Now that this route requests ACCOUNT_DEFAULT, a returned metric_units=False
+# is no longer a mismatch (it persists successfully -- see
+# test_route_persists_returned_imperial_context_under_account_default
+# above), so "provider_unit_policy_mismatch" can no longer actually occur
+# through this route's real, non-bypassed unit-readiness gate. (A malformed,
+# non-Boolean returned indicator is also not reachable at this full-route
+# level: the certified parser -- app.connectors.motive_vehicle_utilization --
+# already normalizes any non-Boolean vehicle.metric_units to None before the
+# writer ever sees it, so "provider_unit_context_invalid_type" can only be
+# exercised by calling the unit-policy validator directly, as
+# tests/test_motive_vehicle_utilization_unit_policy.py already does.) The
+# test below preserves the same regression proof (a writer-originated,
+# fail-closed code correctly reports HTTP 502, not HTTP 500) using the
+# "unknown_vehicle" writer-stage code instead -- still real, still
+# fail-closed, still unrelated to unit semantics, and still reachable
+# through the full, real controlled-route flow today.
 # ---------------------------------------------------------------------------
-@pytest.mark.unit_readiness_gate
-def test_route_reports_provider_unit_policy_mismatch_as_http_502(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_route_reports_unknown_vehicle_writer_failure_as_http_502(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression test for the 2026-08-17 live-staging controlled-route 500.
 
-    A provider-confirmed, correctly-fail-closed unit-context mismatch
-    (exactly the scenario proven safe by
-    test_route_fails_closed_matching_recorded_production_evidence above) is
-    surfaced to the API caller as HTTP 502 Bad Gateway -- not the raw
-    HTTP 500 this route returned before this gate's fix. This was a
-    status-code mapping defect, not an unsafe-persistence defect: the
-    transaction still rolls back, zero rows are written, and zero
-    checkpoint/history mutation occurs -- confirmed by the assertions below.
+    A writer-stage failure (here, a returned vehicle that resolves to no
+    stored tenant-owned MotiveVehicleRecord -- see
+    test_writer_transaction_failure_rolls_back_with_no_partial_writes for
+    the same scenario at the orchestration-function level) is surfaced to
+    the API caller as HTTP 502 Bad Gateway, not the raw HTTP 500 this route
+    returned before the fix this test guards. This is a status-code mapping
+    proof, not an unsafe-persistence proof: the transaction still rolls
+    back, zero rows are written, and zero checkpoint/history mutation
+    occurs -- confirmed by the assertions below.
     """
     monkeypatch.setenv(CONTROLLED_WRITE_ENABLED_ENV_VAR, "true")
     monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
     TestingSession = _session_factory(tmp_path)
-    _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2", "veh-3"))
+    # veh-1 is selected but has no stored MotiveVehicleRecord in this org,
+    # forcing the writer to fail with "unknown_vehicle" even though the
+    # provider read itself is fully valid.
+    with TestingSession.begin() as session:
+        session.add(Organization(id="org-a", slug="org-a", display_name="org-a"))
+        session.add(MotiveVehicleRecord(organization_id="org-a", organization_slug="org-a", provider_vehicle_id="veh-2"))
+        session.add(MotiveVehicleRecord(organization_id="org-a", organization_slug="org-a", provider_vehicle_id="veh-3"))
     checkpoints_before, history_before = _checkpoint_and_history_counts(TestingSession)
-    pages = [_page([_rollup_item("veh-1", metric_units=False)], total=1)]
+    pages = [_page([_rollup_item("veh-1")], total=1)]
     calls: list[httpx.Request] = []
     mock_client = _client_for_pages(pages, calls)
 
+    # _vehicles_for_utilization_contract only ever returns stored
+    # MotiveVehicleRecord rows, so it is monkeypatched here to force
+    # selection of "veh-1" (unstored) alongside the two stored vehicles --
+    # the route only reads each returned object's provider_vehicle_id, so a
+    # lightweight transient (never-flushed) record works fine.
+    monkeypatch.setattr(
+        motive_api,
+        "_vehicles_for_utilization_contract",
+        lambda session, organization_id: [
+            MotiveVehicleRecord(organization_id=organization_id, organization_slug=organization_id, provider_vehicle_id="veh-1"),
+            MotiveVehicleRecord(organization_id=organization_id, organization_slug=organization_id, provider_vehicle_id="veh-2"),
+            MotiveVehicleRecord(organization_id=organization_id, organization_slug=organization_id, provider_vehicle_id="veh-3"),
+        ],
+    )
     monkeypatch.setattr(
         motive_api,
         "run_controlled_vehicle_utilization_write",
@@ -574,15 +668,10 @@ def test_route_reports_provider_unit_policy_mismatch_as_http_502(tmp_path, monke
                 session=session,
             )
 
-    # Reproduces the exact live-staging observation: a real provider round
-    # trip occurred (provider_calls_attempted == provider_calls_completed ==
-    # 1, matching the one-call budget), the writer correctly failed closed
-    # on the unit-context mismatch, and the route now reports it as
-    # HTTP 502 (fixed) rather than HTTP 500 (the bug this gate found).
     assert len(calls) == 1
     assert exc_info.value.status_code == 502
     detail = exc_info.value.detail
-    assert detail["error_code"] == "provider_unit_policy_mismatch"
+    assert detail["error_code"] == "unknown_vehicle"
     assert detail["provider_calls_attempted"] == 1
     assert detail["provider_calls_completed"] == 1
     assert _row_count(TestingSession) == 0
@@ -692,15 +781,22 @@ def test_second_identical_execution_is_a_no_op(tmp_path, monkeypatch: pytest.Mon
 
 @pytest.mark.unit_readiness_gate
 def test_repeated_real_executions_each_independently_fail_closed_with_zero_rows(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """2026-08-17 controlled-route account-default validation gate: a
+    returned metric_units=False no longer fails closed under this route's
+    current ACCOUNT_DEFAULT mode (see
+    test_route_persists_returned_imperial_context_under_account_default
+    above), so this repeated-fail-closed proof now uses a missing (None)
+    returned indicator instead -- still genuinely unresolved and still
+    fail-closed under every request mode, ACCOUNT_DEFAULT included."""
     monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
     TestingSession = _session_factory(tmp_path)
     _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2", "veh-3"))
-    pages = [_page([_rollup_item("veh-1", metric_units=False)], total=1)]
+    pages = [_page([_rollup_item("veh-1", metric_units=None)], total=1)]
 
     for _attempt in range(2):
         with pytest.raises(MotiveVehicleUtilizationControlledWriteError) as exc_info:
             _run_controlled_write(TestingSession, pages=pages)
-        assert exc_info.value.code == "provider_unit_policy_mismatch"
+        assert exc_info.value.code == "provider_unit_indicator_semantics_unresolved"
         assert _row_count(TestingSession) == 0
 
 
@@ -942,18 +1038,33 @@ def test_unexpected_returned_vehicle_fails_closed(tmp_path, monkeypatch: pytest.
 #
 # These fail closed at the WRITER's persistence-readiness gate (not a
 # read-stage pre-check) -- provider schema parse success is distinct from
-# durable persistence readiness. The controlled route always requests
-# X-Metric-Units: true, so a returned True now agrees and is unit-ready
-# (proven separately in test_route_succeeds_when_returned_unit_matches_the_
-# canonical_request below); False and None each still fail closed, with
-# their own distinct, provider-confirmed codes.
+# durable persistence readiness.
+#
+# 2026-08-17 controlled-route account-default validation gate: this route
+# now requests ACCOUNT_DEFAULT, so no unit system is forced -- a returned
+# True OR False now agrees (no mismatch is possible) and is unit-ready
+# (proven separately above by
+# test_route_persists_returned_metric_context_under_account_default and
+# test_route_persists_returned_imperial_context_under_account_default). Only
+# a missing (None) or malformed (non-Boolean, non-None) returned indicator
+# still fails closed, each with its own distinct, provider-confirmed code --
+# proven by the parametrized test below.
 # ---------------------------------------------------------------------------
 @pytest.mark.unit_readiness_gate
 @pytest.mark.parametrize(
     ("metric_units", "expected_code"),
-    [(False, "provider_unit_policy_mismatch"), (None, "provider_unit_indicator_semantics_unresolved")],
+    [
+        (None, "provider_unit_indicator_semantics_unresolved"),
+        # The certified parser (app.connectors.motive_vehicle_utilization)
+        # normalizes any non-Boolean vehicle.metric_units to None before the
+        # writer ever sees it (see parse_vehicle_utilization_rollups), so a
+        # raw provider string/number for metric_units is observed here as
+        # the same "missing" outcome as an explicit None -- this is the
+        # real, full-stack behavior, not a shortcut.
+        ("not-a-boolean", "provider_unit_indicator_semantics_unresolved"),
+    ],
 )
-def test_every_disagreeing_or_missing_returned_unit_value_fails_closed_before_any_write(
+def test_every_missing_or_malformed_returned_unit_value_fails_closed_before_any_write(
     tmp_path, monkeypatch: pytest.MonkeyPatch, metric_units, expected_code
 ) -> None:
     monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
@@ -967,23 +1078,6 @@ def test_every_disagreeing_or_missing_returned_unit_value_fails_closed_before_an
     assert exc_info.value.code == expected_code
     assert exc_info.value.returned_rollup_count == 1
     assert _row_count(TestingSession) == 0
-
-
-@pytest.mark.unit_readiness_gate
-def test_route_succeeds_when_returned_unit_matches_the_canonical_request(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A returned True agrees with the controlled route's canonical
-    X-Metric-Units: true request and is durably persisted -- the real,
-    non-bypassed unit-readiness gate, not the module-level test bypass."""
-    monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
-    TestingSession = _session_factory(tmp_path)
-    _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2", "veh-3"))
-    pages = [_page([_rollup_item("veh-1", metric_units=True)], total=1)]
-
-    result = _run_controlled_write(TestingSession, pages=pages)
-
-    assert result["status"] == "success"
-    assert result["records_inserted"] == 1
-    assert _row_count(TestingSession) == 1
 
 
 def test_bad_parser_shape_fails_closed_before_writer_commit(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
