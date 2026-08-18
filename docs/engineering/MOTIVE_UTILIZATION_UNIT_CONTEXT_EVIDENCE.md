@@ -1,5 +1,18 @@
 # Motive Vehicle Utilization Unit-Context Evidence
 
+**HISTORICAL RECORD, retained as evidence, not superseded or erased.** This
+document records the single controlled production validation that ran while
+the controlled route still forced `X-Metric-Units: true`. It failed safely,
+exactly as this document describes below. On **2026-08-18**, a later,
+separate controlled validation — after the route was switched to
+`MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT` (PR #174) —
+**succeeded** and durably inserted one row. See
+`MOTIVE_UTILIZATION_CONTROLLED_WRITE_VALIDATION.md`'s "Update:
+Account-Default Live-Staging Validation Success (2026-08-18)" section for
+that current record. Both records are accurate for the request mode that
+was actually in effect at the time each was captured; this document is not
+rewritten in light of the later success.
+
 This gate reconciles two newly authoritative pieces of evidence gathered
 after PR #162 ("Add controlled Motive utilization write validation")
 merged, and downgrades the previously-certified returned unit-indicator

@@ -223,24 +223,43 @@ Alembic migration is included in this gate.
 
 ## 9. Recommended next gate
 
-**Update (2026-08-17, controlled-route validation gate):** step 1 below --
-opting the controlled write route into `ACCOUNT_DEFAULT` -- has now been done
-(still with zero live calls; see section 6). What remains outstanding is
-exactly one separately-authorized live-staging call:
+**Update (2026-08-18, live-staging validation success):** both prior steps
+are now complete:
 
 1. ~~explicitly opt the controlled write route (or a dedicated, equally
    bounded probe) into `ACCOUNT_DEFAULT` for exactly one bounded call
    (respecting the existing fixed-window / max-vehicle / max-call / no-retry
-   bounds already enforced by the controlled route)~~ -- done, mocked-tests
-   only, feature flag still default-disabled.
-2. Make exactly ONE separately-authorized live-staging call with the
+   bounds already enforced by the controlled route)~~ -- done (PR #174),
+   mocked-tests only, feature flag left default-disabled.
+2. ~~Make exactly ONE separately-authorized live-staging call with the
    feature flag deliberately enabled for that single invocation, and record
-   the sanitized outcome (provider calls, returned rollup count, observed
-   `vehicle.metric_units`, rows inserted, safe-failure status) the same way
-   the prior `PRODUCTION_WRITE_VALIDATION_EVIDENCE` entry did.
+   the sanitized outcome~~ -- done and **succeeded**: one provider call, one
+   returned rollup, one durable row inserted, transaction committed, zero
+   checkpoint/history writes, feature flag returned to `false` and
+   redeployed immediately after. See
+   `MOTIVE_UTILIZATION_CONTROLLED_WRITE_VALIDATION.md`'s "Update:
+   Account-Default Live-Staging Validation Success (2026-08-18)" section for
+   the full sanitized record and for what this single observation does and
+   does not prove.
 
-Before any decision is made about enabling the feature flag more broadly or
-building any scheduled ingestion on top of account-default, that single live
-call (step 2) is still required and still has not happened. Neither this
-gate nor the controlled-route validation gate that followed it performs that
-live call.
+With both steps done, the next proposed engineering gate is **not**
+scheduled ingestion. It is:
+
+**Bounded recent-window reconciliation design.**
+
+That gate must determine (design only, no implementation, until separately
+authorized):
+
+- how many recent days to reread on a bounded, non-scheduled basis;
+- batching/vehicle-count limits for a reread;
+- pagination bounds for a reread;
+- reconciliation/update semantics for a bounded reread (building on the
+  existing `MUTABLE_ON_PROVIDER_RECONCILIATION` policy — see
+  `MOTIVE_UTILIZATION_HISTORICAL_RECONCILIATION.md`);
+- transaction boundaries across a multi-window reread;
+- failure isolation between windows;
+- checkpoint policy — still deliberately unimplemented.
+
+Scheduled ingestion, checkpoint advancement, broader feature-flag
+enablement, and any further live Motive call remain separately authorized,
+later decisions.

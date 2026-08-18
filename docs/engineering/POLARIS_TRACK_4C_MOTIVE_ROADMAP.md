@@ -94,14 +94,47 @@ unchanged: fixed window `2026-08-13..2026-08-13`, at most 3 selected
 vehicles, at most 1 provider call, no retry, no page 2, no
 checkpoint/sync-history writes, feature flag
 (`MOTIVE_VEHICLE_UTILIZATION_CONTROLLED_WRITE_ENABLED`) still default
-`false`. The response shape is unchanged. This does **not** certify
-vehicle_utilization account-default behavior -- no live
-`/v1/vehicle_utilization` call, in any mode, was made as part of this gate;
-the next required step is exactly one separately-authorized live-staging
-call with the feature flag deliberately enabled for that single invocation.
-See `MOTIVE_UTILIZATION_CONTROLLED_WRITE_VALIDATION.md`'s own "Update:
-Controlled-Route Account-Default Validation Gate" section for the full
-detail.
+`false`. The response shape is unchanged. At the time this gate was written,
+no live `/v1/vehicle_utilization` call, in any mode, had been made, and the
+next required step was exactly one separately-authorized live-staging call
+with the feature flag deliberately enabled for that single invocation
+(**that call has since been made and succeeded -- see the update
+immediately below**). See `MOTIVE_UTILIZATION_CONTROLLED_WRITE_VALIDATION.md`'s
+own "Update: Controlled-Route Account-Default Validation Gate" section for
+the full detail.
+
+## 4C.2C+ Update: Account-Default Live-Staging Validation Success (2026-08-18)
+
+A single, separately-authorized live-staging controlled validation was
+executed against the deployed `ACCOUNT_DEFAULT` controlled route (PR #174)
+and **succeeded**: one provider call, one returned rollup (of three selected
+vehicles; the other two were `provider_rollup_absent`, not synthesized as
+zero-activity rows), one durable row inserted, the writer transaction
+committed, zero checkpoint writes, zero sync-history writes, scheduled
+ingestion still disabled, no retry, and no secret exposed in the sanitized
+response. The controlled feature flag was returned to `false` and
+redeployed immediately afterward. See
+`MOTIVE_UTILIZATION_CONTROLLED_WRITE_VALIDATION.md`'s "Update:
+Account-Default Live-Staging Validation Success (2026-08-18)" section for
+the full sanitized record, and for the explicit list of what this single
+observation does and does not prove (it does not certify account-default
+behavior for every vehicle or account, does not certify the exact provider
+rollup timezone binding, and does not enable broad or scheduled ingestion).
+The prior forced-metric validation failure recorded in
+`MOTIVE_UTILIZATION_UNIT_CONTEXT_EVIDENCE.md` remains documented as
+historical evidence for the request mode that was in effect at that earlier
+time -- it is not erased or reinterpreted by this success.
+
+The next proposed engineering gate is **not** scheduled ingestion. It is a
+**bounded recent-window reconciliation design** gate (design only, no
+implementation): how many recent days to reread, batching/vehicle-count and
+pagination bounds for a reread, reconciliation/update semantics building on
+the existing historical-reconciliation policy, transaction boundaries and
+failure isolation across a multi-window reread, and checkpoint policy
+(still deliberately unimplemented). See
+`MOTIVE_UTILIZATION_ACCOUNT_DEFAULT_UNIT_MODE.md` section 9 for the full
+list. No live Motive call, Render change, feature-flag enablement,
+migration, or key rotation was made by this documentation update.
 
 Before broader sync is implemented, Polaris must complete design and verification for:
 
