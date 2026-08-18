@@ -81,9 +81,16 @@ persisted on the row (never a hardcoded ``True``, never a silent
 conversion). A missing or malformed returned indicator still fails closed
 exactly as before, for every mode.
 
-Nothing here enables the live controlled write route to use account-default;
-that route still calls this transaction without ``unit_request_mode``, so it
-keeps behaving exactly as it did before this gate.
+2026-08-17 controlled-route validation gate (current): the bounded controlled
+vehicle-utilization write validation route
+(``app/motive/vehicle_utilization_controlled_write.py``) now explicitly passes
+``unit_request_mode=MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT``
+into this transaction, so a returned rollup with ``metric_units=True`` OR
+``metric_units=False`` can both persist for that route; a missing or
+malformed indicator still fails closed exactly as before. This is still NOT a
+live proof of account-default behavior for this endpoint -- the controlled
+write route's feature flag remains disabled by default and no live provider
+call has been made under this change.
 """
 
 from __future__ import annotations

@@ -171,24 +171,38 @@ See `tests/test_motive_vehicle_utilization_writer_transaction.py`'s
 `unit_readiness_gate`-marked account-default tests for the full proof of
 every claim in this section.
 
-## 6. Controlled write route: unchanged in this gate
+## 6. Controlled write route: updated by a later, separate gate
 
-`app/motive/vehicle_utilization_controlled_write.py` (the feature-flagged
-`POST /api/v1/motive/verify/vehicle-utilization-write` route) is **not
-modified by this gate**. It still calls `request_vehicle_utilization_page(...,
-metric_units=True, ...)` and `write_vehicle_utilization_transaction(...)`
-without `unit_request_mode`, so it continues to behave exactly as it did
-before this gate -- fixed window `2026-08-13..2026-08-13`, at most 3
-selected vehicles, at most 1 provider call, no checkpoint/history writes,
-feature flag default `false`, no scheduler/general sync.
+**Update (2026-08-17, controlled-route validation gate):** the section below
+described this gate's *original* scope decision -- the controlled write
+route was deliberately left unmodified here. A subsequent, separately-scoped
+gate (`feature/motive-controlled-account-default-validation`) has since made
+the controlled route's smallest possible change to actually use
+`ACCOUNT_DEFAULT`: see `docs/engineering/MOTIVE_UTILIZATION_CONTROLLED_WRITE_VALIDATION.md`
+for the current, authoritative description of that route's behavior. As of
+that gate, `app/motive/vehicle_utilization_controlled_write.py` calls
+`request_vehicle_utilization_page(..., unit_request_mode=MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT, ...)`
+(the `X-Metric-Units` header is now omitted entirely on this route) and
+`write_vehicle_utilization_transaction(..., unit_request_mode=MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT)`.
+This still does **not** certify vehicle_utilization account-default behavior
+live -- the feature flag remains disabled by default, and no live
+`/v1/vehicle_utilization` call, in any mode, has been made under either gate.
+A single, separately-authorized live-staging call is still the required next
+step (see section 9, updated below).
 
-This was a deliberate scope decision, not an oversight: the underlying
-request/unit-policy/writer stack now supports `ACCOUNT_DEFAULT`, proven
-entirely by mocked tests, but switching the one route that can reach a real
-Motive account to that mode is a separate, higher-stakes decision that
-deserves its own narrowly-scoped review rather than being folded into this
-audit gate. No live account-default `/v1/vehicle_utilization` request has
-ever been made.
+Original text, retained for history: at the time this gate was written, the
+controlled write route was not modified by it. It still called
+`request_vehicle_utilization_page(..., metric_units=True, ...)` and
+`write_vehicle_utilization_transaction(...)` without `unit_request_mode`, so
+it continued to behave exactly as it did before this gate -- fixed window
+`2026-08-13..2026-08-13`, at most 3 selected vehicles, at most 1 provider
+call, no checkpoint/history writes, feature flag default `false`, no
+scheduler/general sync. That was a deliberate scope decision, not an
+oversight: the underlying request/unit-policy/writer stack supported
+`ACCOUNT_DEFAULT`, proven entirely by mocked tests, but switching the one
+route that can reach a real Motive account to that mode was treated as a
+separate, higher-stakes decision deserving its own narrowly-scoped review
+rather than being folded into this audit gate.
 
 ## 7. What this gate does NOT claim
 
@@ -209,18 +223,24 @@ Alembic migration is included in this gate.
 
 ## 9. Recommended next gate
 
-A single, separately-authorized, narrowly-scoped live-staging validation
-that:
+**Update (2026-08-17, controlled-route validation gate):** step 1 below --
+opting the controlled write route into `ACCOUNT_DEFAULT` -- has now been done
+(still with zero live calls; see section 6). What remains outstanding is
+exactly one separately-authorized live-staging call:
 
-1. explicitly opts the controlled write route (or a dedicated, equally
+1. ~~explicitly opt the controlled write route (or a dedicated, equally
    bounded probe) into `ACCOUNT_DEFAULT` for exactly one bounded call
    (respecting the existing fixed-window / max-vehicle / max-call / no-retry
-   bounds already enforced by the controlled route), and
-2. records the sanitized outcome (provider calls, returned rollup count,
-   observed `vehicle.metric_units`, rows inserted, safe-failure status) the
-   same way the prior `PRODUCTION_WRITE_VALIDATION_EVIDENCE` entry did,
+   bounds already enforced by the controlled route)~~ -- done, mocked-tests
+   only, feature flag still default-disabled.
+2. Make exactly ONE separately-authorized live-staging call with the
+   feature flag deliberately enabled for that single invocation, and record
+   the sanitized outcome (provider calls, returned rollup count, observed
+   `vehicle.metric_units`, rows inserted, safe-failure status) the same way
+   the prior `PRODUCTION_WRITE_VALIDATION_EVIDENCE` entry did.
 
-before any decision is made about switching the controlled route's default
-mode, enabling the feature flag more broadly, or building any scheduled
-ingestion on top of account-default. This gate does not perform that
-validation and does not request it be performed as part of merging this PR.
+Before any decision is made about enabling the feature flag more broadly or
+building any scheduled ingestion on top of account-default, that single live
+call (step 2) is still required and still has not happened. Neither this
+gate nor the controlled-route validation gate that followed it performs that
+live call.

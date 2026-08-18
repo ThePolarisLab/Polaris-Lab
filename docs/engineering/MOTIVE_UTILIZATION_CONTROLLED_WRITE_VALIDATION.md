@@ -101,11 +101,14 @@ any provider call.
 ## One-Page, One-Call Contract
 
 At most **one** Motive provider request is attempted per invocation:
-`per_page = 100` (the canonical writer page size), `page_no = 1`,
-`metric_units = True` (`X-Metric-Units: true`), for the fixed window above.
-Because the selected vehicle set is capped at three, one legitimate Motive
-rollup per selected vehicle fits entirely in one page — there is never a
-legitimate reason for this bounded validation to need page 2.
+`per_page = 100` (the canonical writer page size), `page_no = 1`, for the
+fixed window above. **Superseded 2026-08-17 (see "Update: Controlled-Route
+Account-Default Validation Gate" below):** this route now requests
+`unit_request_mode = ACCOUNT_DEFAULT`, so `X-Metric-Units` is omitted
+entirely — it no longer sends `X-Metric-Units: true`. Because the selected
+vehicle set is capped at three, one legitimate Motive rollup per selected
+vehicle fits entirely in one page — there is never a legitimate reason for
+this bounded validation to need page 2.
 
 Strict, fail-closed validation before any write is attempted:
 
@@ -238,9 +241,11 @@ call):
 - missing/`false` confirmation is rejected before any provider call;
 - no-stored-vehicle fails safely (`404`) before any provider call;
 - exact request bounds: date exactly `2026-08-13`, `page_no=1`,
-  `per_page=100`, `X-Metric-Units: true`, exactly one provider call, no
-  `X-Time-Zone`/`X-User-Id` headers, selected-vehicle count capped at three
-  even when more are stored;
+  `per_page=100`, `unit_request_mode=ACCOUNT_DEFAULT` explicitly selected,
+  `X-Metric-Units` header absent (not empty-string, not `None`-valued —
+  genuinely absent from the outgoing headers dict), exactly one provider
+  call, no `X-Time-Zone`/`X-User-Id` headers, selected-vehicle count capped
+  at three even when more are stored;
 - successful insert with exact sanitized counts and exact certified durable
   row fields;
 - second identical execution is a no-op (`records_unchanged` increments, DB
@@ -252,8 +257,12 @@ call):
   returned count, `page_no`/`per_page` mismatch, missing pagination,
   non-integer/boolean pagination fields, duplicate rollup, unexpected
   vehicle) all fail closed with exactly one provider call and zero writes;
-- unit/parser failures (`metric_units` false/missing, malformed provider
-  schema) fail closed before the writer transaction runs;
+- unit/parser failures (`metric_units` missing/`None` or malformed,
+  malformed provider schema) fail closed at the writer transaction's
+  account-default readiness gate — **superseded 2026-08-17**: a returned
+  `metric_units = False` is no longer a failure for this route (it persists
+  successfully, same as `True`); see "Update: Controlled-Route
+  Account-Default Validation Gate" below;
 - provider failure (timeout, network failure, non-success HTTP status) fails
   closed with exactly one attempt, no retry, zero writes;
 - a writer-transaction failure after a successful provider read rolls back
@@ -330,12 +339,18 @@ review.
 Motive API Support's 2026-08-17 written reply confirmed the returned
 `vehicle.metric_units` indicator's meaning (`true`=metric, `false`=imperial)
 and the request/response consistency rule for `GET /v1/vehicle_utilization`.
-This route's request behavior is **unchanged**: it still makes at most one
-provider call per invocation, still always sends `X-Metric-Units: true`
-(the canonical writer policy), and the read stage still performs no
-returned-unit-indicator check of its own -- that remains the writer
-transaction's job. What changes is the writer transaction's outcome for
-that check:
+At the time this update was written, this route's request behavior was
+unchanged: it still made at most one provider call per invocation, still
+always sent `X-Metric-Units: true` (the canonical writer policy), and the
+read stage still performed no returned-unit-indicator check of its own --
+that remained the writer transaction's job. **Superseded 2026-08-17 (later
+same day, see "Update: Controlled-Route Account-Default Validation Gate"
+below): this route no longer sends `X-Metric-Units: true` at all.** The
+description immediately below (of the canonical `true`/`false` mismatch
+outcomes) describes the writer's forced-mode behavior as it existed before
+that later update; read the final update section for this route's current
+behavior. What changed at the time of this gate was the writer
+transaction's outcome for that check:
 
 - a returned `vehicle.metric_units = true` now **agrees** with this route's
   canonical `X-Metric-Units: true` request and is unit-ready -- a
@@ -382,3 +397,57 @@ still fails closed exactly as before. The route's response shape gains one
 additive field, `reconciled_fields_count`, alongside the existing
 `records_updated`. No live Motive call was made, no database migration was
 added, and the feature flag was not enabled during this update's tests.
+
+## Update: Controlled-Route Account-Default Validation Gate (2026-08-17)
+
+**This is the current, authoritative description of this route's request
+mode. All prior sections and updates above that describe this route always
+sending `X-Metric-Units: true` are superseded by this section.**
+
+PR #173 added `MotiveVehicleUtilizationUnitRequestMode`
+(`METRIC`/`IMPERIAL`/`ACCOUNT_DEFAULT`) and additive `unit_request_mode`
+parameters to `request_vehicle_utilization_page()` and
+`write_vehicle_utilization_transaction()`, but deliberately left this
+controlled route unmodified (see
+`MOTIVE_UTILIZATION_ACCOUNT_DEFAULT_UNIT_MODE.md` section 6). This gate makes
+the smallest possible change so that this route — and *only* this route —
+now uses `ACCOUNT_DEFAULT`:
+
+- `_execute_one_page_controlled_read` in
+  `app/motive/vehicle_utilization_controlled_write.py` now calls
+  `request_vehicle_utilization_page(..., unit_request_mode=MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT, ...)`
+  instead of `metric_units=True`. The `X-Metric-Units` header is therefore
+  **omitted entirely** from this route's one provider request (proven by a
+  mocked-transport test asserting the key is genuinely absent from the
+  outgoing headers dict, not sent as an empty string or `None` value).
+  `x-api-key` and `Accept: application/json` are unchanged; `X-Time-Zone` and
+  `X-User-Id` remain absent, exactly as before.
+- `run_controlled_vehicle_utilization_write` now passes
+  `unit_request_mode=MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT`
+  into `write_vehicle_utilization_transaction(...)`. As a result, a returned
+  `vehicle.metric_units = True` **or** `= False` both persist successfully
+  (the writer records exactly the returned Boolean, never a hardcoded
+  value) — this route no longer treats a returned `False` as a
+  `provider_unit_policy_mismatch`. A missing (`None`) or malformed returned
+  indicator still fails closed with the same two codes as before
+  (`provider_unit_indicator_semantics_unresolved` /
+  `provider_unit_context_invalid_type`).
+- Every other bound is unchanged: fixed window `2026-08-13..2026-08-13`, at
+  most 3 selected vehicles, at most 1 provider call, no retry, no page 2, no
+  checkpoint/sync-history writes, feature flag
+  (`MOTIVE_VEHICLE_UTILIZATION_CONTROLLED_WRITE_ENABLED`) still default
+  `false`. The response shape is unchanged (no new fields were added; the
+  existing sanitized counters are sufficient to prove successful persistence,
+  and `metric_units` can be verified independently against the database in
+  tests).
+
+**This does NOT certify vehicle_utilization account-default behavior.** No
+live `/v1/vehicle_utilization` call, in any mode, has been made as part of
+this gate — every claim above is proven by `httpx.MockTransport` tests only,
+and the feature flag was not enabled during this gate's implementation or
+tests. The next required step before any broader decision is exactly ONE
+separately-authorized live-staging call with the feature flag deliberately
+enabled for that single invocation (see
+`MOTIVE_UTILIZATION_ACCOUNT_DEFAULT_UNIT_MODE.md` section 9). Scheduled
+ingestion and checkpoint advancement remain fully disabled and are
+unaffected by this gate.

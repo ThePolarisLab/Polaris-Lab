@@ -87,14 +87,24 @@ Boolean-based API rather than replacing it:
   Boolean, never a guess.
 
 Every existing caller that only ever passes the plain ``bool``
-``requested_metric_units`` parameter (the writer transaction's canonical
-policy call, in particular) is completely unaffected: the new
+``requested_metric_units`` parameter is completely unaffected: the new
 ``requested_mode`` parameter defaults to ``None``, in which case this module
 derives the mode from the legacy Boolean and reproduces the exact prior
-behavior, including the exact prior error codes. Nothing described above
-enables account-default in the live controlled write route; see
-``app/motive/vehicle_utilization_controlled_write.py`` and the account-default
-engineering doc for the explicit scope decision.
+behavior, including the exact prior error codes.
+
+2026-08-17 controlled-route validation gate (current): the bounded controlled
+vehicle-utilization write validation route
+(``app/motive/vehicle_utilization_controlled_write.py``) now explicitly opts
+into ``MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT`` for its one
+provider request and its one writer transaction call -- it no longer forces
+the canonical ``X-Metric-Units: true`` header. This is still NOT a live proof
+of ``/v1/vehicle_utilization`` account-default behavior: no account-default
+request against this endpoint has ever actually been made (the controlled
+write route's feature flag,
+``MOTIVE_VEHICLE_UTILIZATION_CONTROLLED_WRITE_ENABLED``, remains disabled by
+default and no live call has been made under this change). See the
+account-default engineering doc for the explicit scope decision and the
+still-pending live-staging proof step.
 """
 
 from __future__ import annotations

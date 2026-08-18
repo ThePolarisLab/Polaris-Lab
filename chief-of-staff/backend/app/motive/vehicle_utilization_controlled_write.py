@@ -66,6 +66,7 @@ from app.connectors.motive_vehicle_utilization_pagination import (
     parse_pagination_metadata,
     request_vehicle_utilization_page,
 )
+from app.motive.vehicle_utilization_unit_policy import MotiveVehicleUtilizationUnitRequestMode
 from app.motive.vehicle_utilization_writer import (
     MotiveVehicleUtilizationWriterError,
     write_vehicle_utilization_transaction,
@@ -101,7 +102,17 @@ CONTROLLED_WRITE_WINDOW_END = date(2026, 8, 13)
 
 # ---------------------------------------------------------------------------
 # One-page contract (sections 4/9). Certified writer page size, first page
-# only, canonical metric unit policy. At most one provider call, ever.
+# only. At most one provider call, ever.
+#
+# 2026-08-17 account-default validation gate: this route's provider request
+# and writer transaction call now explicitly use
+# MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT (see
+# _execute_one_page_controlled_read and run_controlled_vehicle_utilization_write
+# below) instead of the prior forced X-Metric-Units: true canonical policy.
+# The X-Metric-Units header is therefore omitted entirely on this route's one
+# provider request; the writer's account-default readiness rule accepts a
+# returned metric_units of either True or False and persists it as observed,
+# still failing closed on a missing or malformed indicator.
 # ---------------------------------------------------------------------------
 CONTROLLED_WRITE_PAGE_NO = MOTIVE_VEHICLE_UTILIZATION_PAGINATION_FIRST_PAGE
 CONTROLLED_WRITE_PAGE_SIZE = MOTIVE_VEHICLE_UTILIZATION_PAGINATION_CANONICAL_WRITER_PAGE_SIZE
@@ -169,7 +180,7 @@ def _execute_one_page_controlled_read(
             end_date=end_date,
             page_no=CONTROLLED_WRITE_PAGE_NO,
             per_page=CONTROLLED_WRITE_PAGE_SIZE,
-            metric_units=True,
+            unit_request_mode=MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT,
             http_client=http_client,
         )
     except MotiveConnectorError as exc:
@@ -325,6 +336,7 @@ def run_controlled_vehicle_utilization_write(
             request_window_start=CONTROLLED_WRITE_WINDOW_START,
             request_window_end=CONTROLLED_WRITE_WINDOW_END,
             rollups=read_result.rollups,
+            unit_request_mode=MotiveVehicleUtilizationUnitRequestMode.ACCOUNT_DEFAULT,
         )
     except MotiveVehicleUtilizationWriterError as exc:
         raise MotiveVehicleUtilizationControlledWriteError(
