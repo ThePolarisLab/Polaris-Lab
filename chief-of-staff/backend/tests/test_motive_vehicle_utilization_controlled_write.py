@@ -508,6 +508,169 @@ def test_route_fails_closed_matching_recorded_production_evidence(tmp_path, monk
 
 
 # ---------------------------------------------------------------------------
+# 2026-08-17 controlled-utilization live-staging 500 diagnosis gate.
+#
+# The test above proves run_controlled_vehicle_utilization_write raises
+# MotiveVehicleUtilizationControlledWriteError(code="provider_unit_policy_mismatch")
+# for exactly this scenario -- matching the one real live controlled-route
+# attempt made against staging on 2026-08-17, which returned a raw HTTP 500
+# with no traceback in Render logs. Root cause (found and fixed by this
+# gate): app.api.motive._controlled_write_http_status special-cased every
+# writer-originated fail-closed code -- including "provider_unit_policy_mismatch"
+# and "provider_unit_indicator_semantics_unresolved" -- to
+# HTTP_500_INTERNAL_SERVER_ERROR, a status HTTP convention reserves for
+# genuine server defects, not expected, safely-handled provider rejections
+# (the disabled/confirmation-required/no-stored-vehicle paths already used
+# 503/400/404 for their own expected-rejection cases). This was a
+# deliberately-raised HTTPException(status_code=500), not an unhandled
+# Python exception -- Starlette's HTTPException handling does not log a
+# traceback for it, which is exactly why the live Render logs showed only
+# the access-log line. The fix removes that special case so these codes
+# fall through to the same HTTP_502_BAD_GATEWAY already used for read-stage
+# provider-data rejections (pagination/parse failures) -- "the upstream
+# provider's data could not be safely used" is an accurate description of
+# every code in this bucket, read-stage or write-stage alike.
+#
+# These two tests now serve as regression tests for the fix: they prove
+# that a real provider round trip occurred (provider_calls_attempted ==
+# provider_calls_completed == 1, matching the one-call budget), that the
+# writer still correctly failed closed with zero rows written and zero
+# checkpoint/history mutation, and that the route now reports this as
+# HTTP 502 rather than HTTP 500.
+# ---------------------------------------------------------------------------
+@pytest.mark.unit_readiness_gate
+def test_route_reports_provider_unit_policy_mismatch_as_http_502(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression test for the 2026-08-17 live-staging controlled-route 500.
+
+    A provider-confirmed, correctly-fail-closed unit-context mismatch
+    (exactly the scenario proven safe by
+    test_route_fails_closed_matching_recorded_production_evidence above) is
+    surfaced to the API caller as HTTP 502 Bad Gateway -- not the raw
+    HTTP 500 this route returned before this gate's fix. This was a
+    status-code mapping defect, not an unsafe-persistence defect: the
+    transaction still rolls back, zero rows are written, and zero
+    checkpoint/history mutation occurs -- confirmed by the assertions below.
+    """
+    monkeypatch.setenv(CONTROLLED_WRITE_ENABLED_ENV_VAR, "true")
+    monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2", "veh-3"))
+    checkpoints_before, history_before = _checkpoint_and_history_counts(TestingSession)
+    pages = [_page([_rollup_item("veh-1", metric_units=False)], total=1)]
+    calls: list[httpx.Request] = []
+    mock_client = _client_for_pages(pages, calls)
+
+    monkeypatch.setattr(
+        motive_api,
+        "run_controlled_vehicle_utilization_write",
+        lambda session, **kwargs: run_controlled_vehicle_utilization_write(session, http_client=mock_client, **kwargs),
+    )
+
+    with TestingSession() as session:
+        with pytest.raises(HTTPException) as exc_info:
+            motive_api.verify_motive_vehicle_utilization_write(
+                body=motive_api.VehicleUtilizationControlledWriteRequest(confirm=True),
+                principal=_principal("org-a"),
+                session=session,
+            )
+
+    # Reproduces the exact live-staging observation: a real provider round
+    # trip occurred (provider_calls_attempted == provider_calls_completed ==
+    # 1, matching the one-call budget), the writer correctly failed closed
+    # on the unit-context mismatch, and the route now reports it as
+    # HTTP 502 (fixed) rather than HTTP 500 (the bug this gate found).
+    assert len(calls) == 1
+    assert exc_info.value.status_code == 502
+    detail = exc_info.value.detail
+    assert detail["error_code"] == "provider_unit_policy_mismatch"
+    assert detail["provider_calls_attempted"] == 1
+    assert detail["provider_calls_completed"] == 1
+    assert _row_count(TestingSession) == 0
+    checkpoints_after, history_after = _checkpoint_and_history_counts(TestingSession)
+    assert checkpoints_after == checkpoints_before
+    assert history_after == history_before
+
+
+@pytest.mark.unit_readiness_gate
+def test_route_reports_missing_unit_indicator_as_http_502(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same fixed status-code mapping for the other realistic live cause: a
+    returned rollup with a missing/None metric_units indicator
+    ("provider_unit_indicator_semantics_unresolved") now maps to HTTP 502,
+    not the raw HTTP 500 this route returned before this gate's fix."""
+    monkeypatch.setenv(CONTROLLED_WRITE_ENABLED_ENV_VAR, "true")
+    monkeypatch.setenv("MOTIVE_API_KEY", FAKE_API_KEY)
+    TestingSession = _session_factory(tmp_path)
+    _seed(TestingSession, provider_vehicle_ids=("veh-1", "veh-2", "veh-3"))
+    pages = [_page([_rollup_item("veh-1", metric_units=None)], total=1)]
+    calls: list[httpx.Request] = []
+    mock_client = _client_for_pages(pages, calls)
+
+    monkeypatch.setattr(
+        motive_api,
+        "run_controlled_vehicle_utilization_write",
+        lambda session, **kwargs: run_controlled_vehicle_utilization_write(session, http_client=mock_client, **kwargs),
+    )
+
+    with TestingSession() as session:
+        with pytest.raises(HTTPException) as exc_info:
+            motive_api.verify_motive_vehicle_utilization_write(
+                body=motive_api.VehicleUtilizationControlledWriteRequest(confirm=True),
+                principal=_principal("org-a"),
+                session=session,
+            )
+
+    assert len(calls) == 1
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail["error_code"] == "provider_unit_indicator_semantics_unresolved"
+    assert _row_count(TestingSession) == 0
+
+
+@pytest.mark.unit_readiness_gate
+def test_no_controlled_write_error_code_maps_to_http_500(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Locks in the fix at the mapping-function level: no error code that
+    MotiveVehicleUtilizationControlledWriteError or
+    MotiveVehicleUtilizationWriterError can carry may map to HTTP 500.
+    HTTP 500 is reserved for genuine unhandled exceptions escaping this
+    route entirely (which FastAPI/Starlette handles on its own, outside
+    this function) -- never for an expected, sanitized, caught error this
+    function assigns a status to."""
+    known_writer_codes = {
+        "conflicting_existing_identity",
+        "provider_rollup_reconciliation_conflict",
+        "database_identity_conflict",
+        "database_persistence_error",
+        "unknown_vehicle",
+        "invalid_writer_request",
+        "organization_context_mismatch",
+        "request_window_invalid",
+        "request_window_missing",
+        "parser_version_not_certified",
+        "source_endpoint_not_certified",
+        "provider_unit_indicator_semantics_unresolved",
+        "provider_unit_policy_mismatch",
+        "provider_unit_context_invalid_type",
+    }
+    known_read_stage_codes = {
+        "no_stored_vehicle",
+        "provider_timeout",
+        "rate_limited",
+        "authorization_required",
+        "permission_denied",
+        "network_failure",
+        "provider_contract_error",
+        "invalid_pagination_request",
+        "pagination_total_exceeds_selected_vehicles",
+        "returned_item_count_mismatch",
+        "duplicate_returned_rollup",
+        "unexpected_returned_vehicle",
+        "some_unrecognized_future_code",
+    }
+    for code in known_writer_codes | known_read_stage_codes:
+        exc = MotiveVehicleUtilizationControlledWriteError(code, "synthetic")
+        assert motive_api._controlled_write_http_status(exc) != 500, f"error code {code!r} must not map to HTTP 500"
+
+
+# ---------------------------------------------------------------------------
 # Section 23 -- second identical execution (idempotent replay).
 # ---------------------------------------------------------------------------
 def test_second_identical_execution_is_a_no_op(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
