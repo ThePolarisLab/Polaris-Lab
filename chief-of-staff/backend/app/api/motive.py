@@ -57,37 +57,6 @@ router = APIRouter(prefix="/api/v1/motive", tags=["motive"])
 _DATABASE_PERSISTENCE_ERROR_CODE = "database_persistence_error"
 _DATABASE_VEHICLE_PERSISTENCE_ERROR_MESSAGE = "Motive vehicle sync failed during database persistence."
 _DATABASE_USER_PERSISTENCE_ERROR_MESSAGE = "Motive user sync failed during database persistence."
-_CONTROLLED_WRITE_WRITER_ERROR_CODES = {
-    "conflicting_existing_identity",
-    # 2026-08-17 historical-rollup reconciliation gate: a defensive guard
-    # code (see MUTABLE_ON_PROVIDER_RECONCILIATION in
-    # vehicle_utilization_writer.py) -- currently unreachable through real
-    # provider data, since every non-approved field is already an
-    # identity/context field covered by "conflicting_existing_identity", but
-    # mapped here for completeness should the guard ever fire.
-    "provider_rollup_reconciliation_conflict",
-    "database_identity_conflict",
-    "database_persistence_error",
-    "unknown_vehicle",
-    "invalid_writer_request",
-    "organization_context_mismatch",
-    "request_window_invalid",
-    "request_window_missing",
-    "parser_version_not_certified",
-    "source_endpoint_not_certified",
-    # Returned provider unit-indicator readiness codes (see
-    # vehicle_utilization_unit_policy.py); these are Polaris-side readiness
-    # gates, not provider protocol failures, so they map alongside the other
-    # writer-originated fail-closed codes rather than a gateway/provider code.
-    # "provider_unit_indicator_semantics_unresolved" fires when the returned
-    # indicator is missing; "provider_unit_policy_mismatch" fires when a
-    # present returned indicator disagrees with the requested unit system
-    # (Motive API Support's 2026-08-17 written confirmation); "invalid_type"
-    # fires when the returned indicator is a malformed, non-Boolean value.
-    "provider_unit_indicator_semantics_unresolved",
-    "provider_unit_policy_mismatch",
-    "provider_unit_context_invalid_type",
-}
 
 
 class VehicleUtilizationControlledWriteRequest(BaseModel):
@@ -754,6 +723,24 @@ def _controlled_write_error_detail(exc: MotiveVehicleUtilizationControlledWriteE
 
 
 def _controlled_write_http_status(exc: MotiveVehicleUtilizationControlledWriteError) -> int:
+    """Map a safe, sanitized controlled-write failure to an HTTP status.
+
+    2026-08-17 diagnosis gate: every code reaching this function already
+    represents an EXPECTED, safely-handled rejection of provider-derived
+    data or an existing-row conflict -- caught by the route's
+    ``except MotiveVehicleUtilizationControlledWriteError`` handler, never
+    an unhandled exception. None of these are Polaris server errors, so
+    none of them may map to 5xx-as-"something is broken here" semantics
+    beyond the specific, well-defined cases below. Writer-stage fail-closed
+    codes (identity/context conflicts, unit-context mismatches, unknown
+    vehicles, database conflicts, etc.) fall through to the same
+    HTTP_502_BAD_GATEWAY the read-stage pagination/parse failures already
+    use -- "the upstream provider's data could not be safely used" --
+    rather than a prior special case that mapped them to
+    HTTP_500_INTERNAL_SERVER_ERROR, which is reserved by HTTP convention for
+    genuine server-side defects, not expected, correctly-handled provider
+    rejections.
+    """
     if exc.code == "no_stored_vehicle":
         return status.HTTP_404_NOT_FOUND
     if exc.code == "provider_timeout":
@@ -764,8 +751,6 @@ def _controlled_write_http_status(exc: MotiveVehicleUtilizationControlledWriteEr
         return status.HTTP_401_UNAUTHORIZED
     if exc.code == "permission_denied":
         return status.HTTP_403_FORBIDDEN
-    if exc.code in _CONTROLLED_WRITE_WRITER_ERROR_CODES:
-        return status.HTTP_500_INTERNAL_SERVER_ERROR
     return status.HTTP_502_BAD_GATEWAY
 
 
