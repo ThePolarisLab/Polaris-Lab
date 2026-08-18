@@ -46,6 +46,20 @@ from app.motive.vehicle_utilization_controlled_write import (
     controlled_write_enabled,
     run_controlled_vehicle_utilization_write,
 )
+from app.motive.vehicle_utilization_recent_reconciliation import (
+    RECENT_RECONCILIATION_ENABLED_ENV_VAR,
+    MotiveVehicleUtilizationRecentReconciliationError,
+    recent_reconciliation_enabled,
+)
+from app.motive.vehicle_utilization_recent_reconciliation_validation import (
+    RECENT_RECONCILIATION_VALIDATION_ENABLED_ENV_VAR,
+    RECENT_RECONCILIATION_VALIDATION_HORIZON_DAYS,
+    RECENT_RECONCILIATION_VALIDATION_MAX_PROVIDER_CALLS,
+    RECENT_RECONCILIATION_VALIDATION_MAX_SELECTED_VEHICLES,
+    MotiveVehicleUtilizationRecentReconciliationValidationError,
+    recent_reconciliation_validation_enabled,
+    run_recent_vehicle_utilization_reconciliation_live_validation,
+)
 from app.motive.vehicle_utilization_semantics import motive_vehicle_utilization_semantics_status
 from app.motive.vehicle_utilization_writer_contract import motive_vehicle_utilization_writer_contract_status
 from app.organizations.models import Organization
@@ -63,6 +77,16 @@ class VehicleUtilizationControlledWriteRequest(BaseModel):
     """Minimal explicit execution confirmation. No dates, vehicle ids, page
     sizes, metric_units, or organization_id may be accepted from the caller;
     the authenticated tenant and certified constants control all of those."""
+
+    confirm: bool = False
+
+
+class VehicleUtilizationRecentReconciliationValidationRequest(BaseModel):
+    """Minimal explicit execution confirmation for the one-day controlled
+    live-staging validation of the recent-window reconciliation runner. No
+    horizon_days, date range, vehicle ids, batch size, page size, retry
+    options, or organization_id may be accepted from the caller; the route
+    hardcodes horizon_days=1 and the authenticated tenant controls the rest."""
 
     confirm: bool = False
 
@@ -321,6 +345,105 @@ def verify_motive_vehicle_utilization_write(
     return result
 
 
+@router.post("/verify/vehicle-utilization-recent-reconciliation")
+def verify_motive_vehicle_utilization_recent_reconciliation(
+    body: VehicleUtilizationRecentReconciliationValidationRequest = VehicleUtilizationRecentReconciliationValidationRequest(),
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_WRITE)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Controlled, feature-flagged ONE-DAY live-staging validation of the
+    recent-window reconciliation runner
+    (``app/motive/vehicle_utilization_recent_reconciliation.py``, PR #177).
+
+    THIS ROUTE DOES NOT ITSELF MAKE A LIVE MOTIVE CALL BY BEING ADDED -- it
+    only builds the mechanism. Actual live execution requires: (1) this
+    route's own feature flag
+    (``MOTIVE_VEHICLE_UTILIZATION_RECENT_RECONCILIATION_VALIDATION_ENABLED``)
+    AND (2) the runner's own separate feature flag
+    (``MOTIVE_VEHICLE_UTILIZATION_RECENT_RECONCILIATION_ENABLED``) to both be
+    explicitly enabled, AND (3) an explicit ``confirm: true`` request body.
+    Both flags default to disabled and neither is enabled by this change.
+
+    This is NOT the general reconciliation runner's public surface, NOT a
+    sync endpoint, NOT a scheduler trigger, and NOT a user-configurable
+    broad backfill route. It hardcodes ``horizon_days=1`` (never accepted
+    from the caller) and enforces, before any provider HTTP request, that
+    the tenant has at most 100 eligible vehicles -- a stricter bound than
+    the runner's own general-purpose call budget -- so this route can never
+    make more than exactly ONE Motive provider request.
+    """
+    if not recent_reconciliation_enabled() or not recent_reconciliation_validation_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_recent_reconciliation_validation_disabled_detail(),
+        )
+    if body.confirm is not True:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_recent_reconciliation_validation_confirmation_required_detail(),
+        )
+    organization = _organization(session, principal.organization_id)
+    try:
+        result = run_recent_vehicle_utilization_reconciliation_live_validation(
+            session,
+            organization_id=principal.organization_id,
+            organization_slug=organization.slug,
+        )
+    except MotiveVehicleUtilizationRecentReconciliationValidationError as exc:
+        raise HTTPException(
+            status_code=_recent_reconciliation_validation_http_status(exc),
+            detail=_recent_reconciliation_validation_error_detail(exc),
+        ) from exc
+    except MotiveVehicleUtilizationRecentReconciliationError as exc:
+        # Structurally unreachable given this route's own hardcoded
+        # horizon_days=1 and its own pre-flight <=100-vehicle bound (the
+        # runner's own feature gate is checked first, above); retained as a
+        # defensive, sanitized fallback in case the runner's own whole-run
+        # setup validation ever surfaces here regardless.
+        raise HTTPException(
+            status_code=_recent_reconciliation_runner_error_http_status(exc),
+            detail=_recent_reconciliation_runner_error_detail(exc),
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # API-boundary safety net only -- never a blanket "swallow and
+        # continue" like the runner itself deliberately avoids internally.
+        # This always surfaces as a sanitized HTTP 500 with no raw exception
+        # details leaked, and is never used for an expected, already-typed,
+        # safely-caught error (those are handled by the two branches above).
+        logger.exception(
+            "MOTIVE VEHICLE UTILIZATION RECENT RECONCILIATION LIVE VALIDATION UNEXPECTED FAILURE",
+            extra={
+                "motive_operation": "vehicle_utilization_recent_reconciliation_live_validation",
+                "organization_id": principal.organization_id,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_recent_reconciliation_validation_unexpected_error_detail(),
+        ) from exc
+
+    if result["status"] in ("failed", "partial_success"):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=_recent_reconciliation_validation_operational_failure_detail(result),
+        )
+
+    logger.info(
+        "MOTIVE VEHICLE UTILIZATION RECENT RECONCILIATION LIVE VALIDATION SUCCESS",
+        extra={
+            "motive_operation": "vehicle_utilization_recent_reconciliation_live_validation",
+            "organization_id": principal.organization_id,
+            "selected_vehicle_count": result.get("selected_vehicle_count"),
+            "provider_calls_attempted": result.get("provider_calls_attempted"),
+            "provider_calls_completed": result.get("provider_calls_completed"),
+            "status": result.get("status"),
+        },
+    )
+    return result
+
+
 @router.post("/sync/vehicles")
 def sync_motive_vehicles(
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_WRITE)),
@@ -541,6 +664,24 @@ def motive_verification_contract(principal: AuthenticatedPrincipal = Depends(req
             "normal_sync_route_enabled": False,
             "dashboard_daily_brief_attention_enabled": False,
         },
+        "vehicle_utilization_recent_reconciliation_live_validation": {
+            "method": "POST",
+            "manual_route": "/api/v1/motive/verify/vehicle-utilization-recent-reconciliation",
+            "source_endpoint": MOTIVE_VEHICLE_UTILIZATION_ENDPOINT,
+            "feature_flags": [RECENT_RECONCILIATION_ENABLED_ENV_VAR, RECENT_RECONCILIATION_VALIDATION_ENABLED_ENV_VAR],
+            "feature_flags_default_enabled": False,
+            "requires_confirm_true_body": True,
+            "hardcoded_horizon_days": RECENT_RECONCILIATION_VALIDATION_HORIZON_DAYS,
+            "max_selected_vehicles": RECENT_RECONCILIATION_VALIDATION_MAX_SELECTED_VEHICLES,
+            "max_provider_calls_per_run": RECENT_RECONCILIATION_VALIDATION_MAX_PROVIDER_CALLS,
+            "persistence_enabled": False,
+            "returned_only_persistence": True,
+            "checkpoint_advancement_enabled": False,
+            "sync_history_writes_enabled": False,
+            "scheduled_ingestion_enabled": False,
+            "normal_sync_route_enabled": False,
+            "dashboard_daily_brief_attention_enabled": False,
+        },
         "fleet_vehicle_utilization_writer_contract": {
             "method": "GET",
             "manual_route": "/api/v1/motive/fleet/vehicle-utilization-writer-contract",
@@ -752,6 +893,131 @@ def _controlled_write_http_status(exc: MotiveVehicleUtilizationControlledWriteEr
     if exc.code == "permission_denied":
         return status.HTTP_403_FORBIDDEN
     return status.HTTP_502_BAD_GATEWAY
+
+
+def _recent_reconciliation_validation_disabled_detail() -> dict[str, Any]:
+    return {
+        "status": "disabled",
+        "resource": "vehicle_utilization_recent_reconciliation_live_validation",
+        "error_code": "recent_reconciliation_validation_disabled",
+        "message": (
+            "Motive vehicle utilization recent-window reconciliation live validation is disabled. "
+            f"Both {RECENT_RECONCILIATION_ENABLED_ENV_VAR} and {RECENT_RECONCILIATION_VALIDATION_ENABLED_ENV_VAR} "
+            "must be explicitly enabled."
+        ),
+        "horizon_days": RECENT_RECONCILIATION_VALIDATION_HORIZON_DAYS,
+        "provider_calls_attempted": 0,
+        "provider_calls_completed": 0,
+        "selected_vehicle_count": 0,
+        "checkpoint_advanced": False,
+        "sync_history_written": False,
+        "scheduled_ingestion_enabled": False,
+        "secrets_exposed": False,
+    }
+
+
+def _recent_reconciliation_validation_confirmation_required_detail() -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "resource": "vehicle_utilization_recent_reconciliation_live_validation",
+        "error_code": "confirmation_required",
+        "message": (
+            "Motive vehicle utilization recent-window reconciliation live validation requires an "
+            "explicit confirm: true request body."
+        ),
+        "provider_calls_attempted": 0,
+        "provider_calls_completed": 0,
+        "selected_vehicle_count": 0,
+        "checkpoint_advanced": False,
+        "sync_history_written": False,
+        "scheduled_ingestion_enabled": False,
+        "secrets_exposed": False,
+    }
+
+
+def _recent_reconciliation_validation_unexpected_error_detail() -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "resource": "vehicle_utilization_recent_reconciliation_live_validation",
+        "error_code": "unexpected_error",
+        "message": "Motive vehicle utilization recent-window reconciliation live validation failed unexpectedly.",
+        "checkpoint_advanced": False,
+        "sync_history_written": False,
+        "scheduled_ingestion_enabled": False,
+        "secrets_exposed": False,
+    }
+
+
+def _recent_reconciliation_validation_operational_failure_detail(result: dict[str, Any]) -> dict[str, Any]:
+    failed_units = result.get("failed_units") or []
+    detail = dict(result)
+    detail["error_code"] = failed_units[0]["error_code"] if failed_units else "recent_reconciliation_operational_failure"
+    return detail
+
+
+def _recent_reconciliation_validation_error_detail(
+    exc: MotiveVehicleUtilizationRecentReconciliationValidationError,
+) -> dict[str, Any]:
+    detail: dict[str, Any] = {
+        "status": "failed",
+        "resource": "vehicle_utilization_recent_reconciliation_live_validation",
+        "error_code": exc.code,
+        "message": str(exc),
+        "provider_calls_attempted": 0,
+        "provider_calls_completed": 0,
+        "checkpoint_advanced": False,
+        "sync_history_written": False,
+        "scheduled_ingestion_enabled": False,
+        "secrets_exposed": False,
+    }
+    detail.update(exc.sanitized_context)
+    return detail
+
+
+def _recent_reconciliation_validation_http_status(
+    exc: MotiveVehicleUtilizationRecentReconciliationValidationError,
+) -> int:
+    """Map a safe, sanitized live-validation failure to an HTTP status.
+
+    Every code reaching this function represents an EXPECTED, safely-caught
+    rejection raised by this route's own pre-flight checks -- never an
+    unhandled exception. ``provider_call_budget_invariant_violated`` is the
+    one exception: it represents a genuine invariant violation (this route's
+    own structural one-call guarantee did not hold), which is exactly the
+    "genuine unexpected/invariant programming failure" HTTP 500 is reserved
+    for -- unlike every other expected, sanitized rejection here.
+    """
+    if exc.code in ("recent_reconciliation_disabled", "recent_reconciliation_validation_disabled"):
+        return status.HTTP_503_SERVICE_UNAVAILABLE
+    if exc.code == "controlled_validation_vehicle_limit_exceeded":
+        return status.HTTP_409_CONFLICT
+    if exc.code == "provider_call_budget_invariant_violated":
+        return status.HTTP_500_INTERNAL_SERVER_ERROR
+    return status.HTTP_500_INTERNAL_SERVER_ERROR
+
+
+def _recent_reconciliation_runner_error_detail(exc: MotiveVehicleUtilizationRecentReconciliationError) -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "resource": "vehicle_utilization_recent_reconciliation_live_validation",
+        "error_code": exc.code,
+        "message": str(exc),
+        "provider_calls_attempted": 0,
+        "provider_calls_completed": 0,
+        "checkpoint_advanced": False,
+        "sync_history_written": False,
+        "scheduled_ingestion_enabled": False,
+        "secrets_exposed": False,
+    }
+
+
+def _recent_reconciliation_runner_error_http_status(exc: MotiveVehicleUtilizationRecentReconciliationError) -> int:
+    """Defensive fallback mapping for the runner's own whole-run setup
+    errors, which this route's own checks should make structurally
+    unreachable (see the docstring on the route above)."""
+    if exc.code == "recent_reconciliation_disabled":
+        return status.HTTP_503_SERVICE_UNAVAILABLE
+    return status.HTTP_500_INTERNAL_SERVER_ERROR
 
 
 def _completed_vehicle_utilization_contract_window() -> tuple[date, date]:

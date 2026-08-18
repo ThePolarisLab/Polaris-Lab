@@ -950,8 +950,24 @@ def test_status_no_op_when_zero_eligible_vehicles(tmp_path, monkeypatch: pytest.
 
 
 # ---------------------------------------------------------------------------
-# Manual invocation boundary: no public route, no scheduler, no FastAPI
-# surface added by this module.
+# Manual invocation boundary: this module (the runner) itself defines no
+# public route, no scheduler, no FastAPI surface -- see
+# test_module_defines_no_fastapi_route_or_scheduler below, which is the real
+# boundary proof for THIS module and is unaffected by anything else here.
+#
+# 2026-08-18 one-day controlled live-staging validation gate: a single,
+# tightly-scoped, feature-gated, manually-authorized CONTROLLED VALIDATION
+# route (POST /api/v1/motive/verify/vehicle-utilization-recent-reconciliation,
+# see app/api/motive.py and
+# app/motive/vehicle_utilization_recent_reconciliation_validation.py) was
+# added on top of this runner in a separate, later, explicitly authorized
+# gate -- exactly the "separately authorized future gate" this runner's own
+# module docstring (see its "Scope of this module" section) anticipated.
+# This route requires its own additional feature flag on top of the
+# runner's, hardcodes horizon_days=1, enforces an independent <=100-vehicle
+# pre-flight bound, and makes at most one provider call -- it is not the
+# general reconciliation endpoint, sync endpoint, or scheduler trigger this
+# test still correctly guards against below.
 # ---------------------------------------------------------------------------
 def test_no_new_public_route_added() -> None:
     from app.api import motive as motive_api
@@ -959,7 +975,11 @@ def test_no_new_public_route_added() -> None:
     route_paths = {getattr(route, "path", "") for route in motive_api.router.routes}
     assert "/api/v1/motive/sync/vehicle-utilization" not in route_paths
     assert "/api/v1/motive/reconcile/vehicle-utilization" not in route_paths
+    allowed_reconciliation_route = "/api/v1/motive/verify/vehicle-utilization-recent-reconciliation"
+    assert allowed_reconciliation_route in route_paths
     for path in route_paths:
+        if path == allowed_reconciliation_route:
+            continue
         assert "reconcil" not in path.lower()
 
 

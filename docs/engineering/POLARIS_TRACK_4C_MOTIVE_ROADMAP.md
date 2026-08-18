@@ -233,6 +233,41 @@ route's own already-completed live-staging validation). See
 `MOTIVE_UTILIZATION_RECENT_WINDOW_RECONCILIATION_DESIGN.md`'s
 "Implementation Status" section for the full detail.
 
+## 4C.3B: One-Day Controlled Live-Staging Validation Mechanism for Recent-Window Reconciliation
+
+Adds exactly one new controlled, feature-flagged validation route,
+`POST /api/v1/motive/verify/vehicle-utilization-recent-reconciliation`
+(`app/api/motive.py`, orchestrated by the new
+`app/motive/vehicle_utilization_recent_reconciliation_validation.py`
+module), that allows a single, manually-authorized live-staging invocation
+of the recent-window reconciliation runner added in 4C.3A/PR #177, with
+`horizon_days` hardcoded to 1 (never caller-supplied). This route is the
+mechanism only -- it makes NO live Motive provider call by being merged.
+
+The route requires BOTH the runner's own existing feature gate
+(`MOTIVE_VEHICLE_UTILIZATION_RECENT_RECONCILIATION_ENABLED`) and a second,
+genuinely separate, additional gate
+(`MOTIVE_VEHICLE_UTILIZATION_RECENT_RECONCILIATION_VALIDATION_ENABLED`) to
+both be explicitly true, plus an explicit `confirm: true` request body and
+`CONNECTOR_WRITE` permission. Both flags default to disabled and neither is
+enabled anywhere in this change, including Render. Before invoking the
+runner, the route independently counts the tenant's eligible vehicles and
+fails closed (before any provider HTTP request) if that count exceeds 100 --
+a stricter, route-owned bound than the runner's own general-purpose
+200-call safety budget -- so this route can never make more than exactly
+ONE Motive provider request per invocation. After the runner returns, the
+route also re-asserts that at most one provider call was ever attempted,
+as a defense-in-depth invariant check.
+
+The runner itself (`app/motive/vehicle_utilization_recent_reconciliation.py`)
+was not modified by this gate. See
+`MOTIVE_UTILIZATION_RECENT_RECONCILIATION_LIVE_VALIDATION.md` for the full
+operational detail: exact bounds, HTTP status mapping, and the required
+post-validation flag-rollback procedure. Live execution against staging
+remains a separate, later, explicitly human-authorized action outside this
+gate; no 7-day (or any horizon other than the hardcoded 1) live execution
+capability is provided.
+
 Before broader sync is implemented, Polaris must complete design and verification for:
 
 - durable vehicle-utilization persistence mapping, identity/period semantics, units, checkpoint strategy, unknown vehicle handling, KPI interpretation, and production ingestion certification
