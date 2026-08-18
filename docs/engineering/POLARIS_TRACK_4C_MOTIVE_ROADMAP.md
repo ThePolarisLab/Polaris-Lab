@@ -136,6 +136,39 @@ failure isolation across a multi-window reread, and checkpoint policy
 list. No live Motive call, Render change, feature-flag enablement,
 migration, or key rotation was made by this documentation update.
 
+## 4C.2C+ Update: Bounded Recent-Window Reconciliation Design (2026-08-18)
+
+**This design gate is complete.** It produced
+`MOTIVE_UTILIZATION_RECENT_WINDOW_RECONCILIATION_DESIGN.md`, a full design
+document (not an implementation) for a future bounded, manually-invoked
+reconciliation runner, grounded in a fresh audit of the current durable
+identity, writer, and pagination code rather than assumption. Key decisions:
+a 7-day trailing horizon ending at "yesterday" (never "today"); one
+calendar-day window per request (`start == end`), required by the existing
+day-level durable identity (`organization_id + motive_vehicle_id +
+request_window_start + request_window_end`) rather than a multi-day
+aggregate window, which would produce a different, non-reconcilable
+identity on every run; vehicle batching up to the provider's 100-vehicle
+page size (distinct from the controlled route's unrelated 3-vehicle safety
+cap); reuse of the existing general certified paginated reader
+(`read_vehicle_utilization_pages`) and the existing writer's
+already-implemented five-mutable-field reconciliation policy, unmodified;
+one writer transaction per vehicle-batch-per-day (not one giant multi-day
+transaction) for failure isolation; no automatic provider retry; and an
+explicit rule that reconciliation must never advance a forward-moving
+ingestion checkpoint, since its purpose is to repeatedly revisit
+already-visited days. No unexpected repo contradiction was found. **No
+runtime code, test, migration, feature flag, Render config, scheduler, or
+checkpoint was changed or implemented by this gate** — it is design
+documentation only.
+
+The next gate is implementation of the bounded, manually-invoked
+reconciliation runner itself (still not a scheduler, still not a public
+route, still requiring its own separate authorization before any live
+call). **Scheduled ingestion remains a later gate still**, after that
+runner's own bounded validation and after the timezone-binding question
+(`MOTIVE_UTILIZATION_TIMEZONE_CERTIFICATION.md`) is resolved.
+
 Before broader sync is implemented, Polaris must complete design and verification for:
 
 - durable vehicle-utilization persistence mapping, identity/period semantics, units, checkpoint strategy, unknown vehicle handling, KPI interpretation, and production ingestion certification
