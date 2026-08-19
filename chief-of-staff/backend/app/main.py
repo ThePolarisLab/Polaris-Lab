@@ -23,6 +23,7 @@ from app.api.memory import router as memory_router
 from app.api.memory_search import router as memory_search_router
 from app.api.missions import router as missions_router
 from app.api.motive import router as motive_router
+from app.api.motive_seven_day_reconciliation_validation import router as motive_seven_day_reconciliation_validation_router
 from app.api.organizations import router as organizations_router
 from app.api.outlook import router as outlook_router
 from app.api.quickbooks_financials import router as quickbooks_financials_router
@@ -76,6 +77,7 @@ app.include_router(work_context_router, dependencies=executive_read)
 app.include_router(system_router)
 app.include_router(connectors_router)
 app.include_router(motive_router)
+app.include_router(motive_seven_day_reconciliation_validation_router)
 app.include_router(outlook_router)
 app.include_router(quickbooks_oauth_router)
 app.include_router(quickbooks_financials_router)
