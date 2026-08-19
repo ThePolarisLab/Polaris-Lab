@@ -1,0 +1,71 @@
+name: Motive Vehicle Utilization Daily
+
+on:
+  schedule:
+    # GitHub cron is UTC. The backend accepts only the 06:10-06:24
+    # America/Chicago window, so one of these is the daily execution trigger
+    # and the other is a deliberate zero-provider no-op across CDT/CST.
+    - cron: "17 11 * * *"
+    - cron: "17 12 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: motive-vehicle-utilization-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    name: Trigger Motive vehicle utilization
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      POLARIS_PRODUCTION_API_URL: ${{ vars.POLARIS_PRODUCTION_API_URL }}
+      POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET: ${{ secrets.POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET }}
+    steps:
+      - name: Trigger Polaris Motive scheduled ingestion once
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${POLARIS_PRODUCTION_API_URL}" ]; then
+            echo "POLARIS_PRODUCTION_API_URL is not configured."
+            exit 1
+          fi
+          if [ -z "${POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET}" ]; then
+            echo "POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET is not configured."
+            exit 1
+          fi
+
+          timestamp="$(date +%s)"
+          path="/api/v1/internal/motive/vehicle-utilization/run"
+          base_url="${POLARIS_PRODUCTION_API_URL%/}"
+          trigger_url="${base_url}${path}"
+          signature="$(
+            CANONICAL_METHOD="POST" \
+            CANONICAL_PATH="${path}" \
+            CANONICAL_TIMESTAMP="${timestamp}" \
+            POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET="${POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET}" \
+            python -c 'import hashlib,hmac,os; body=hashlib.sha256(b"").hexdigest(); canonical="\n".join([os.environ["CANONICAL_METHOD"], os.environ["CANONICAL_PATH"], os.environ["CANONICAL_TIMESTAMP"], body]); print(hmac.new(os.environ["POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET"].encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest())'
+          )"
+
+          status="$(
+            curl --silent --show-error \
+              --output response.json \
+              --write-out "%{http_code}" \
+              --connect-timeout 30 \
+              --max-time 1800 \
+              --request POST \
+              --header "X-Polaris-Job-Timestamp: ${timestamp}" \
+              --header "X-Polaris-Job-Signature: ${signature}" \
+              "${trigger_url}"
+          )"
+
+          if [ "${status}" -lt 200 ] || [ "${status}" -ge 300 ]; then
+            echo "Motive vehicle-utilization trigger completed with non-success HTTP ${status}. No retry will be attempted."
+            exit 1
+          fi
+
+          echo "Motive vehicle-utilization trigger completed with HTTP ${status}."
