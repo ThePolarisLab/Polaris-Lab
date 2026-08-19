@@ -30,13 +30,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "${POLARIS_PRODUCTION_API_URL}" ]; then
-            echo "POLARIS_PRODUCTION_API_URL is not configured."
-            exit 1
-          fi
-          if [ -z "${POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET}" ]; then
-            echo "POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET is not configured."
-            exit 1
+          if [ -z "${POLARIS_PRODUCTION_API_URL}" ] || [ -z "${POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET}" ]; then
+            echo "Motive vehicle-utilization scheduler is not configured; no request sent."
+            exit 0
           fi
 
           timestamp="$(date +%s)"
