@@ -26,11 +26,16 @@ from app.motive.vehicle_utilization_production_ingestion import (
 from app.organizations.models import Organization, OrganizationStatus
 
 SCHEDULED_ORGANIZATION_ENV_VAR = "POLARIS_MOTIVE_UTILIZATION_SCHEDULED_ORGANIZATION_SLUG"
+CONTROLLED_VALIDATION_WINDOW_ENABLED_ENV_VAR = (
+    "MOTIVE_VEHICLE_UTILIZATION_SCHEDULER_CONTROLLED_VALIDATION_WINDOW_ENABLED"
+)
 SCHEDULER_DISPATCH_RESOURCE = "vehicle_utilization_scheduler_dispatch"
 SCHEDULER_MODE = "scheduled_production_ingestion"
 SCHEDULE_HOUR = 6
 SCHEDULE_MINUTE_MIN = 10
 SCHEDULE_MINUTE_MAX = 24
+CONTROLLED_VALIDATION_START_HOUR = 11
+CONTROLLED_VALIDATION_END_HOUR = 23
 
 
 class MotiveVehicleUtilizationSchedulerError(RuntimeError):
@@ -102,8 +107,19 @@ def scheduler_local_now(*, now: datetime | None = None) -> datetime:
     return now.astimezone(zone)
 
 
+def controlled_validation_window_enabled() -> bool:
+    return str(os.getenv(CONTROLLED_VALIDATION_WINDOW_ENABLED_ENV_VAR) or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def inside_schedule_window(*, now: datetime | None = None) -> bool:
     local_now = scheduler_local_now(now=now)
+    if controlled_validation_window_enabled():
+        return CONTROLLED_VALIDATION_START_HOUR <= local_now.hour <= CONTROLLED_VALIDATION_END_HOUR
     return (
         local_now.hour == SCHEDULE_HOUR
         and SCHEDULE_MINUTE_MIN <= local_now.minute <= SCHEDULE_MINUTE_MAX
@@ -169,8 +185,6 @@ def _claim_dispatch_date(
         session.commit()
         return True
     except IntegrityError:
-        # Concurrent first-claim race: the unique org/resource row was created
-        # by another transaction. Treat the second contender as not claimed.
         session.rollback()
         row = (
             session.query(MotiveSyncCheckpoint)
