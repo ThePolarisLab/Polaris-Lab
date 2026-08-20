@@ -40,6 +40,7 @@ def reset_database(monkeypatch):
     for name in (
         "MOTIVE_VEHICLE_UTILIZATION_PRODUCTION_INGESTION_ENABLED",
         "MOTIVE_VEHICLE_UTILIZATION_PRODUCTION_SCHEDULER_ENABLED",
+        "MOTIVE_VEHICLE_UTILIZATION_SCHEDULER_CONTROLLED_VALIDATION_WINDOW_ENABLED",
         "POLARIS_MOTIVE_UTILIZATION_SCHEDULED_ORGANIZATION_SLUG",
         "POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET",
     ):
@@ -101,6 +102,24 @@ def test_local_time_gate_uses_iana_dst_rules():
     assert inside_schedule_window(now=winter) is True
     assert inside_schedule_window(now=wrong_summer_trigger) is False
     assert inside_schedule_window(now=wrong_winter_trigger) is False
+
+
+def test_controlled_validation_window_is_11am_through_11pm_local(monkeypatch):
+    monkeypatch.setenv(
+        "MOTIVE_VEHICLE_UTILIZATION_SCHEDULER_CONTROLLED_VALIDATION_WINDOW_ENABLED", "true"
+    )
+
+    before_window = datetime(2026, 8, 19, 15, 59, tzinfo=timezone.utc)
+    start_window = datetime(2026, 8, 19, 16, 0, tzinfo=timezone.utc)
+    end_window = datetime(2026, 8, 20, 4, 59, tzinfo=timezone.utc)
+    after_window = datetime(2026, 8, 20, 5, 0, tzinfo=timezone.utc)
+
+    assert scheduler_local_now(now=start_window).hour == 11
+    assert scheduler_local_now(now=end_window).hour == 23
+    assert inside_schedule_window(now=before_window) is False
+    assert inside_schedule_window(now=start_window) is True
+    assert inside_schedule_window(now=end_window) is True
+    assert inside_schedule_window(now=after_window) is False
 
 
 def test_configured_organization_must_be_active_and_exact(monkeypatch):
@@ -202,8 +221,6 @@ def test_machine_endpoint_uses_motive_specific_hmac_and_rejects_body(client, mon
 
     assert client.post("/api/v1/internal/motive/vehicle-utilization/run").status_code == 401
 
-    # Timestamp is deliberately current for signature freshness; the scheduler
-    # itself remains disabled, so this cannot make a provider call.
     import time
 
     timestamp = str(int(time.time()))
