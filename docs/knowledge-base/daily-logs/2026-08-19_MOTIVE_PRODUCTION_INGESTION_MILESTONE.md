@@ -6,16 +6,17 @@
 
 Polaris completed the first controlled Motive vehicle-utilization production-ingestion run and closed the manual production-ingestion validation gate. The authorized run completed successfully across seven completed `America/Chicago` calendar-day windows, persisted/reconciled durable utilization data, advanced the ingestion checkpoint, and wrote sync history. Production and scheduler feature flags were then returned to false.
 
-The next roadmap gate is production scheduling. Its architecture is now finalized in merged PR #190, but scheduler implementation/activation remains separate. The scheduler design is default-off and requires Motive Company API-key rotation before any live scheduler execution or persistent scheduling.
+Production scheduling has now progressed through both architecture and implementation. PR #190 finalized the scheduler design, and PR #191 merged the disabled-by-default scheduler runtime. No live scheduler-path validation or persistent scheduled production activation has occurred. Motive Company API-key rotation remains mandatory before any live scheduler execution or broad/scheduled production enablement.
 
 ## Official Decisions
 
 - The first controlled production-ingestion attempt is complete and must not be rerun under the same authorization.
 - The certified production utilization contract remains explicit US Imperial: `X-Metric-Units: false`, returned `vehicle.metric_units == false`, fuel interpreted as gallons, with no unit conversion.
 - Provider omissions remain omissions only; they are not synthesized as zero/inactive utilization.
-- Production scheduling must reuse the existing validated seven-day production orchestrator; Polaris will not create a second ingestion path.
+- Production scheduling reuses the existing validated seven-day production orchestrator; Polaris does not create a second ingestion path.
 - GitHub Actions is only the scheduler clock/wakeup mechanism. The backend owns tenant resolution, local-time gating, durable dispatch deduplication, and production execution.
 - Motive Company API-key rotation is mandatory before any live scheduler execution or broad/scheduled production enablement.
+- Scheduler implementation/merge does not authorize scheduler activation.
 
 ## Principles Reaffirmed
 
@@ -32,15 +33,16 @@ The next roadmap gate is production scheduling. Its architecture is now finalize
 - Seven-day live reconciliation validation: complete.
 - Bounded production-ingestion runtime: implemented and merged.
 - First controlled production-ingestion execution: complete and verified.
-- Production scheduler architecture: finalized and merged as documentation/design.
-- Production scheduler implementation: next gate; not yet merged at this milestone snapshot.
-- Scheduler activation: blocked pending API-key rotation and separately authorized scheduler-path validation.
+- Production scheduler architecture: finalized and merged as PR #190.
+- Production scheduler implementation/runtime: implemented and merged as PR #191, default-off.
+- Scheduler-path live validation: not yet completed.
+- Persistent scheduler activation: blocked pending API-key rotation and separately authorized scheduler-path validation.
 
 ## Engineering Decisions
 
 The production ingestion path remains bounded to the latest seven completed `America/Chicago` calendar days, a maximum of 100 organization-owned vehicles, one provider page/call per day, and at most seven provider calls per run with no automatic retries. Existing durable writer, reconciliation identity/policy, production lock, sync-history, checkpoint, timezone, unit, omission, and call-budget semantics remain authoritative.
 
-The finalized scheduler design targets approximately 06:17 `America/Chicago`. Two UTC wakeups (`17 11 * * *` and `17 12 * * *`) accommodate CDT/CST, while an IANA local-time backend gate determines the valid execution opportunity. A durable same-local-day scheduler dispatch claim must be recorded before provider HTTP; a duplicate same-day trigger becomes a no-provider-call no-op. Both production-ingestion and scheduler feature flags must be true for scheduled Motive execution.
+The merged scheduler runtime uses a machine-only HMAC-authenticated endpoint, one configured active organization, an IANA `America/Chicago` local-time execution gate, and a durable same-local-day scheduler dispatch claim before provider HTTP. GitHub Actions provides two UTC wakeups (`17 11 * * *` and `17 12 * * *`) so the backend can preserve the intended local schedule across CDT/CST. A duplicate same-day trigger becomes a zero-provider-call no-op. Both production-ingestion and scheduler feature flags must be true for scheduled Motive execution. The workflow performs one HTTP attempt only and has no automatic retry or catch-up loop.
 
 ## Research / Verification Notes
 
@@ -68,14 +70,19 @@ After the authorized attempt, both production feature flags were returned to fal
 - Merged the controlled first-production-ingestion runbook (PR #188).
 - Completed and documented the first successful controlled production-ingestion execution (PR #189).
 - Finalized and merged the disabled-by-default production scheduler architecture (PR #190).
+- Implemented and merged the disabled-by-default production scheduler runtime (PR #191).
 
 ## Remaining Gates
 
-- Rotate the Motive Company API key before any live scheduler execution or persistent scheduling.
-- Complete and merge scheduler implementation under the finalized PR #190 architecture.
-- Keep scheduler and production-ingestion flags false until a separately authorized scheduler-path validation.
-- Validate machine authentication, configured organization resolution, local-time gate, durable same-day dispatch claim, duplicate-trigger no-op behavior, and sanitized failure handling before activation.
-- Do not add retries, catch-up loops, Dashboard/Daily Brief changes, backfills, or broaden provider call budgets as part of scheduler activation unless separately reviewed and authorized.
+1. Rotate the Motive Company API key before any live scheduler execution or persistent scheduling.
+2. Confirm the backend is live with the rotated key using zero-provider/status checks first.
+3. Configure the Motive scheduled-organization slug and Motive-specific HMAC trigger secret in Render, and the matching HMAC secret/API URL in GitHub Actions configuration, without exposing values.
+4. Keep scheduler and production-ingestion flags false and perform a machine-endpoint zero-provider preflight.
+5. Separately authorize exactly one bounded scheduler-path controlled validation.
+6. Return both production flags to false immediately after that validation and document the result.
+7. Only after successful evidence, separately authorize persistent daily scheduler enablement.
+
+Do not add retries, catch-up loops, Dashboard/Daily Brief changes, backfills, multi-batch behavior, unit conversion, or broader provider-call budgets as part of scheduler activation unless separately reviewed and authorized.
 
 ## Final State
 
@@ -85,6 +92,8 @@ After the authorized attempt, both production feature flags were returned to fal
 
 **Production scheduler architecture:** finalized and merged.
 
-**Production scheduler runtime/activation:** not yet certified; remains default-off.
+**Production scheduler implementation/runtime:** merged and default-off.
+
+**Production scheduler live validation/activation:** not yet completed; remains blocked.
 
 **Motive API-key rotation:** mandatory remaining prerequisite for live scheduled production execution.
