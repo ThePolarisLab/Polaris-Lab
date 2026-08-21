@@ -90,18 +90,23 @@ def test_scheduler_and_ingestion_gates_fail_closed_before_orchestrator(monkeypat
     assert calls == []
 
 
-def test_local_time_gate_uses_iana_dst_rules():
+def test_local_time_gate_uses_iana_dst_rules_and_tolerates_delayed_wakeups():
     summer = datetime(2026, 7, 15, 11, 17, tzinfo=timezone.utc)
     winter = datetime(2026, 1, 15, 12, 17, tzinfo=timezone.utc)
-    wrong_summer_trigger = datetime(2026, 7, 15, 12, 17, tzinfo=timezone.utc)
-    wrong_winter_trigger = datetime(2026, 1, 15, 11, 17, tzinfo=timezone.utc)
+    delayed_summer = datetime(2026, 8, 21, 13, 10, tzinfo=timezone.utc)
+    latest_summer = datetime(2026, 7, 15, 14, 59, tzinfo=timezone.utc)
+    too_late_summer = datetime(2026, 7, 15, 15, 0, tzinfo=timezone.utc)
+    too_early_winter = datetime(2026, 1, 15, 11, 17, tzinfo=timezone.utc)
 
     assert scheduler_local_now(now=summer).hour == 6
     assert scheduler_local_now(now=winter).hour == 6
     assert inside_schedule_window(now=summer) is True
     assert inside_schedule_window(now=winter) is True
-    assert inside_schedule_window(now=wrong_summer_trigger) is False
-    assert inside_schedule_window(now=wrong_winter_trigger) is False
+    assert scheduler_local_now(now=delayed_summer).hour == 8
+    assert inside_schedule_window(now=delayed_summer) is True
+    assert inside_schedule_window(now=latest_summer) is True
+    assert inside_schedule_window(now=too_late_summer) is False
+    assert inside_schedule_window(now=too_early_winter) is False
 
 
 def test_controlled_validation_window_is_11am_through_11pm_local(monkeypatch):
@@ -143,7 +148,7 @@ def test_outside_window_is_zero_provider_call(monkeypatch):
 
     with SessionLocal() as session:
         result = run_scheduled_vehicle_utilization(
-            session, now=datetime(2026, 8, 19, 12, 17, tzinfo=timezone.utc)
+            session, now=datetime(2026, 8, 19, 15, 0, tzinfo=timezone.utc)
         )
     assert result.status == "outside_window"
     assert result.dispatch_claimed is False
