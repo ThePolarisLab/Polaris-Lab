@@ -42,7 +42,7 @@ The workflow has two UTC wakeups:
 - `17 11 * * *`
 - `17 12 * * *`
 
-The backend accepts execution only inside the normal `06:10–06:24 America/Chicago` window. One UTC wakeup is therefore the valid daily execution wakeup and the other is a deliberate zero-provider no-op across daylight-saving changes.
+The backend accepts scheduled execution inside a bounded `06:00–09:59 America/Chicago` morning window. This wider acceptance window tolerates delayed GitHub scheduled-workflow starts. More than one wakeup may reach the backend inside the window, but the durable same-local-day scheduler dispatch claim permits provider execution only once for the organization and local date. Later in-window wakeups return `already_claimed` without provider work.
 
 Do not change the cron schedule for activation.
 
@@ -65,11 +65,11 @@ The first scheduled production execution is an observation gate, not a request f
 
 Expected behavior:
 
-- exactly one of the two daily UTC wakeups reaches the valid Chicago execution window;
-- the other wakeup returns as an outside-window no-op and performs no provider work;
+- a scheduled wakeup that reaches the bounded Chicago morning window may attempt the scheduler path;
 - the valid wakeup authenticates through the Motive-specific HMAC machine endpoint;
 - the backend resolves the configured active organization internally; no organization is supplied by the GitHub caller;
 - the durable same-local-day scheduler dispatch claim is acquired before provider HTTP;
+- any later same-local-day in-window wakeup returns `already_claimed` and performs no provider work;
 - the existing production ingestion orchestrator is reused unchanged;
 - the rolling horizon remains the latest seven completed `America/Chicago` calendar days;
 - provider call budget remains bounded to one call per day, maximum seven calls for the run;
@@ -86,7 +86,8 @@ For the first automatic production execution, capture sanitized evidence only:
 - branch/ref (`main`);
 - workflow conclusion;
 - machine endpoint HTTP status;
-- whether the run executed, was outside-window, or was already claimed;
+- sanitized scheduler result status (`executed`, `already_claimed`, `outside_window`, or `disabled`);
+- whether the scheduler dispatch was claimed;
 - bounded production aggregate counters if available from existing sanitized backend evidence;
 - confirmation that no retry or rerun occurred;
 - confirmation that no secret value, API key, bearer token, raw HMAC signature, or sensitive provider payload was exposed.
@@ -98,12 +99,12 @@ Do not rerun the workflow solely to obtain prettier or more complete evidence.
 The first automatic production observation is successful when all of the following are true:
 
 - scheduled GitHub wakeup completes successfully;
-- valid local-window execution reaches the scheduler machine endpoint successfully;
+- an in-window execution reaches the scheduler machine endpoint successfully;
 - exactly one same-local-day scheduler dispatch is consumed for provider execution;
+- any later in-window wakeup returns `already_claimed` rather than creating duplicate provider execution;
 - the production orchestrator completes without an unsanitized error;
 - no automatic or manual retry occurs;
 - checkpoint/history semantics remain valid;
-- the second UTC wakeup does not create duplicate provider execution;
 - the scheduler remains enabled only if the observed result is consistent with these safety constraints.
 
 ## Failure or ambiguity procedure
