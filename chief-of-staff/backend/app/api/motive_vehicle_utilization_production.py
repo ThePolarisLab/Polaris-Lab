@@ -1,4 +1,4 @@
-"""Manual, default-off production Motive vehicle-utilization ingestion route."""
+"""Manual production ingestion and read-only Motive vehicle-utilization operations APIs."""
 
 from __future__ import annotations
 
@@ -7,9 +7,11 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.database.database import SessionLocal
+from app.motive.vehicle_utilization_operational_status import vehicle_utilization_operational_status
 from app.motive.vehicle_utilization_production_ingestion import (
     PRODUCTION_HORIZON_DAYS,
     PRODUCTION_INGESTION_ENABLED_ENV_VAR,
@@ -74,6 +76,33 @@ def _error_status(exc: MotiveVehicleUtilizationProductionIngestionError) -> int:
     if exc.code in {"no_eligible_vehicles", "invalid_stored_vehicle_identity", "duplicate_stored_vehicle_identity"}:
         return status.HTTP_409_CONFLICT
     return status.HTTP_500_INTERNAL_SERVER_ERROR
+
+
+@router.get("/vehicle-utilization/operations-status")
+def get_motive_vehicle_utilization_operations_status(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Return tenant-scoped persisted operational evidence with zero provider calls or writes."""
+    try:
+        return vehicle_utilization_operational_status(session, principal.organization_id)
+    except SQLAlchemyError as exc:
+        logger.exception(
+            "MOTIVE VEHICLE UTILIZATION OPERATIONAL STATUS READ FAILED",
+            extra={
+                "motive_operation": "vehicle_utilization_operational_status",
+                "organization_id": principal.organization_id,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "status": "failed",
+                "error_code": "motive_operational_status_read_failed",
+                "message": "Motive vehicle-utilization operational status could not be read.",
+                "secrets_exposed": False,
+            },
+        ) from exc
 
 
 @router.post("/sync/vehicle-utilization")
