@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiClient } from "../apiClient";
+import { motiveUtilizationKpiPresentation } from "../motiveFrontend";
 import { runtimeConfig } from "../runtimeConfig";
 import "./ExecutiveDashboard.css";
+import "./MotiveUtilizationKpi.css";
 
 function createEmptyAction(author) {
   return {
@@ -41,6 +43,25 @@ function ItemList({ items = [] }) {
         </article>
       ))}
     </div>
+  );
+}
+
+function UtilizationKpiCard({ presentation }) {
+  return (
+    <section className="polaris-card fleet-operations-card" aria-labelledby="fleet-utilization-title">
+      <div className="fleet-operations-heading">
+        <p className="eyebrow">FLEET / OPERATIONS</p>
+        <h2 id="fleet-utilization-title">{presentation.title}</h2>
+      </div>
+      <div className="utilization-kpi-content">
+        <strong className="utilization-kpi-value">{presentation.value}</strong>
+        <div className="utilization-kpi-meta">
+          {presentation.coverage && <p><span>Coverage</span><strong>{presentation.coverage}</strong></p>}
+          <p className="utilization-kpi-completeness">{presentation.completeness}</p>
+          {presentation.window && <small>{presentation.window}</small>}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -121,6 +142,9 @@ export default function ExecutiveDashboard() {
   const [dashboard, setDashboard] = useState(null);
   const [dashboardError, setDashboardError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [utilizationKpi, setUtilizationKpi] = useState(null);
+  const [utilizationKpiLoading, setUtilizationKpiLoading] = useState(true);
+  const [utilizationKpiRequestFailed, setUtilizationKpiRequestFailed] = useState(false);
   const [showActionForm, setShowActionForm] = useState(false);
   const [savingAction, setSavingAction] = useState(false);
   const [actionError, setActionError] = useState("");
@@ -140,8 +164,25 @@ export default function ExecutiveDashboard() {
     }
   }
 
+  async function loadUtilizationKpi() {
+    try {
+      setUtilizationKpiLoading(true);
+      setUtilizationKpiRequestFailed(false);
+      setUtilizationKpi(await apiClient.get("/api/v1/motive/fleet/vehicle-utilization-kpi"));
+    } catch (_) {
+      setUtilizationKpi(null);
+      setUtilizationKpiRequestFailed(true);
+    } finally {
+      setUtilizationKpiLoading(false);
+    }
+  }
+
+  async function refreshDashboard() {
+    await Promise.allSettled([loadDashboard(), loadUtilizationKpi()]);
+  }
+
   useEffect(() => {
-    loadDashboard();
+    void refreshDashboard();
   }, [dashboardPath]);
 
   function openActionForm() {
@@ -219,7 +260,7 @@ export default function ExecutiveDashboard() {
           <p className="eyebrow">POLARIS · {workspace.workspaceName}</p>
           <h2>Dashboard unavailable</h2>
           <p>{dashboardError}</p>
-          <button type="button" className="primary-button" onClick={loadDashboard}>Try Again</button>
+          <button type="button" className="primary-button" onClick={refreshDashboard}>Try Again</button>
         </section>
       </main>
     );
@@ -230,6 +271,10 @@ export default function ExecutiveDashboard() {
   const todaysPlan = dashboard?.todays_plan ?? [];
   const comingUp = dashboard?.coming_up ?? [];
   const watchItems = dashboard?.watch_items ?? [];
+  const utilizationPresentation = motiveUtilizationKpiPresentation(utilizationKpi, {
+    loading: utilizationKpiLoading,
+    requestFailed: utilizationKpiRequestFailed,
+  });
 
   return (
     <main className="dashboard-shell">
@@ -243,7 +288,7 @@ export default function ExecutiveDashboard() {
 
         <div className="dashboard-hero-actions">
           <button type="button" className="primary-button add-action-button" onClick={openActionForm}>+ Add Action</button>
-          <button type="button" className="secondary-button" onClick={loadDashboard} disabled={loading}>{loading ? "Refreshing..." : "Refresh"}</button>
+          <button type="button" className="secondary-button" onClick={refreshDashboard} disabled={loading}>{loading ? "Refreshing..." : "Refresh"}</button>
           <div className="status-panel"><span>Business Status</span><strong>{dashboard.business_status}</strong></div>
         </div>
       </header>
@@ -256,6 +301,8 @@ export default function ExecutiveDashboard() {
         <div><strong>{dashboard.active_missions}</strong><span>Active Missions</span></div>
         <div><strong>{dashboard.total_trucks}</strong><span>Trucks</span></div>
       </div>
+
+      <UtilizationKpiCard presentation={utilizationPresentation} />
 
       <div className="dashboard-grid">
         <Section title="Needs Attention" isEmpty={needsAttention.length === 0} emptyText="Nothing urgent requires your attention."><ItemList items={needsAttention} /></Section>

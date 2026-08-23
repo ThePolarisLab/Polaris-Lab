@@ -1,0 +1,81 @@
+.fleet-operations-card {
+  margin: 0 0 22px;
+  padding: 24px 28px;
+}
+
+.fleet-operations-heading h2 {
+  margin-bottom: 16px;
+}
+
+.utilization-kpi-content {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 28px;
+}
+
+.utilization-kpi-value {
+  flex-shrink: 0;
+  color: #172033;
+  font-size: clamp(2.2rem, 5vw, 3.5rem);
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+
+.utilization-kpi-meta {
+  display: grid;
+  justify-items: end;
+  gap: 9px;
+  min-width: 0;
+  text-align: right;
+}
+
+.utilization-kpi-meta p {
+  margin: 0;
+  color: #657087;
+  line-height: 1.45;
+}
+
+.utilization-kpi-meta p > span {
+  display: block;
+  margin-bottom: 3px;
+  color: #929aac;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.utilization-kpi-meta p > strong {
+  color: #344057;
+}
+
+.utilization-kpi-completeness {
+  padding: 7px 10px;
+  border: 1px solid #dfe4ed;
+  border-radius: 999px;
+  background: #f5f7fa;
+  color: #526077 !important;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.utilization-kpi-meta small {
+  color: #929aac;
+}
+
+@media (max-width: 680px) {
+  .fleet-operations-card {
+    padding: 20px;
+  }
+
+  .utilization-kpi-content {
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .utilization-kpi-meta {
+    justify-items: start;
+    text-align: left;
+  }
+}
