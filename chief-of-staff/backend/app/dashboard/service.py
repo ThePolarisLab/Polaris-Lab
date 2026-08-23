@@ -8,6 +8,7 @@ from app.models.ace import AceInBondMovement
 from app.models.team_note import TeamNote
 from app.models.truck import Truck
 from app.missions.models import Mission
+from app.motive.vehicle_utilization_operational_status import vehicle_utilization_operational_status
 from app.reasoning.service import analyze_q2_compliance_risk
 
 
@@ -239,9 +240,63 @@ def _watch(notes, q2):
     return out[:6]
 
 
+def _motive_utilization_health(db, organization_id):
+    try:
+        status = vehicle_utilization_operational_status(db, organization_id)
+    except Exception:
+        return DashboardItem(
+            "Motive utilization health could not be read",
+            "Motive vehicle-utilization operational health is unavailable; review Motive operational status.",
+            "HIGH",
+            "Motive Vehicle Utilization",
+        )
+
+    operational_status = status.get("operational_status")
+    if operational_status == "healthy":
+        return None
+
+    if operational_status == "not_started":
+        configuration = status.get("configuration")
+        configuration = configuration if isinstance(configuration, dict) else {}
+        if not (
+            configuration.get("production_ingestion_enabled")
+            or configuration.get("production_scheduler_enabled")
+        ):
+            return None
+        return DashboardItem(
+            "Motive vehicle utilization has no production history",
+            "Production vehicle-utilization capability is enabled, but no production history is available.",
+            "MEDIUM",
+            "Motive Vehicle Utilization",
+        )
+
+    production = status.get("production")
+    production = production if isinstance(production, dict) else {}
+    checkpoint = status.get("checkpoint")
+    checkpoint = checkpoint if isinstance(checkpoint, dict) else {}
+    if production.get("status") != "success":
+        detail = "Latest production vehicle-utilization run did not complete successfully; review Motive operational status."
+    elif checkpoint.get("status") != "success":
+        detail = "Production vehicle-utilization checkpoint is not successful; review Motive operational status."
+    else:
+        detail = "Production utilization history and checkpoint are inconsistent; review Motive operational status."
+    return DashboardItem(
+        "Motive vehicle utilization needs review",
+        detail,
+        "HIGH",
+        "Motive Vehicle Utilization",
+    )
+
+
 def _system_health(db, organization_id):
-    item = _ace_feed_attention(db, organization_id)
-    return [item] if item else []
+    items = []
+    ace_item = _ace_feed_attention(db, organization_id)
+    if ace_item:
+        items.append(ace_item)
+    motive_item = _motive_utilization_health(db, organization_id)
+    if motive_item:
+        items.append(motive_item)
+    return items
 
 
 def _daily_priority(needs, carry, waiting):
