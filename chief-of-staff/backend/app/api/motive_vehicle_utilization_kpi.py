@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database.database import SessionLocal
+from app.motive.vehicle_idle_fuel_burn_rate_kpi import vehicle_idle_fuel_burn_rate_kpi
 from app.motive.vehicle_idle_fuel_share_kpi import vehicle_idle_fuel_share_kpi
 from app.motive.vehicle_idle_time_share_kpi import vehicle_idle_time_share_kpi
 from app.motive.vehicle_utilization_kpi import vehicle_utilization_kpi
@@ -67,3 +68,12 @@ def read_vehicle_idle_fuel_share_kpi(
 ) -> dict[str, Any]:
     """Read observed idle-fuel share from durable production rows only."""
     return vehicle_idle_fuel_share_kpi(session, principal.organization_id)
+
+
+@router.get("/vehicle-idle-fuel-burn-rate-kpi")
+def read_vehicle_idle_fuel_burn_rate_kpi(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Read observed idle-fuel burn rate from durable production rows only."""
+    return vehicle_idle_fuel_burn_rate_kpi(session, principal.organization_id)
