@@ -169,7 +169,7 @@ test("Dashboard Refresh advances history once while current Motive reads remain 
   const source = await readFile(new URL("../src/components/ExecutiveDashboard.jsx", import.meta.url), "utf8");
   assert.match(source, /setHistoryRefreshSequence\(\(current\) => current \+ 1\)/);
   assert.match(source, /<MotiveUtilizationHistory refreshSequence=\{historyRefreshSequence\} \/>/);
-  assert.match(source, /Promise\.allSettled\(\[loadDashboard\(\), loadUtilizationKpi\(\), loadIdleTimeShareKpi\(\)\]\)/);
+  assert.match(source, /Promise\.allSettled\(\[loadDashboard\(\), loadUtilizationKpi\(\), loadIdleTimeShareKpi\(\), loadIdleFuelShareKpi\(\)\]\)/);
 });
 
 test("trend styling is responsive and neutral, and no chart dependency is added", async () => {
