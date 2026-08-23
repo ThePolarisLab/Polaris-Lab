@@ -6,6 +6,7 @@ import {
 } from "../motiveFrontend";
 import { runtimeConfig } from "../runtimeConfig";
 import "./ExecutiveDashboard.css";
+import MotiveUtilizationHistory from "./MotiveUtilizationHistory";
 import "./MotiveUtilizationKpi.css";
 
 function createEmptyAction(author) {
@@ -68,7 +69,7 @@ function FleetKpiObservation({ presentation }) {
   );
 }
 
-function FleetOperationsCard({ utilizationPresentation, idleTimeSharePresentation }) {
+function FleetOperationsCard({ utilizationPresentation, idleTimeSharePresentation, historyRefreshSequence }) {
   return (
     <section className="polaris-card fleet-operations-card" aria-labelledby="fleet-operations-title">
       <div className="fleet-operations-heading">
@@ -79,6 +80,7 @@ function FleetOperationsCard({ utilizationPresentation, idleTimeSharePresentatio
         <FleetKpiObservation presentation={utilizationPresentation} />
         <FleetKpiObservation presentation={idleTimeSharePresentation} />
       </div>
+      <MotiveUtilizationHistory refreshSequence={historyRefreshSequence} />
     </section>
   );
 }
@@ -166,6 +168,7 @@ export default function ExecutiveDashboard() {
   const [idleTimeShareKpi, setIdleTimeShareKpi] = useState(null);
   const [idleTimeShareKpiLoading, setIdleTimeShareKpiLoading] = useState(true);
   const [idleTimeShareKpiRequestFailed, setIdleTimeShareKpiRequestFailed] = useState(false);
+  const [historyRefreshSequence, setHistoryRefreshSequence] = useState(0);
   const [showActionForm, setShowActionForm] = useState(false);
   const [savingAction, setSavingAction] = useState(false);
   const [actionError, setActionError] = useState("");
@@ -212,6 +215,7 @@ export default function ExecutiveDashboard() {
   }
 
   async function refreshDashboard() {
+    setHistoryRefreshSequence((current) => current + 1);
     await Promise.allSettled([loadDashboard(), loadUtilizationKpi(), loadIdleTimeShareKpi()]);
   }
 
@@ -343,6 +347,7 @@ export default function ExecutiveDashboard() {
       <FleetOperationsCard
         utilizationPresentation={utilizationPresentation}
         idleTimeSharePresentation={idleTimeSharePresentation}
+        historyRefreshSequence={historyRefreshSequence}
       />
 
       <div className="dashboard-grid">
