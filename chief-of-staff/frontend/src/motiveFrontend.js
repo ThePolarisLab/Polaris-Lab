@@ -23,6 +23,8 @@ const STATUS_DETAILS = Object.freeze({
 });
 
 const UTILIZATION_KPI_TITLE = "Observed 7-Day Vehicle Utilization";
+const IDLE_TIME_SHARE_KPI_TITLE = "Observed 7-Day Vehicle Idle-Time Share";
+const IDLE_TIME_SHARE_KPI_DESCRIPTION = "Share of observed idle + driving time reported as idle.";
 
 function connectionStatus(payload) {
   return payload?.status?.connection_status || payload?.health?.details?.connection_status || payload?.health?.status || "not_configured";
@@ -40,6 +42,18 @@ function utilizationUnavailable(detail) {
   return {
     status: "unavailable",
     title: UTILIZATION_KPI_TITLE,
+    value: "Unavailable",
+    coverage: null,
+    completeness: detail,
+    window: null,
+  };
+}
+
+function idleTimeShareUnavailable(detail) {
+  return {
+    status: "unavailable",
+    title: IDLE_TIME_SHARE_KPI_TITLE,
+    description: IDLE_TIME_SHARE_KPI_DESCRIPTION,
     value: "Unavailable",
     coverage: null,
     completeness: detail,
@@ -136,6 +150,65 @@ export function motiveUtilizationKpiPresentation(payload, options = {}) {
   };
 }
 
+export function motiveIdleTimeShareKpiPresentation(payload, options = {}) {
+  const { loading = false, requestFailed = false } = options;
+
+  if (loading) {
+    return {
+      status: "loading",
+      title: IDLE_TIME_SHARE_KPI_TITLE,
+      description: IDLE_TIME_SHARE_KPI_DESCRIPTION,
+      value: "Loading…",
+      coverage: null,
+      completeness: "Loading idle-time-share reporting…",
+      window: null,
+    };
+  }
+
+  if (requestFailed) return idleTimeShareUnavailable("Idle-time-share reporting temporarily unavailable.");
+  if (payload?.status !== "available_observed") {
+    return idleTimeShareUnavailable("No certified idle-time-share metric is available for the latest reconciled window.");
+  }
+
+  const valuePercent = finiteNumber(payload?.value_percent);
+  const metricValidVehicleDays = nonNegativeInteger(payload?.metric_valid_vehicle_days);
+  const expectedRequestedVehicleDays = nonNegativeInteger(payload?.expected_requested_vehicle_days);
+  const coveragePercent = finiteNumber(payload?.idle_time_metric_coverage_percent);
+  const windowStart = typeof payload?.window_start === "string" ? payload.window_start : "";
+  const windowEnd = typeof payload?.window_end === "string" ? payload.window_end : "";
+  const requestTimezone = typeof payload?.request_timezone === "string" ? payload.request_timezone : "";
+
+  if (
+    valuePercent === null ||
+    valuePercent < 0 ||
+    valuePercent > 100 ||
+    metricValidVehicleDays === null ||
+    expectedRequestedVehicleDays === null ||
+    expectedRequestedVehicleDays <= 0 ||
+    metricValidVehicleDays > expectedRequestedVehicleDays ||
+    coveragePercent === null ||
+    coveragePercent < 0 ||
+    coveragePercent > 100 ||
+    !windowStart ||
+    !windowEnd ||
+    !requestTimezone
+  ) {
+    return idleTimeShareUnavailable("No certified idle-time-share metric is available for the latest reconciled window.");
+  }
+
+  return {
+    status: "available_observed",
+    title: IDLE_TIME_SHARE_KPI_TITLE,
+    description: IDLE_TIME_SHARE_KPI_DESCRIPTION,
+    value: `${valuePercent.toFixed(2)}%`,
+    coverage: `${metricValidVehicleDays} / ${expectedRequestedVehicleDays} vehicle-days (${coveragePercent.toFixed(2)}%)`,
+    completeness: payload?.fleet_representative === true
+      ? "Full vehicle-day coverage"
+      : "Partial observation — not fleet representative",
+    window: `${windowStart} to ${windowEnd} · ${requestTimezone}`,
+  };
+}
+
 export function safeMotiveMetadata(payload) {
   const details = payload?.status || payload?.health?.details || {};
   const safeKeys = [
@@ -189,4 +262,5 @@ export function hasRenderedSecret(value) {
 export const motiveFrontendContract = Object.freeze({
   statusLabels: STATUS_LABELS,
   utilizationKpiTitle: UTILIZATION_KPI_TITLE,
+  idleTimeShareKpiTitle: IDLE_TIME_SHARE_KPI_TITLE,
 });
