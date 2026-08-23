@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.api import motive_vehicle_utilization_kpi as kpi_api
 from app.connectors.motive import MotiveConnector
@@ -344,7 +345,11 @@ def test_kpi_read_executes_selects_only(kpi_session):
 
 def test_endpoint_accepts_connector_read_and_makes_no_provider_call(monkeypatch):
     organization, _identity, headers = seed_principal("viewer")
-    engine = create_engine("sqlite:///:memory:")
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     Base.metadata.create_all(
         engine,
         tables=[
