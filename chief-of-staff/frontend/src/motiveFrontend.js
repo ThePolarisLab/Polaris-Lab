@@ -25,6 +25,8 @@ const STATUS_DETAILS = Object.freeze({
 const UTILIZATION_KPI_TITLE = "Observed 7-Day Vehicle Utilization";
 const IDLE_TIME_SHARE_KPI_TITLE = "Observed 7-Day Vehicle Idle-Time Share";
 const IDLE_TIME_SHARE_KPI_DESCRIPTION = "Share of observed idle + driving time reported as idle.";
+const IDLE_FUEL_SHARE_KPI_TITLE = "Observed 7-Day Vehicle Idle-Fuel Share";
+const IDLE_FUEL_SHARE_KPI_DESCRIPTION = "Share of observed idle + driving fuel reported as idle fuel.";
 
 function connectionStatus(payload) {
   return payload?.status?.connection_status || payload?.health?.details?.connection_status || payload?.health?.status || "not_configured";
@@ -54,6 +56,18 @@ function idleTimeShareUnavailable(detail) {
     status: "unavailable",
     title: IDLE_TIME_SHARE_KPI_TITLE,
     description: IDLE_TIME_SHARE_KPI_DESCRIPTION,
+    value: "Unavailable",
+    coverage: null,
+    completeness: detail,
+    window: null,
+  };
+}
+
+function idleFuelShareUnavailable(detail) {
+  return {
+    status: "unavailable",
+    title: IDLE_FUEL_SHARE_KPI_TITLE,
+    description: IDLE_FUEL_SHARE_KPI_DESCRIPTION,
     value: "Unavailable",
     coverage: null,
     completeness: detail,
@@ -209,6 +223,67 @@ export function motiveIdleTimeShareKpiPresentation(payload, options = {}) {
   };
 }
 
+export function motiveIdleFuelShareKpiPresentation(payload, options = {}) {
+  const { loading = false, requestFailed = false } = options;
+
+  if (loading) {
+    return {
+      status: "loading",
+      title: IDLE_FUEL_SHARE_KPI_TITLE,
+      description: IDLE_FUEL_SHARE_KPI_DESCRIPTION,
+      value: "Loading…",
+      coverage: null,
+      completeness: "Loading idle-fuel-share reporting…",
+      window: null,
+    };
+  }
+
+  if (requestFailed) return idleFuelShareUnavailable("Idle-fuel-share reporting temporarily unavailable.");
+  if (payload?.status !== "available_observed") {
+    return idleFuelShareUnavailable("No certified idle-fuel-share metric is available for the latest reconciled window.");
+  }
+
+  const valuePercent = finiteNumber(payload?.value_percent);
+  const metricValidVehicleDays = nonNegativeInteger(payload?.metric_valid_vehicle_days);
+  const expectedRequestedVehicleDays = nonNegativeInteger(payload?.expected_requested_vehicle_days);
+  const coveragePercent = finiteNumber(payload?.idle_fuel_metric_coverage_percent);
+  const windowStart = typeof payload?.window_start === "string" ? payload.window_start : "";
+  const windowEnd = typeof payload?.window_end === "string" ? payload.window_end : "";
+  const requestTimezone = typeof payload?.request_timezone === "string" ? payload.request_timezone : "";
+
+  if (
+    valuePercent === null ||
+    valuePercent < 0 ||
+    valuePercent > 100 ||
+    metricValidVehicleDays === null ||
+    expectedRequestedVehicleDays === null ||
+    expectedRequestedVehicleDays <= 0 ||
+    metricValidVehicleDays > expectedRequestedVehicleDays ||
+    coveragePercent === null ||
+    coveragePercent < 0 ||
+    coveragePercent > 100 ||
+    payload?.fuel_unit !== "gallons" ||
+    payload?.unit_request_mode !== "imperial" ||
+    !windowStart ||
+    !windowEnd ||
+    !requestTimezone
+  ) {
+    return idleFuelShareUnavailable("No certified idle-fuel-share metric is available for the latest reconciled window.");
+  }
+
+  return {
+    status: "available_observed",
+    title: IDLE_FUEL_SHARE_KPI_TITLE,
+    description: IDLE_FUEL_SHARE_KPI_DESCRIPTION,
+    value: `${valuePercent.toFixed(2)}%`,
+    coverage: `${metricValidVehicleDays} / ${expectedRequestedVehicleDays} vehicle-days (${coveragePercent.toFixed(2)}%)`,
+    completeness: payload?.fleet_representative === true
+      ? "Full vehicle-day coverage"
+      : "Partial observation — not fleet representative",
+    window: `${windowStart} to ${windowEnd} · ${requestTimezone}`,
+  };
+}
+
 export function safeMotiveMetadata(payload) {
   const details = payload?.status || payload?.health?.details || {};
   const safeKeys = [
@@ -263,4 +338,5 @@ export const motiveFrontendContract = Object.freeze({
   statusLabels: STATUS_LABELS,
   utilizationKpiTitle: UTILIZATION_KPI_TITLE,
   idleTimeShareKpiTitle: IDLE_TIME_SHARE_KPI_TITLE,
+  idleFuelShareKpiTitle: IDLE_FUEL_SHARE_KPI_TITLE,
 });
