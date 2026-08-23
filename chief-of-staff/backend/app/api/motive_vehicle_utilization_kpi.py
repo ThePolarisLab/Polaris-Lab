@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database.database import SessionLocal
+from app.motive.vehicle_idle_time_share_kpi import vehicle_idle_time_share_kpi
 from app.motive.vehicle_utilization_kpi import vehicle_utilization_kpi
 from app.motive.vehicle_utilization_kpi_history import (
     DEFAULT_HISTORY_DAYS,
@@ -47,3 +48,12 @@ def read_vehicle_utilization_kpi_history(
         principal.organization_id,
         days=days,
     )
+
+
+@router.get("/vehicle-idle-time-share-kpi")
+def read_vehicle_idle_time_share_kpi(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Read observed idle-time share from durable production rows only."""
+    return vehicle_idle_time_share_kpi(session, principal.organization_id)
