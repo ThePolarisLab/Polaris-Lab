@@ -27,6 +27,8 @@ const IDLE_TIME_SHARE_KPI_TITLE = "Observed 7-Day Vehicle Idle-Time Share";
 const IDLE_TIME_SHARE_KPI_DESCRIPTION = "Share of observed idle + driving time reported as idle.";
 const IDLE_FUEL_SHARE_KPI_TITLE = "Observed 7-Day Vehicle Idle-Fuel Share";
 const IDLE_FUEL_SHARE_KPI_DESCRIPTION = "Share of observed idle + driving fuel reported as idle fuel.";
+const IDLE_FUEL_BURN_RATE_KPI_TITLE = "Observed 7-Day Idle Fuel Burn Rate";
+const IDLE_FUEL_BURN_RATE_KPI_DESCRIPTION = "Observed idle fuel volume per observed idle hour.";
 
 function connectionStatus(payload) {
   return payload?.status?.connection_status || payload?.health?.details?.connection_status || payload?.health?.status || "not_configured";
@@ -68,6 +70,18 @@ function idleFuelShareUnavailable(detail) {
     status: "unavailable",
     title: IDLE_FUEL_SHARE_KPI_TITLE,
     description: IDLE_FUEL_SHARE_KPI_DESCRIPTION,
+    value: "Unavailable",
+    coverage: null,
+    completeness: detail,
+    window: null,
+  };
+}
+
+function idleFuelBurnRateUnavailable(detail) {
+  return {
+    status: "unavailable",
+    title: IDLE_FUEL_BURN_RATE_KPI_TITLE,
+    description: IDLE_FUEL_BURN_RATE_KPI_DESCRIPTION,
     value: "Unavailable",
     coverage: null,
     completeness: detail,
@@ -284,6 +298,68 @@ export function motiveIdleFuelShareKpiPresentation(payload, options = {}) {
   };
 }
 
+export function motiveIdleFuelBurnRateKpiPresentation(payload, options = {}) {
+  const { loading = false, requestFailed = false } = options;
+
+  if (loading) {
+    return {
+      status: "loading",
+      title: IDLE_FUEL_BURN_RATE_KPI_TITLE,
+      description: IDLE_FUEL_BURN_RATE_KPI_DESCRIPTION,
+      value: "Loading…",
+      coverage: null,
+      completeness: "Loading idle fuel burn-rate reporting…",
+      window: null,
+    };
+  }
+
+  if (requestFailed) return idleFuelBurnRateUnavailable("Idle fuel burn-rate reporting temporarily unavailable.");
+  if (payload?.status !== "available_observed") {
+    return idleFuelBurnRateUnavailable("No certified idle fuel burn-rate metric is available for the latest reconciled window.");
+  }
+
+  const valueGallonsPerIdleHour = finiteNumber(payload?.value_gallons_per_idle_hour);
+  const metricValidVehicleDays = nonNegativeInteger(payload?.metric_valid_vehicle_days);
+  const expectedRequestedVehicleDays = nonNegativeInteger(payload?.expected_requested_vehicle_days);
+  const coveragePercent = finiteNumber(payload?.idle_fuel_burn_rate_metric_coverage_percent);
+  const windowStart = typeof payload?.window_start === "string" ? payload.window_start : "";
+  const windowEnd = typeof payload?.window_end === "string" ? payload.window_end : "";
+  const requestTimezone = typeof payload?.request_timezone === "string" ? payload.request_timezone : "";
+
+  if (
+    valueGallonsPerIdleHour === null ||
+    valueGallonsPerIdleHour < 0 ||
+    metricValidVehicleDays === null ||
+    expectedRequestedVehicleDays === null ||
+    expectedRequestedVehicleDays <= 0 ||
+    metricValidVehicleDays > expectedRequestedVehicleDays ||
+    coveragePercent === null ||
+    coveragePercent < 0 ||
+    coveragePercent > 100 ||
+    payload?.fuel_unit !== "gallons" ||
+    payload?.idle_time_unit !== "seconds" ||
+    payload?.rate_unit !== "gallons_per_idle_hour" ||
+    payload?.unit_request_mode !== "imperial" ||
+    !windowStart ||
+    !windowEnd ||
+    !requestTimezone
+  ) {
+    return idleFuelBurnRateUnavailable("No certified idle fuel burn-rate metric is available for the latest reconciled window.");
+  }
+
+  return {
+    status: "available_observed",
+    title: IDLE_FUEL_BURN_RATE_KPI_TITLE,
+    description: IDLE_FUEL_BURN_RATE_KPI_DESCRIPTION,
+    value: `${valueGallonsPerIdleHour.toFixed(2)} gal/idle-hr`,
+    coverage: `${metricValidVehicleDays} / ${expectedRequestedVehicleDays} vehicle-days (${coveragePercent.toFixed(2)}%)`,
+    completeness: payload?.fleet_representative === true
+      ? "Full vehicle-day coverage"
+      : "Partial observation — not fleet representative",
+    window: `${windowStart} to ${windowEnd} · ${requestTimezone}`,
+  };
+}
+
 export function safeMotiveMetadata(payload) {
   const details = payload?.status || payload?.health?.details || {};
   const safeKeys = [
@@ -339,4 +415,5 @@ export const motiveFrontendContract = Object.freeze({
   utilizationKpiTitle: UTILIZATION_KPI_TITLE,
   idleTimeShareKpiTitle: IDLE_TIME_SHARE_KPI_TITLE,
   idleFuelShareKpiTitle: IDLE_FUEL_SHARE_KPI_TITLE,
+  idleFuelBurnRateKpiTitle: IDLE_FUEL_BURN_RATE_KPI_TITLE,
 });
