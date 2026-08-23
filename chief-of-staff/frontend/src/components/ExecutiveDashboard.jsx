@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiClient } from "../apiClient";
-import { motiveUtilizationKpiPresentation } from "../motiveFrontend";
+import {
+  motiveIdleTimeShareKpiPresentation,
+  motiveUtilizationKpiPresentation,
+} from "../motiveFrontend";
 import { runtimeConfig } from "../runtimeConfig";
 import "./ExecutiveDashboard.css";
 import "./MotiveUtilizationKpi.css";
@@ -46,20 +49,35 @@ function ItemList({ items = [] }) {
   );
 }
 
-function UtilizationKpiCard({ presentation }) {
+function FleetKpiObservation({ presentation }) {
   return (
-    <section className="polaris-card fleet-operations-card" aria-labelledby="fleet-utilization-title">
-      <div className="fleet-operations-heading">
-        <p className="eyebrow">FLEET / OPERATIONS</p>
-        <h2 id="fleet-utilization-title">{presentation.title}</h2>
+    <article className="fleet-kpi-observation" aria-label={presentation.title}>
+      <div className="fleet-kpi-heading">
+        <h3>{presentation.title}</h3>
+        {presentation.description && <p>{presentation.description}</p>}
       </div>
-      <div className="utilization-kpi-content">
-        <strong className="utilization-kpi-value">{presentation.value}</strong>
-        <div className="utilization-kpi-meta">
+      <div className="fleet-kpi-content">
+        <strong className="fleet-kpi-value">{presentation.value}</strong>
+        <div className="fleet-kpi-meta">
           {presentation.coverage && <p><span>Coverage</span><strong>{presentation.coverage}</strong></p>}
-          <p className="utilization-kpi-completeness">{presentation.completeness}</p>
+          <p className="fleet-kpi-completeness">{presentation.completeness}</p>
           {presentation.window && <small>{presentation.window}</small>}
         </div>
+      </div>
+    </article>
+  );
+}
+
+function FleetOperationsCard({ utilizationPresentation, idleTimeSharePresentation }) {
+  return (
+    <section className="polaris-card fleet-operations-card" aria-labelledby="fleet-operations-title">
+      <div className="fleet-operations-heading">
+        <p className="eyebrow">FLEET / OPERATIONS</p>
+        <h2 id="fleet-operations-title">Current Observations</h2>
+      </div>
+      <div className="fleet-current-observations">
+        <FleetKpiObservation presentation={utilizationPresentation} />
+        <FleetKpiObservation presentation={idleTimeSharePresentation} />
       </div>
     </section>
   );
@@ -145,6 +163,9 @@ export default function ExecutiveDashboard() {
   const [utilizationKpi, setUtilizationKpi] = useState(null);
   const [utilizationKpiLoading, setUtilizationKpiLoading] = useState(true);
   const [utilizationKpiRequestFailed, setUtilizationKpiRequestFailed] = useState(false);
+  const [idleTimeShareKpi, setIdleTimeShareKpi] = useState(null);
+  const [idleTimeShareKpiLoading, setIdleTimeShareKpiLoading] = useState(true);
+  const [idleTimeShareKpiRequestFailed, setIdleTimeShareKpiRequestFailed] = useState(false);
   const [showActionForm, setShowActionForm] = useState(false);
   const [savingAction, setSavingAction] = useState(false);
   const [actionError, setActionError] = useState("");
@@ -177,8 +198,21 @@ export default function ExecutiveDashboard() {
     }
   }
 
+  async function loadIdleTimeShareKpi() {
+    try {
+      setIdleTimeShareKpiLoading(true);
+      setIdleTimeShareKpiRequestFailed(false);
+      setIdleTimeShareKpi(await apiClient.get("/api/v1/motive/fleet/vehicle-idle-time-share-kpi"));
+    } catch (_) {
+      setIdleTimeShareKpi(null);
+      setIdleTimeShareKpiRequestFailed(true);
+    } finally {
+      setIdleTimeShareKpiLoading(false);
+    }
+  }
+
   async function refreshDashboard() {
-    await Promise.allSettled([loadDashboard(), loadUtilizationKpi()]);
+    await Promise.allSettled([loadDashboard(), loadUtilizationKpi(), loadIdleTimeShareKpi()]);
   }
 
   useEffect(() => {
@@ -275,6 +309,10 @@ export default function ExecutiveDashboard() {
     loading: utilizationKpiLoading,
     requestFailed: utilizationKpiRequestFailed,
   });
+  const idleTimeSharePresentation = motiveIdleTimeShareKpiPresentation(idleTimeShareKpi, {
+    loading: idleTimeShareKpiLoading,
+    requestFailed: idleTimeShareKpiRequestFailed,
+  });
 
   return (
     <main className="dashboard-shell">
@@ -302,7 +340,10 @@ export default function ExecutiveDashboard() {
         <div><strong>{dashboard.total_trucks}</strong><span>Trucks</span></div>
       </div>
 
-      <UtilizationKpiCard presentation={utilizationPresentation} />
+      <FleetOperationsCard
+        utilizationPresentation={utilizationPresentation}
+        idleTimeSharePresentation={idleTimeSharePresentation}
+      />
 
       <div className="dashboard-grid">
         <Section title="Needs Attention" isEmpty={needsAttention.length === 0} emptyText="Nothing urgent requires your attention."><ItemList items={needsAttention} /></Section>
