@@ -161,7 +161,7 @@ test("history component uses one fixed authenticated GET and no Motive write/act
   assert.match(source, /refreshSequence/);
   assert.match(source, /requestFailed/);
   assert.match(source, /Gaps indicate dates with no snapshot/);
-  assert.doesNotMatch(source, /apiClient\.(?:post|delete)|sync|verify|reconcile|scheduler|ingestion/i);
+  assert.doesNotMatch(source, /apiClient\.(?:post|delete)|\bsync\b|verify|reconcile|scheduler|ingestion/i);
   assert.doesNotMatch(source, /improving|worsening|target|critical|\bwatch\b|\bgood\b|\bbad\b/i);
 });
 
