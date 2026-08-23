@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiClient } from "../apiClient";
 import {
+  motiveIdleFuelBurnRateKpiPresentation,
   motiveIdleFuelShareKpiPresentation,
   motiveIdleTimeShareKpiPresentation,
   motiveUtilizationKpiPresentation,
@@ -70,7 +71,7 @@ function FleetKpiObservation({ presentation }) {
   );
 }
 
-function FleetOperationsCard({ utilizationPresentation, idleTimeSharePresentation, idleFuelSharePresentation, historyRefreshSequence }) {
+function FleetOperationsCard({ utilizationPresentation, idleTimeSharePresentation, idleFuelSharePresentation, idleFuelBurnRatePresentation, historyRefreshSequence }) {
   return (
     <section className="polaris-card fleet-operations-card" aria-labelledby="fleet-operations-title">
       <div className="fleet-operations-heading">
@@ -81,6 +82,7 @@ function FleetOperationsCard({ utilizationPresentation, idleTimeSharePresentatio
         <FleetKpiObservation presentation={utilizationPresentation} />
         <FleetKpiObservation presentation={idleTimeSharePresentation} />
         <FleetKpiObservation presentation={idleFuelSharePresentation} />
+        <FleetKpiObservation presentation={idleFuelBurnRatePresentation} />
       </div>
       <MotiveUtilizationHistory refreshSequence={historyRefreshSequence} />
     </section>
@@ -173,6 +175,9 @@ export default function ExecutiveDashboard() {
   const [idleFuelShareKpi, setIdleFuelShareKpi] = useState(null);
   const [idleFuelShareKpiLoading, setIdleFuelShareKpiLoading] = useState(true);
   const [idleFuelShareKpiRequestFailed, setIdleFuelShareKpiRequestFailed] = useState(false);
+  const [idleFuelBurnRateKpi, setIdleFuelBurnRateKpi] = useState(null);
+  const [idleFuelBurnRateKpiLoading, setIdleFuelBurnRateKpiLoading] = useState(true);
+  const [idleFuelBurnRateKpiRequestFailed, setIdleFuelBurnRateKpiRequestFailed] = useState(false);
   const [historyRefreshSequence, setHistoryRefreshSequence] = useState(0);
   const [showActionForm, setShowActionForm] = useState(false);
   const [savingAction, setSavingAction] = useState(false);
@@ -232,9 +237,22 @@ export default function ExecutiveDashboard() {
     }
   }
 
+  async function loadIdleFuelBurnRateKpi() {
+    try {
+      setIdleFuelBurnRateKpiLoading(true);
+      setIdleFuelBurnRateKpiRequestFailed(false);
+      setIdleFuelBurnRateKpi(await apiClient.get("/api/v1/motive/fleet/vehicle-idle-fuel-burn-rate-kpi"));
+    } catch (_) {
+      setIdleFuelBurnRateKpi(null);
+      setIdleFuelBurnRateKpiRequestFailed(true);
+    } finally {
+      setIdleFuelBurnRateKpiLoading(false);
+    }
+  }
+
   async function refreshDashboard() {
     setHistoryRefreshSequence((current) => current + 1);
-    await Promise.allSettled([loadDashboard(), loadUtilizationKpi(), loadIdleTimeShareKpi(), loadIdleFuelShareKpi()]);
+    await Promise.allSettled([loadDashboard(), loadUtilizationKpi(), loadIdleTimeShareKpi(), loadIdleFuelShareKpi(), loadIdleFuelBurnRateKpi()]);
   }
 
   useEffect(() => {
@@ -339,6 +357,10 @@ export default function ExecutiveDashboard() {
     loading: idleFuelShareKpiLoading,
     requestFailed: idleFuelShareKpiRequestFailed,
   });
+  const idleFuelBurnRatePresentation = motiveIdleFuelBurnRateKpiPresentation(idleFuelBurnRateKpi, {
+    loading: idleFuelBurnRateKpiLoading,
+    requestFailed: idleFuelBurnRateKpiRequestFailed,
+  });
 
   return (
     <main className="dashboard-shell">
@@ -370,6 +392,7 @@ export default function ExecutiveDashboard() {
         utilizationPresentation={utilizationPresentation}
         idleTimeSharePresentation={idleTimeSharePresentation}
         idleFuelSharePresentation={idleFuelSharePresentation}
+        idleFuelBurnRatePresentation={idleFuelBurnRatePresentation}
         historyRefreshSequence={historyRefreshSequence}
       />
 
