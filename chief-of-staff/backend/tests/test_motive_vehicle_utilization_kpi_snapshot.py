@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.database.database import Base
-from app.models.motive import MotiveSyncHistory, MotiveVehicleUtilizationRecord
+from app.models.motive import MotiveSyncHistory, MotiveVehicleRecord, MotiveVehicleUtilizationRecord
 from app.models.motive_kpi_snapshot import MotiveVehicleUtilizationKpiSnapshot
 from app.motive.vehicle_utilization_kpi_snapshot import (
     KPI_NAME,
@@ -41,6 +41,7 @@ def snapshot_session():
         tables=[
             Organization.__table__,
             MotiveSyncHistory.__table__,
+            MotiveVehicleRecord.__table__,
             MotiveVehicleUtilizationRecord.__table__,
             MotiveVehicleUtilizationKpiSnapshot.__table__,
         ],
