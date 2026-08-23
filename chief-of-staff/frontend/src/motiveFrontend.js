@@ -22,8 +22,29 @@ const STATUS_DETAILS = Object.freeze({
   checking: "Checking Motive Company API Key status.",
 });
 
+const UTILIZATION_KPI_TITLE = "Observed 7-Day Vehicle Utilization";
+
 function connectionStatus(payload) {
   return payload?.status?.connection_status || payload?.health?.details?.connection_status || payload?.health?.status || "not_configured";
+}
+
+function finiteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function nonNegativeInteger(value) {
+  return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function utilizationUnavailable(detail) {
+  return {
+    status: "unavailable",
+    title: UTILIZATION_KPI_TITLE,
+    value: "Unavailable",
+    coverage: null,
+    completeness: detail,
+    window: null,
+  };
 }
 
 export function motiveConnectorPresentation(payload, loading = false) {
@@ -59,6 +80,60 @@ export function motiveEvidenceStatus(payload, loading = false) {
     return { status: "Pending", detail: "Configured by administrator, verification pending. Production data ingestion remains deferred." };
   }
   return { status: "Not configured", detail: "Motive Company API Key verification only; production data ingestion remains deferred." };
+}
+
+export function motiveUtilizationKpiPresentation(payload, options = {}) {
+  const { loading = false, requestFailed = false } = options;
+
+  if (loading) {
+    return {
+      status: "loading",
+      title: UTILIZATION_KPI_TITLE,
+      value: "Loading…",
+      coverage: null,
+      completeness: "Loading utilization reporting…",
+      window: null,
+    };
+  }
+
+  if (requestFailed) return utilizationUnavailable("Utilization reporting temporarily unavailable.");
+  if (payload?.status !== "available_observed") {
+    return utilizationUnavailable("No certified utilization metric is available for the latest reconciled window.");
+  }
+
+  const valuePercent = finiteNumber(payload?.value_percent);
+  const metricValidVehicleDays = nonNegativeInteger(payload?.metric_valid_vehicle_days);
+  const expectedRequestedVehicleDays = nonNegativeInteger(payload?.expected_requested_vehicle_days);
+  const coveragePercent = finiteNumber(payload?.utilization_metric_coverage_percent);
+  const windowStart = typeof payload?.window_start === "string" ? payload.window_start : "";
+  const windowEnd = typeof payload?.window_end === "string" ? payload.window_end : "";
+  const requestTimezone = typeof payload?.request_timezone === "string" ? payload.request_timezone : "";
+
+  if (
+    valuePercent === null ||
+    metricValidVehicleDays === null ||
+    expectedRequestedVehicleDays === null ||
+    expectedRequestedVehicleDays <= 0 ||
+    coveragePercent === null ||
+    coveragePercent < 0 ||
+    coveragePercent > 100 ||
+    !windowStart ||
+    !windowEnd ||
+    !requestTimezone
+  ) {
+    return utilizationUnavailable("No certified utilization metric is available for the latest reconciled window.");
+  }
+
+  return {
+    status: "available_observed",
+    title: UTILIZATION_KPI_TITLE,
+    value: `${valuePercent.toFixed(2)}%`,
+    coverage: `${metricValidVehicleDays} / ${expectedRequestedVehicleDays} vehicle-days (${coveragePercent.toFixed(2)}%)`,
+    completeness: payload?.fleet_representative === true
+      ? "Full vehicle-day coverage"
+      : "Partial observation — not fleet representative",
+    window: `${windowStart} to ${windowEnd} · ${requestTimezone}`,
+  };
 }
 
 export function safeMotiveMetadata(payload) {
@@ -113,4 +188,5 @@ export function hasRenderedSecret(value) {
 
 export const motiveFrontendContract = Object.freeze({
   statusLabels: STATUS_LABELS,
+  utilizationKpiTitle: UTILIZATION_KPI_TITLE,
 });
