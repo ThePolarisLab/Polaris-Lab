@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  motiveIdleFuelBurnRateKpiPresentation,
   motiveIdleFuelShareKpiPresentation,
   motiveIdleTimeShareKpiPresentation,
   motiveUtilizationKpiPresentation,
@@ -45,6 +46,23 @@ const idleFuelPartialPayload = {
   idle_fuel_metric_coverage_percent: 43.48,
   fleet_representative: false,
   fuel_unit: "gallons",
+  unit_request_mode: "imperial",
+};
+
+const idleFuelBurnRatePartialPayload = {
+  status: "available_observed",
+  kpi: "observed_7_day_idle_fuel_burn_rate",
+  window_start: "2026-08-16",
+  window_end: "2026-08-22",
+  request_timezone: "America/Chicago",
+  value_gallons_per_idle_hour: 0.75,
+  expected_requested_vehicle_days: 161,
+  metric_valid_vehicle_days: 70,
+  idle_fuel_burn_rate_metric_coverage_percent: 43.48,
+  fleet_representative: false,
+  fuel_unit: "gallons",
+  idle_time_unit: "seconds",
+  rate_unit: "gallons_per_idle_hour",
   unit_request_mode: "imperial",
 };
 
@@ -201,7 +219,63 @@ test("idle-fuel presentation fails closed on malformed values, coverage, and uni
   }
 });
 
-test("dashboard places three independent read-only KPI observations between summary and attention sections", async () => {
+test("presents certified partial idle fuel burn rate with coverage and unit-bearing value", () => {
+  const presentation = motiveIdleFuelBurnRateKpiPresentation(idleFuelBurnRatePartialPayload);
+  assert.equal(presentation.status, "available_observed");
+  assert.equal(presentation.title, "Observed 7-Day Idle Fuel Burn Rate");
+  assert.equal(presentation.description, "Observed idle fuel volume per observed idle hour.");
+  assert.equal(presentation.value, "0.75 gal/idle-hr");
+  assert.equal(presentation.coverage, "70 / 161 vehicle-days (43.48%)");
+  assert.equal(presentation.completeness, "Partial observation — not fleet representative");
+  assert.equal(presentation.window, "2026-08-16 to 2026-08-22 · America/Chicago");
+});
+
+test("idle fuel burn rate preserves valid zero and full coverage", () => {
+  const presentation = motiveIdleFuelBurnRateKpiPresentation({
+    ...idleFuelBurnRatePartialPayload,
+    value_gallons_per_idle_hour: 0,
+    expected_requested_vehicle_days: 7,
+    metric_valid_vehicle_days: 7,
+    idle_fuel_burn_rate_metric_coverage_percent: 100,
+    fleet_representative: true,
+  });
+  assert.equal(presentation.status, "available_observed");
+  assert.equal(presentation.value, "0.00 gal/idle-hr");
+  assert.equal(presentation.coverage, "7 / 7 vehicle-days (100.00%)");
+  assert.equal(presentation.completeness, "Full vehicle-day coverage");
+});
+
+test("idle fuel burn rate unavailable and request failure never invent zero", () => {
+  const unavailable = motiveIdleFuelBurnRateKpiPresentation({ status: "unavailable", value_gallons_per_idle_hour: 0 });
+  assert.equal(unavailable.value, "Unavailable");
+  assert.equal(unavailable.coverage, null);
+  assert.match(unavailable.completeness, /No certified idle fuel burn-rate metric/i);
+
+  const failed = motiveIdleFuelBurnRateKpiPresentation(null, { requestFailed: true });
+  assert.equal(failed.value, "Unavailable");
+  assert.equal(failed.coverage, null);
+  assert.equal(failed.completeness, "Idle fuel burn-rate reporting temporarily unavailable.");
+});
+
+test("idle fuel burn-rate presentation fails closed on malformed values, coverage, and units", () => {
+  for (const payload of [
+    { ...idleFuelBurnRatePartialPayload, value_gallons_per_idle_hour: -1 },
+    { ...idleFuelBurnRatePartialPayload, idle_fuel_burn_rate_metric_coverage_percent: 101 },
+    { ...idleFuelBurnRatePartialPayload, expected_requested_vehicle_days: 0 },
+    { ...idleFuelBurnRatePartialPayload, metric_valid_vehicle_days: 162 },
+    { ...idleFuelBurnRatePartialPayload, request_timezone: "" },
+    { ...idleFuelBurnRatePartialPayload, fuel_unit: "liters" },
+    { ...idleFuelBurnRatePartialPayload, idle_time_unit: "hours" },
+    { ...idleFuelBurnRatePartialPayload, rate_unit: "liters_per_idle_hour" },
+    { ...idleFuelBurnRatePartialPayload, unit_request_mode: "metric" },
+  ]) {
+    const presentation = motiveIdleFuelBurnRateKpiPresentation(payload);
+    assert.equal(presentation.status, "unavailable");
+    assert.equal(presentation.value, "Unavailable");
+  }
+});
+
+test("dashboard places four independent read-only KPI observations between summary and attention sections", async () => {
   const source = await readFile(new URL("../src/components/ExecutiveDashboard.jsx", import.meta.url), "utf8");
   const summaryIndex = source.indexOf('className="summary-strip"');
   const cardIndex = source.indexOf("<FleetOperationsCard");
@@ -213,14 +287,16 @@ test("dashboard places three independent read-only KPI observations between summ
   assert.equal((source.match(/apiClient\.get\("\/api\/v1\/motive\/fleet\/vehicle-utilization-kpi"\)/g) || []).length, 1);
   assert.equal((source.match(/apiClient\.get\("\/api\/v1\/motive\/fleet\/vehicle-idle-time-share-kpi"\)/g) || []).length, 1);
   assert.equal((source.match(/apiClient\.get\("\/api\/v1\/motive\/fleet\/vehicle-idle-fuel-share-kpi"\)/g) || []).length, 1);
-  assert.match(source, /Promise\.allSettled\(\[loadDashboard\(\), loadUtilizationKpi\(\), loadIdleTimeShareKpi\(\), loadIdleFuelShareKpi\(\)\]\)/);
+  assert.equal((source.match(/apiClient\.get\("\/api\/v1\/motive\/fleet\/vehicle-idle-fuel-burn-rate-kpi"\)/g) || []).length, 1);
+  assert.match(source, /Promise\.allSettled\(\[loadDashboard\(\), loadUtilizationKpi\(\), loadIdleTimeShareKpi\(\), loadIdleFuelShareKpi\(\), loadIdleFuelBurnRateKpi\(\)\]\)/);
   assert.match(source, /utilizationKpiRequestFailed/);
   assert.match(source, /idleTimeShareKpiRequestFailed/);
   assert.match(source, /idleFuelShareKpiRequestFailed/);
+  assert.match(source, /idleFuelBurnRateKpiRequestFailed/);
   assert.doesNotMatch(source, /apiClient\.(?:post|delete)\("\/api\/v1\/motive\//);
 });
 
-test("one Fleet Operations card contains all three current observations and utilization-only history", async () => {
+test("one Fleet Operations card contains all four current observations and utilization-only history", async () => {
   const source = await readFile(new URL("../src/components/ExecutiveDashboard.jsx", import.meta.url), "utf8");
   const start = source.indexOf("function FleetOperationsCard");
   const end = source.indexOf("function AddActionForm");
@@ -231,15 +307,18 @@ test("one Fleet Operations card contains all three current observations and util
   assert.match(cardSource, /utilizationPresentation/);
   assert.match(cardSource, /idleTimeSharePresentation/);
   assert.match(cardSource, /idleFuelSharePresentation/);
+  assert.match(cardSource, /idleFuelBurnRatePresentation/);
   assert.match(cardSource, /MotiveUtilizationHistory/);
   assert.doesNotMatch(cardSource, /severity|critical|\bhigh\b|\bmedium\b|watch|\bgood\b|target|alert|sync|verify|benchmark|waste|avoidable|savings|cost/i);
   assert.doesNotMatch(source, /vehicle-idle-time-share-kpi\/history/);
   assert.doesNotMatch(source, /vehicle-idle-fuel-share-kpi\/history/);
+  assert.doesNotMatch(source, /vehicle-idle-fuel-burn-rate-kpi\/history/);
 });
 
-test("Fleet Operations CSS uses three neutral columns and stacks them on narrow screens", async () => {
+test("Fleet Operations CSS uses a neutral two-by-two grid and stacks it on narrow screens", async () => {
   const css = await readFile(new URL("../src/components/MotiveUtilizationKpi.css", import.meta.url), "utf8");
-  assert.match(css, /grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(css, /grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(css, /nth-child\(n \+ 3\)/);
   assert.match(css, /@media \(max-width: 760px\)/);
   assert.match(css, /grid-template-columns:\s*1fr/);
   assert.doesNotMatch(css, /#[fF]{2}0000|red|green|amber/i);
