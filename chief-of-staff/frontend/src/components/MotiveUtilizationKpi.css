@@ -9,19 +9,26 @@
 
 .fleet-current-observations {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0;
 }
 
 .fleet-kpi-observation {
   min-width: 0;
   padding-right: 28px;
+  padding-bottom: 24px;
 }
 
-.fleet-kpi-observation + .fleet-kpi-observation {
+.fleet-kpi-observation:nth-child(even) {
   padding-right: 0;
   padding-left: 28px;
   border-left: 1px solid #e4e8ef;
+}
+
+.fleet-kpi-observation:nth-child(n + 3) {
+  padding-top: 24px;
+  padding-bottom: 0;
+  border-top: 1px solid #e4e8ef;
 }
 
 .fleet-kpi-heading h3 {
@@ -216,16 +223,18 @@
     grid-template-columns: 1fr;
   }
 
-  .fleet-kpi-observation {
-    padding-right: 0;
+  .fleet-kpi-observation,
+  .fleet-kpi-observation:nth-child(even),
+  .fleet-kpi-observation:nth-child(n + 3) {
+    margin: 0;
+    padding: 0;
+    border: 0;
   }
 
   .fleet-kpi-observation + .fleet-kpi-observation {
     margin-top: 24px;
     padding-top: 24px;
-    padding-left: 0;
     border-top: 1px solid #e4e8ef;
-    border-left: 0;
   }
 
   .utilization-history-heading {
