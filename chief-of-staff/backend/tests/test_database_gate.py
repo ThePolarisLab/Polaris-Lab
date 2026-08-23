@@ -73,6 +73,7 @@ def test_clean_sqlite_upgrade_head_starts_and_has_expected_schema(tmp_path: Path
             'motive_vehicle_utilization',
             'motive_driver_utilization',
             'motive_ifta_summaries',
+            'motive_vehicle_utilization_kpi_snapshots',
             'ace_inbond_movements',
             'ace_inbond_events',
             'ace_import_runs',
@@ -122,6 +123,29 @@ def test_clean_sqlite_upgrade_head_starts_and_has_expected_schema(tmp_path: Path
         assert 'ix_motive_vehicle_utilization_motive_vehicle_id' in utilization_indexes
         assert 'ix_motive_vehicle_utilization_request_window_start' in utilization_indexes
         assert 'ix_motive_vehicle_utilization_request_window_end' in utilization_indexes
+        snapshot_columns = {{column['name'] for column in inspector.get_columns('motive_vehicle_utilization_kpi_snapshots')}}
+        assert {{
+            'organization_id',
+            'kpi',
+            'kpi_version',
+            'status',
+            'window_start',
+            'window_end',
+            'value_percent',
+            'selected_vehicle_count',
+            'expected_requested_vehicle_days',
+            'provider_rollup_vehicle_days',
+            'metric_valid_vehicle_days',
+            'missing_requested_vehicle_days',
+            'provider_rollup_coverage_percent',
+            'utilization_metric_coverage_percent',
+            'fleet_representative',
+            'source_history_id',
+        }}.issubset(snapshot_columns)
+        snapshot_constraints = {{constraint['name']: constraint['column_names'] for constraint in inspector.get_unique_constraints('motive_vehicle_utilization_kpi_snapshots')}}
+        assert snapshot_constraints['uq_motive_vehicle_util_kpi_snapshot_org_window'] == [
+            'organization_id', 'kpi', 'window_start', 'window_end',
+        ]
         """,
         db_url,
     )
@@ -193,6 +217,7 @@ def test_tenant_table_inventories_are_complete() -> None:
             'motive_vehicle_utilization',
             'motive_driver_utilization',
             'motive_ifta_summaries',
+            'motive_vehicle_utilization_kpi_snapshots',
         }
         ace_expected = {
             'ace_inbond_movements',
