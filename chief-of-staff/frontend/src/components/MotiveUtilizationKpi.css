@@ -4,39 +4,67 @@
 }
 
 .fleet-operations-heading h2 {
-  margin-bottom: 16px;
+  margin-bottom: 18px;
 }
 
-.utilization-kpi-content {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 28px;
+.fleet-current-observations {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
 }
 
-.utilization-kpi-value {
-  flex-shrink: 0;
+.fleet-kpi-observation {
+  min-width: 0;
+  padding-right: 28px;
+}
+
+.fleet-kpi-observation + .fleet-kpi-observation {
+  padding-right: 0;
+  padding-left: 28px;
+  border-left: 1px solid #e4e8ef;
+}
+
+.fleet-kpi-heading h3 {
+  margin: 0;
+  color: #263249;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.fleet-kpi-heading p {
+  max-width: 38rem;
+  margin: 7px 0 0;
+  color: #7c8699;
+  font-size: 0.83rem;
+  line-height: 1.45;
+}
+
+.fleet-kpi-content {
+  display: grid;
+  gap: 15px;
+  margin-top: 18px;
+}
+
+.fleet-kpi-value {
   color: #172033;
-  font-size: clamp(2.2rem, 5vw, 3.5rem);
+  font-size: clamp(2.2rem, 4vw, 3.25rem);
   line-height: 1;
   letter-spacing: -0.04em;
 }
 
-.utilization-kpi-meta {
+.fleet-kpi-meta {
   display: grid;
-  justify-items: end;
   gap: 9px;
   min-width: 0;
-  text-align: right;
 }
 
-.utilization-kpi-meta p {
+.fleet-kpi-meta p {
   margin: 0;
   color: #657087;
   line-height: 1.45;
 }
 
-.utilization-kpi-meta p > span {
+.fleet-kpi-meta p > span {
   display: block;
   margin-bottom: 3px;
   color: #929aac;
@@ -46,11 +74,13 @@
   text-transform: uppercase;
 }
 
-.utilization-kpi-meta p > strong {
+.fleet-kpi-meta p > strong {
   color: #344057;
 }
 
-.utilization-kpi-completeness {
+.fleet-kpi-completeness {
+  width: fit-content;
+  max-width: 100%;
   padding: 7px 10px;
   border: 1px solid #dfe4ed;
   border-radius: 999px;
@@ -60,22 +90,29 @@
   font-weight: 700;
 }
 
-.utilization-kpi-meta small {
+.fleet-kpi-meta small {
   color: #929aac;
+  line-height: 1.45;
 }
 
-@media (max-width: 680px) {
+@media (max-width: 760px) {
   .fleet-operations-card {
     padding: 20px;
   }
 
-  .utilization-kpi-content {
-    flex-direction: column;
-    gap: 18px;
+  .fleet-current-observations {
+    grid-template-columns: 1fr;
   }
 
-  .utilization-kpi-meta {
-    justify-items: start;
-    text-align: left;
+  .fleet-kpi-observation {
+    padding-right: 0;
+  }
+
+  .fleet-kpi-observation + .fleet-kpi-observation {
+    margin-top: 24px;
+    padding-top: 24px;
+    padding-left: 0;
+    border-top: 1px solid #e4e8ef;
+    border-left: 0;
   }
 }
