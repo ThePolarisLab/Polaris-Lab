@@ -422,6 +422,28 @@ def _persist_history_and_checkpoint(
     return True, all_success
 
 
+def _successful_history_id(session: Session, *, organization_id: str, started_at: datetime) -> int:
+    """Resolve this run's exact committed success-history row while its org lock is held."""
+    row = (
+        session.query(MotiveSyncHistory)
+        .filter(
+            MotiveSyncHistory.organization_id == organization_id,
+            MotiveSyncHistory.provider == "motive",
+            MotiveSyncHistory.provider_resource == RESOURCE,
+            MotiveSyncHistory.mode == RUN_MODE,
+            MotiveSyncHistory.status == "success",
+            MotiveSyncHistory.started_at == started_at,
+        )
+        .one_or_none()
+    )
+    if row is None or not isinstance(row.id, int):
+        raise MotiveVehicleUtilizationProductionIngestionError(
+            "production_snapshot_source_history_missing",
+            "Motive vehicle-utilization snapshot source history could not be resolved safely.",
+        )
+    return row.id
+
+
 def _process_lock(organization_id: str) -> threading.Lock:
     with _PROCESS_LOCKS_GUARD:
         return _PROCESS_LOCKS.setdefault(organization_id, threading.Lock())
@@ -531,6 +553,7 @@ def run_vehicle_utilization_production_ingestion(
     organization_id: str,
     organization_slug: str,
     lock_session_factory: Callable[[], Session] = SessionLocal,
+    snapshot_session_factory: Callable[[], Session] = SessionLocal,
     end_date: date | None = None,
 ) -> ProductionIngestionResult:
     """Run one bounded seven-day production ingestion attempt."""
@@ -715,6 +738,48 @@ def run_vehicle_utilization_production_ingestion(
             checkpoint_before=checkpoint_before,
             completed_through=windows[-1][1],
         )
+
+        if result_status == "success":
+            try:
+                source_history_id = _successful_history_id(
+                    session,
+                    organization_id=organization_id,
+                    started_at=started_at,
+                )
+                from app.motive.vehicle_utilization_kpi_snapshot_production import (
+                    persist_vehicle_utilization_kpi_snapshot_after_success,
+                )
+
+                persist_vehicle_utilization_kpi_snapshot_after_success(
+                    session_factory=snapshot_session_factory,
+                    organization_id=organization_id,
+                    organization_slug=organization_slug,
+                    selected_provider_vehicle_ids=tuple(provider_vehicle_ids),
+                    window_end=windows[-1][1],
+                    source_history_id=source_history_id,
+                )
+                logger.info(
+                    "MOTIVE VEHICLE UTILIZATION KPI SNAPSHOT PERSISTED",
+                    extra={
+                        "motive_operation": "production_kpi_snapshot",
+                        "organization_id": organization_id,
+                        "window_end": windows[-1][1].isoformat(),
+                    },
+                )
+            except Exception:
+                # Snapshot persistence is secondary analytics. The certified
+                # ingestion/history/checkpoint transaction has already committed
+                # and must remain successful. Do not expose or retry the raw
+                # snapshot exception and never make another provider request.
+                logger.error(
+                    "MOTIVE VEHICLE UTILIZATION KPI SNAPSHOT PERSISTENCE FAILED",
+                    extra={
+                        "motive_operation": "production_kpi_snapshot",
+                        "organization_id": organization_id,
+                        "window_end": windows[-1][1].isoformat(),
+                        "error_code": "snapshot_persistence_failed",
+                    },
+                )
 
         result = ProductionIngestionResult(
             status=result_status,
