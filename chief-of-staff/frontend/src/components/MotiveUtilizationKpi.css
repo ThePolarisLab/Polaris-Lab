@@ -9,26 +9,38 @@
 
 .fleet-current-observations {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 0;
 }
 
 .fleet-kpi-observation {
+  grid-column: span 2;
   min-width: 0;
   padding-right: 28px;
   padding-bottom: 24px;
 }
 
-.fleet-kpi-observation:nth-child(even) {
-  padding-right: 0;
+.fleet-kpi-observation:nth-child(2),
+.fleet-kpi-observation:nth-child(3) {
   padding-left: 28px;
   border-left: 1px solid #e4e8ef;
 }
 
-.fleet-kpi-observation:nth-child(n + 3) {
+.fleet-kpi-observation:nth-child(3) {
+  padding-right: 0;
+}
+
+.fleet-kpi-observation:nth-child(n + 4) {
+  grid-column: span 3;
   padding-top: 24px;
   padding-bottom: 0;
   border-top: 1px solid #e4e8ef;
+}
+
+.fleet-kpi-observation:nth-child(5) {
+  padding-right: 0;
+  padding-left: 28px;
+  border-left: 1px solid #e4e8ef;
 }
 
 .fleet-kpi-heading h3 {
@@ -224,8 +236,11 @@
   }
 
   .fleet-kpi-observation,
-  .fleet-kpi-observation:nth-child(even),
-  .fleet-kpi-observation:nth-child(n + 3) {
+  .fleet-kpi-observation:nth-child(2),
+  .fleet-kpi-observation:nth-child(3),
+  .fleet-kpi-observation:nth-child(n + 4),
+  .fleet-kpi-observation:nth-child(5) {
+    grid-column: auto;
     margin: 0;
     padding: 0;
     border: 0;
