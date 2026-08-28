@@ -45,3 +45,9 @@ services:
         sync: false
       - key: POLARIS_OUTLOOK_SCOPES
         value: openid profile email offline_access https://graph.microsoft.com/Mail.Read
+
+databases:
+  - name: polaris-staging-db
+    plan: free
+    databaseName: polaris
+    user: polaris
