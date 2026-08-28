@@ -16,9 +16,7 @@ services:
       - key: POLARIS_FRONTEND_URL
         sync: false
       - key: DATABASE_URL
-        fromDatabase:
-          name: polaris-staging-db
-          property: connectionString
+        sync: false
       - key: POLARIS_QBO_CLIENT_ID
         sync: false
       - key: POLARIS_QBO_CLIENT_SECRET
@@ -50,6 +48,6 @@ services:
 
 databases:
   - name: polaris-staging-db
-    plan: basic-256mb
+    plan: free
     databaseName: polaris
     user: polaris
