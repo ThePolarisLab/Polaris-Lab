@@ -4,11 +4,11 @@ Status date: 2026-08-28
 
 ## Goal
 
-Run the Polaris staging API on Render's free web service while using an external Neon PostgreSQL database, so the staging database no longer expires with Render's 30-day free PostgreSQL limit.
+Run the Polaris staging API on Render's free web service while using an external Neon PostgreSQL database, so the active staging database no longer expires with Render's 30-day free PostgreSQL limit.
 
 ## Render Blueprint
 
-`render.yaml` keeps `polaris-executive-api` on the Render free web-service plan and treats `DATABASE_URL` as an operator-supplied secret (`sync: false`). The Blueprint no longer manages a Render PostgreSQL database.
+`render.yaml` keeps `polaris-executive-api` on the Render free web-service plan and treats `DATABASE_URL` as an operator-supplied secret (`sync: false`). The existing expired `polaris-staging-db` remains declared on the free plan temporarily so the current grace-period recovery option is preserved while the API is cut over to Neon.
 
 ## Cutover Steps
 
@@ -25,6 +25,8 @@ Run the Polaris staging API on Render's free web service while using an external
 ## Old Render Database
 
 Do not delete the expired `polaris-staging-db` during the grace period. It can still be temporarily upgraded and exported if historical staging data is later required before Render's deletion deadline.
+
+After the grace period is no longer needed, remove the old Render database from the Blueprint in a separate reviewed change.
 
 ## Safety Notes
 
