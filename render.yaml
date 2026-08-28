@@ -50,6 +50,6 @@ services:
 
 databases:
   - name: polaris-staging-db
-    plan: free
+    plan: basic-256mb
     databaseName: polaris
     user: polaris
