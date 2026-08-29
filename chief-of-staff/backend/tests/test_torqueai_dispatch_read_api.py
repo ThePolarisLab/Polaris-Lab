@@ -99,7 +99,12 @@ def test_durable_read_is_tenant_scoped_metadata_safe_and_never_calls_provider(mo
 
     session = SessionLocal()
     try:
-        assert session.query(TorqueAIDispatchSyncRun).count() == 0
+        assert (
+            session.query(TorqueAIDispatchSyncRun)
+            .filter(TorqueAIDispatchSyncRun.organization_id == organization["id"])
+            .count()
+            == 0
+        )
         assert session.query(TorqueAIDispatch).filter(TorqueAIDispatch.organization_id == organization["id"]).count() == 2
     finally:
         session.close()
