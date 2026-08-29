@@ -2,11 +2,11 @@ name: Motive Vehicle Utilization Daily
 
 on:
   schedule:
-    # GitHub cron is UTC. The backend accepts a bounded morning
-    # America/Chicago window and the durable same-local-day dispatch claim
-    # prevents duplicate provider execution when delayed wakeups overlap it.
-    - cron: "17 11 * * *"
-    - cron: "17 12 * * *"
+    # GitHub cron is UTC. Hourly wakeups cover the bounded 6 AM-1 PM
+    # America/Chicago acceptance window across both CDT and CST. The durable
+    # same-local-day dispatch claim ensures only the first accepted wakeup can
+    # execute the provider path; delayed or duplicate wakeups become no-ops.
+    - cron: "17 11-19 * * *"
   workflow_dispatch:
 
 concurrency:

@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -90,23 +91,35 @@ def test_scheduler_and_ingestion_gates_fail_closed_before_orchestrator(monkeypat
     assert calls == []
 
 
-def test_local_time_gate_uses_iana_dst_rules_and_tolerates_delayed_wakeups():
+def test_local_time_gate_uses_iana_dst_rules_and_tolerates_multi_hour_delayed_wakeups():
     summer = datetime(2026, 7, 15, 11, 17, tzinfo=timezone.utc)
     winter = datetime(2026, 1, 15, 12, 17, tzinfo=timezone.utc)
-    delayed_summer = datetime(2026, 8, 21, 13, 10, tzinfo=timezone.utc)
-    latest_summer = datetime(2026, 7, 15, 14, 59, tzinfo=timezone.utc)
-    too_late_summer = datetime(2026, 7, 15, 15, 0, tzinfo=timezone.utc)
+    delayed_summer = datetime(2026, 8, 29, 16, 42, tzinfo=timezone.utc)
+    latest_summer = datetime(2026, 7, 15, 18, 59, tzinfo=timezone.utc)
+    too_late_summer = datetime(2026, 7, 15, 19, 0, tzinfo=timezone.utc)
     too_early_winter = datetime(2026, 1, 15, 11, 17, tzinfo=timezone.utc)
 
     assert scheduler_local_now(now=summer).hour == 6
     assert scheduler_local_now(now=winter).hour == 6
     assert inside_schedule_window(now=summer) is True
     assert inside_schedule_window(now=winter) is True
-    assert scheduler_local_now(now=delayed_summer).hour == 8
+    assert scheduler_local_now(now=delayed_summer).hour == 11
     assert inside_schedule_window(now=delayed_summer) is True
+    assert scheduler_local_now(now=latest_summer).hour == 13
     assert inside_schedule_window(now=latest_summer) is True
+    assert scheduler_local_now(now=too_late_summer).hour == 14
     assert inside_schedule_window(now=too_late_summer) is False
     assert inside_schedule_window(now=too_early_winter) is False
+
+
+def test_workflow_has_hourly_fallback_wakeups_across_cdt_and_cst_window():
+    repo_root = Path(__file__).resolve().parents[3]
+    workflow = (repo_root / ".github" / "workflows" / "motive-vehicle-utilization-daily.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'cron: "17 11-19 * * *"' in workflow
+    assert "cancel-in-progress: false" in workflow
 
 
 def test_controlled_validation_window_is_11am_through_11pm_local(monkeypatch):
@@ -148,7 +161,7 @@ def test_outside_window_is_zero_provider_call(monkeypatch):
 
     with SessionLocal() as session:
         result = run_scheduled_vehicle_utilization(
-            session, now=datetime(2026, 8, 19, 15, 0, tzinfo=timezone.utc)
+            session, now=datetime(2026, 8, 19, 19, 0, tzinfo=timezone.utc)
         )
     assert result.status == "outside_window"
     assert result.dispatch_claimed is False
