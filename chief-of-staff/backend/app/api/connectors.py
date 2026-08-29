@@ -1,6 +1,10 @@
 """Builder-facing Connector SDK endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import date
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.orm import Session
 
 from app.connectors.base import BaseConnector
 from app.connectors.models import ConnectorHealth, SyncResult
@@ -10,10 +14,18 @@ from app.connectors.outlook_credentials import OutlookCredentialStore
 from app.connectors.quickbooks import QuickBooksConnector
 from app.connectors.quickbooks_credentials import QuickBooksCredentialStore
 from app.connectors.registry import connector_registry
+from app.connectors.torqueai import TorqueAIConnector, TorqueAIConnectorError, TorqueAIDispatchPage
+from app.database.database import SessionLocal
+from app.organizations.models import Organization
 from app.security.dependencies import require_permission
 from app.security.models import AuthenticatedPrincipal, Permission
 
 router = APIRouter(prefix="/api/v1/connectors", tags=["connectors"])
+
+
+def _db() -> Session:
+    with SessionLocal() as session:
+        yield session
 
 
 def _tenant_connector(connector: BaseConnector, principal: AuthenticatedPrincipal) -> BaseConnector:
@@ -26,12 +38,45 @@ def _tenant_connector(connector: BaseConnector, principal: AuthenticatedPrincipa
     return connector
 
 
-@router.get("", response_model=list[ConnectorHealth])
+@router.get("")
 def list_connectors(
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
 ) -> list[ConnectorHealth]:
     """Return normalized health for every registered connector in the active tenant context."""
     return [_tenant_connector(connector, principal).health() for connector in connector_registry.list()]
+
+
+@router.get("/torqueai/certification")
+def certify_torqueai_dispatch_connection(
+    certification_date: date = Query(..., alias="date"),
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Run one operator-invoked, metadata-only TorqueAI dispatch certification GET."""
+    organization = session.get(Organization, principal.organization_id)
+    if organization is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "status": "failed",
+                "provider": "torqueai",
+                "error_code": "organization_scope_missing",
+                "secrets_exposed": False,
+            },
+        )
+
+    connector = TorqueAIConnector(organization_slug=organization.slug)
+    try:
+        page = connector.fetch_dispatches(
+            date_from=certification_date,
+            date_to=certification_date,
+            page=1,
+            limit=100,
+        )
+    except TorqueAIConnectorError as exc:
+        raise _torqueai_certification_http_error(exc) from exc
+
+    return _torqueai_certification_metadata(page)
 
 
 @router.get("/{name}", response_model=ConnectorHealth)
@@ -58,3 +103,78 @@ def sync_connector(
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return _tenant_connector(connector, principal).sync()
+
+
+def _torqueai_certification_metadata(page: TorqueAIDispatchPage) -> dict[str, Any]:
+    sample = page.data[0] if page.data else None
+    field_types = (
+        {str(key): _json_type_name(value) for key, value in sorted(sample.items())}
+        if sample is not None
+        else {}
+    )
+    return {
+        "status": "certified_response_observed",
+        "provider": "torqueai",
+        "operation": "external_dispatch_page",
+        "http_status": 200,
+        "request": {
+            "from": page.date_from.isoformat(),
+            "to": page.date_to.isoformat(),
+            "page": 1,
+            "limit": 100,
+        },
+        "total_count": page.total_count,
+        "page": page.page,
+        "items_per_page": page.items_per_page,
+        "rows_returned": len(page.data),
+        "pagination_required": page.page * page.items_per_page < page.total_count,
+        "sample_record_field_types": field_types,
+        "response_contract_valid": True,
+        "tenant_scope_validated": True,
+        "raw_dispatches_returned": False,
+        "secrets_exposed": False,
+    }
+
+
+def _json_type_name(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return "unknown"
+
+
+def _torqueai_certification_http_error(exc: TorqueAIConnectorError) -> HTTPException:
+    if exc.code == "organization_scope_mismatch":
+        response_status = status.HTTP_403_FORBIDDEN
+    elif exc.code in {
+        "organization_not_configured",
+        "token_missing",
+        "base_url_missing",
+        "invalid_base_url",
+    }:
+        response_status = status.HTTP_503_SERVICE_UNAVAILABLE
+    elif exc.code == "invalid_request":
+        response_status = status.HTTP_422_UNPROCESSABLE_ENTITY
+    else:
+        response_status = status.HTTP_502_BAD_GATEWAY
+
+    return HTTPException(
+        status_code=response_status,
+        detail={
+            "status": "failed",
+            "provider": "torqueai",
+            "error_code": exc.code,
+            "provider_http_status": exc.http_status,
+            "retryable": False,
+            "secrets_exposed": False,
+        },
+    )
