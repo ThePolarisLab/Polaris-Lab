@@ -46,6 +46,11 @@ from app.models.outlook import (  # noqa: F401
 )
 from app.models.relationship import KnowledgeRelationship  # noqa: F401
 from app.models.team_note import TeamNote  # noqa: F401
+from app.models.torqueai import (  # noqa: F401
+    TorqueAIDispatch,
+    TorqueAIDispatchSyncRun,
+    TorqueAIDispatchSyncState,
+)
 from app.models.truck import Truck  # noqa: F401
 from app.organizations.models import Organization  # noqa: F401
 
