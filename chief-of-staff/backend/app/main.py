@@ -20,6 +20,7 @@ from app.api.github_engine import router as github_engine_router
 from app.api.identity import router as identity_router
 from app.api.internal_ace import router as internal_ace_router
 from app.api.internal_motive import router as internal_motive_router
+from app.api.internal_torqueai import router as internal_torqueai_router
 from app.api.memory import router as memory_router
 from app.api.memory_search import router as memory_search_router
 from app.api.missions import router as missions_router
@@ -95,6 +96,7 @@ app.include_router(identity_router)
 app.include_router(auth_router)
 app.include_router(internal_ace_router)
 app.include_router(internal_motive_router)
+app.include_router(internal_torqueai_router)
 
 
 @app.get("/")

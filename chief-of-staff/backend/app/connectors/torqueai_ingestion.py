@@ -1,4 +1,4 @@
-"""Bounded manual TorqueAI dispatch ingestion into durable tenant-scoped storage."""
+"""Bounded TorqueAI dispatch ingestion into durable tenant-scoped storage."""
 
 from __future__ import annotations
 
@@ -66,11 +66,35 @@ def ingest_torqueai_dispatches(
     date_from: date,
     date_to: date,
     connector: TorqueAIConnector | None = None,
+    claimed_run_id: str | None = None,
 ) -> dict[str, Any]:
-    """Fetch all bounded pages, validate them, then atomically persist minimized rows."""
+    """Fetch all bounded pages, validate them, then atomically persist minimized rows.
+
+    The manual path leaves ``claimed_run_id`` unset and preserves the existing
+    one-run-per-request behavior. The scheduled path supplies a durable run that
+    was committed before provider access; this function updates that same row
+    rather than inserting a second run record.
+    """
     _validate_window(date_from, date_to)
-    run_id = f"torqueai-{uuid4().hex}"
-    started_at = datetime.now(timezone.utc)
+
+    run_record: TorqueAIDispatchSyncRun | None = None
+    if claimed_run_id is not None:
+        run_record = _load_claimed_run(
+            session,
+            run_id=claimed_run_id,
+            organization_id=organization_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        run_id = run_record.run_id
+        started_at = run_record.started_at
+    else:
+        run_id = f"torqueai-{uuid4().hex}"
+        started_at = datetime.now(timezone.utc)
+
+    # Provider construction deliberately happens after a scheduled claim has
+    # already been verified/loaded. The scheduler commits that claim before
+    # entering this function.
     provider = connector or TorqueAIConnector(organization_slug=organization_slug)
     pages_fetched = 0
     provider_total_count: int | None = None
@@ -137,6 +161,7 @@ def ingest_torqueai_dispatches(
             provider_total_count=provider_total_count,
             rows_validated=rows_validated,
             error_code=exc.code,
+            claimed_run_id=claimed_run_id,
         )
         raise TorqueAIDispatchIngestionError(
             exc.code,
@@ -155,6 +180,7 @@ def ingest_torqueai_dispatches(
             provider_total_count=provider_total_count,
             rows_validated=rows_validated,
             error_code=exc.code,
+            claimed_run_id=claimed_run_id,
         )
         raise
 
@@ -194,13 +220,29 @@ def ingest_torqueai_dispatches(
             updated += 1
 
         completed_at = datetime.now(timezone.utc)
-        session.add(
-            TorqueAIDispatchSyncRun(
-                run_id=run_id,
-                organization_id=organization_id,
-                requested_from=date_from,
-                requested_to=date_to,
-                page_size=TORQUEAI_INGEST_PAGE_SIZE,
+        if run_record is None:
+            session.add(
+                TorqueAIDispatchSyncRun(
+                    run_id=run_id,
+                    organization_id=organization_id,
+                    requested_from=date_from,
+                    requested_to=date_to,
+                    page_size=TORQUEAI_INGEST_PAGE_SIZE,
+                    status="success",
+                    pages_fetched=pages_fetched,
+                    provider_total_count=provider_total_count,
+                    rows_validated=rows_validated,
+                    rows_inserted=inserted,
+                    rows_updated=updated,
+                    rows_unchanged=unchanged,
+                    error_code=None,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                )
+            )
+        else:
+            _set_run_result(
+                run_record,
                 status="success",
                 pages_fetched=pages_fetched,
                 provider_total_count=provider_total_count,
@@ -209,10 +251,9 @@ def ingest_torqueai_dispatches(
                 rows_updated=updated,
                 rows_unchanged=unchanged,
                 error_code=None,
-                started_at=started_at,
                 completed_at=completed_at,
             )
-        )
+
         state = (
             session.query(TorqueAIDispatchSyncState)
             .filter(TorqueAIDispatchSyncState.organization_id == organization_id)
@@ -236,6 +277,20 @@ def ingest_torqueai_dispatches(
         session.commit()
     except SQLAlchemyError as exc:
         session.rollback()
+        if claimed_run_id is not None:
+            _record_failed_run(
+                session,
+                run_id=run_id,
+                organization_id=organization_id,
+                date_from=date_from,
+                date_to=date_to,
+                started_at=started_at,
+                pages_fetched=pages_fetched,
+                provider_total_count=provider_total_count,
+                rows_validated=rows_validated,
+                error_code="database_write_failed",
+                claimed_run_id=claimed_run_id,
+            )
         raise TorqueAIDispatchIngestionError(
             "database_write_failed",
             "TorqueAI dispatch persistence transaction failed",
@@ -267,6 +322,69 @@ def ingest_torqueai_dispatches(
         "raw_dispatches_returned": False,
         "secrets_exposed": False,
     }
+
+
+def _load_claimed_run(
+    session: Session,
+    *,
+    run_id: str,
+    organization_id: str,
+    date_from: date,
+    date_to: date,
+) -> TorqueAIDispatchSyncRun:
+    try:
+        row = (
+            session.query(TorqueAIDispatchSyncRun)
+            .filter(
+                TorqueAIDispatchSyncRun.run_id == run_id,
+                TorqueAIDispatchSyncRun.organization_id == organization_id,
+            )
+            .one_or_none()
+        )
+    except SQLAlchemyError as exc:
+        session.rollback()
+        raise TorqueAIDispatchIngestionError(
+            "database_write_failed",
+            "TorqueAI scheduled claim could not be loaded",
+        ) from exc
+
+    if (
+        row is None
+        or row.status != "claimed"
+        or row.trigger_mode != "scheduled"
+        or row.requested_from != date_from
+        or row.requested_to != date_to
+    ):
+        session.rollback()
+        raise TorqueAIDispatchIngestionError(
+            "invalid_scheduled_claim",
+            "TorqueAI scheduled ingestion claim is invalid",
+        )
+    return row
+
+
+def _set_run_result(
+    row: TorqueAIDispatchSyncRun,
+    *,
+    status: str,
+    pages_fetched: int,
+    provider_total_count: int | None,
+    rows_validated: int,
+    rows_inserted: int,
+    rows_updated: int,
+    rows_unchanged: int,
+    error_code: str | None,
+    completed_at: datetime,
+) -> None:
+    row.status = status
+    row.pages_fetched = pages_fetched
+    row.provider_total_count = provider_total_count
+    row.rows_validated = rows_validated
+    row.rows_inserted = rows_inserted
+    row.rows_updated = rows_updated
+    row.rows_unchanged = rows_unchanged
+    row.error_code = error_code
+    row.completed_at = completed_at
 
 
 def _validate_window(date_from: date, date_to: date) -> None:
@@ -321,10 +439,7 @@ def _normalize_dispatch(raw: dict[str, Any]) -> _NormalizedDispatch:
         "trailer_number": _optional_text(raw.get("trailerNumber"), 120),
         "loaded_miles": _optional_decimal(raw.get("loadedMiles")),
     }
-    fingerprint_payload = {
-        key: _canonical_value(value)
-        for key, value in approved.items()
-    }
+    fingerprint_payload = {key: _canonical_value(value) for key, value in approved.items()}
     fingerprint = hashlib.sha256(
         json.dumps(fingerprint_payload, ensure_ascii=False, separators=(",", ":"), sort_keys=False).encode("utf-8")
     ).hexdigest()
@@ -396,16 +511,45 @@ def _record_failed_run(
     provider_total_count: int | None,
     rows_validated: int,
     error_code: str,
+    claimed_run_id: str | None = None,
 ) -> None:
     session.rollback()
     try:
-        session.add(
-            TorqueAIDispatchSyncRun(
-                run_id=run_id,
-                organization_id=organization_id,
-                requested_from=date_from,
-                requested_to=date_to,
-                page_size=TORQUEAI_INGEST_PAGE_SIZE,
+        completed_at = datetime.now(timezone.utc)
+        if claimed_run_id is None:
+            session.add(
+                TorqueAIDispatchSyncRun(
+                    run_id=run_id,
+                    organization_id=organization_id,
+                    requested_from=date_from,
+                    requested_to=date_to,
+                    page_size=TORQUEAI_INGEST_PAGE_SIZE,
+                    status="failed",
+                    pages_fetched=pages_fetched,
+                    provider_total_count=provider_total_count,
+                    rows_validated=rows_validated,
+                    rows_inserted=0,
+                    rows_updated=0,
+                    rows_unchanged=0,
+                    error_code=error_code,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                )
+            )
+        else:
+            row = (
+                session.query(TorqueAIDispatchSyncRun)
+                .filter(
+                    TorqueAIDispatchSyncRun.run_id == claimed_run_id,
+                    TorqueAIDispatchSyncRun.organization_id == organization_id,
+                )
+                .one_or_none()
+            )
+            if row is None:
+                session.rollback()
+                return
+            _set_run_result(
+                row,
                 status="failed",
                 pages_fetched=pages_fetched,
                 provider_total_count=provider_total_count,
@@ -414,10 +558,8 @@ def _record_failed_run(
                 rows_updated=0,
                 rows_unchanged=0,
                 error_code=error_code,
-                started_at=started_at,
-                completed_at=datetime.now(timezone.utc),
+                completed_at=completed_at,
             )
-        )
         session.commit()
     except SQLAlchemyError:
         session.rollback()
