@@ -58,7 +58,7 @@ def _signed_headers(*, body: bytes = b"") -> dict[str, str]:
     }
 
 
-def test_config_diagnostic_is_hmac_only_bodyless_and_zero_provider_or_scheduler_calls(
+def test_config_diagnostic_is_hmac_only_bodyless_and_zero_provider_scheduler_or_database_calls(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -68,8 +68,12 @@ def test_config_diagnostic_is_hmac_only_bodyless_and_zero_provider_or_scheduler_
     def scheduler_must_not_run(*_args, **_kwargs):
         raise AssertionError("scheduler must not be called by configuration diagnostic")
 
+    def database_must_not_run(*_args, **_kwargs):
+        raise AssertionError("database must not be opened by configuration diagnostic")
+
     monkeypatch.setattr(TorqueAIConnector, "fetch_dispatches", provider_must_not_run)
     monkeypatch.setattr(internal_torqueai, "run_scheduled_torqueai_dispatch_sync", scheduler_must_not_run)
+    monkeypatch.setattr(internal_torqueai, "SessionLocal", database_must_not_run)
     monkeypatch.setenv(TRIGGER_SECRET_ENV, TRIGGER_SECRET)
     monkeypatch.setenv(torqueai.TORQUEAI_API_TOKEN_ENV, "tk_clean_secret")
     monkeypatch.setenv(torqueai.TORQUEAI_BASE_URL_ENV, "https://morlogistics.kordovatek.com")
