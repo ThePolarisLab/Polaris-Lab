@@ -2,6 +2,8 @@ name: TorqueAI Dispatch Sync Certification
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "17 * * * *"
 
 concurrency:
   group: torqueai-dispatch-sync-production

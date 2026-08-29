@@ -264,14 +264,16 @@ def test_failed_provider_attempt_consumes_slot_and_is_not_retried(
         assert session.query(TorqueAIDispatchSyncState).count() == 0
 
 
-def test_stage_one_workflow_is_manual_only_and_has_no_provider_secrets() -> None:
+def test_stage_two_workflow_enables_hourly_schedule_and_has_no_provider_secrets() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     workflow = (repo_root / ".github" / "workflows" / "torqueai-dispatch-sync.yml").read_text(
         encoding="utf-8"
     )
 
     assert "workflow_dispatch:" in workflow
-    assert "schedule:" not in workflow
+    assert "schedule:" in workflow
+    assert '- cron: "17 * * * *"' in workflow
+    assert workflow.count("cron:") == 1
     assert "torqueai-dispatch-sync-production" in workflow
     assert "POLARIS_TORQUEAI_SYNC_TRIGGER_SECRET" in workflow
     assert "POLARIS_PRODUCTION_API_URL" in workflow
