@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.database.database import SessionLocal
 from app.motive.vehicle_driving_fuel_burn_rate_kpi import vehicle_driving_fuel_burn_rate_kpi
+from app.motive.vehicle_fuel_burn_rate_kpi import vehicle_fuel_burn_rate_kpi
 from app.motive.vehicle_idle_fuel_burn_rate_kpi import vehicle_idle_fuel_burn_rate_kpi
 from app.motive.vehicle_idle_fuel_share_kpi import vehicle_idle_fuel_share_kpi
 from app.motive.vehicle_idle_time_share_kpi import vehicle_idle_time_share_kpi
@@ -87,3 +88,12 @@ def read_vehicle_driving_fuel_burn_rate_kpi(
 ) -> dict[str, Any]:
     """Read observed driving-fuel burn rate from durable production rows only."""
     return vehicle_driving_fuel_burn_rate_kpi(session, principal.organization_id)
+
+
+@router.get("/vehicle-fuel-burn-rate-kpi")
+def read_vehicle_fuel_burn_rate_kpi(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Read blended observed fuel burn rate from durable production rows only."""
+    return vehicle_fuel_burn_rate_kpi(session, principal.organization_id)
