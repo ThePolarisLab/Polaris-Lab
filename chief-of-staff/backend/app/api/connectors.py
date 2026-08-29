@@ -38,7 +38,7 @@ def _tenant_connector(connector: BaseConnector, principal: AuthenticatedPrincipa
     return connector
 
 
-@router.get("")
+@router.get("", response_model=list[ConnectorHealth])
 def list_connectors(
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
 ) -> list[ConnectorHealth]:
