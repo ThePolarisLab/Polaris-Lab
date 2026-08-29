@@ -62,7 +62,15 @@ class TorqueAIDispatchSyncRun(Base):
     """Sanitized evidence for one explicit TorqueAI dispatch ingestion attempt."""
 
     __tablename__ = "torqueai_dispatch_sync_runs"
-    __table_args__ = (UniqueConstraint("run_id", name="uq_torqueai_dispatch_sync_run_id"),)
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_torqueai_dispatch_sync_run_id"),
+        UniqueConstraint(
+            "organization_id",
+            "trigger_mode",
+            "trigger_slot",
+            name="uq_torqueai_dispatch_sync_scheduled_slot",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     run_id: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -76,6 +84,8 @@ class TorqueAIDispatchSyncRun(Base):
     requested_to: Mapped[date] = mapped_column(Date, nullable=False)
     page_size: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    trigger_mode: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    trigger_slot: Mapped[str | None] = mapped_column(String(40), nullable=True)
     pages_fetched: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     provider_total_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     rows_validated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
