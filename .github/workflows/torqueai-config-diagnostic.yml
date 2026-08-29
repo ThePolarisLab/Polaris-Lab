@@ -1,0 +1,109 @@
+name: TorqueAI Configuration Diagnostic
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: torqueai-config-diagnostic
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    name: Check TorqueAI configuration shape
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      POLARIS_PRODUCTION_API_URL: ${{ vars.POLARIS_PRODUCTION_API_URL }}
+      POLARIS_TORQUEAI_SYNC_TRIGGER_SECRET: ${{ secrets.POLARIS_TORQUEAI_SYNC_TRIGGER_SECRET }}
+    steps:
+      - name: Trigger signed zero-provider-call configuration diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${POLARIS_PRODUCTION_API_URL}" ] || [ -z "${POLARIS_TORQUEAI_SYNC_TRIGGER_SECRET}" ]; then
+            echo "TorqueAI configuration diagnostic trigger is not configured; no request sent."
+            exit 1
+          fi
+
+          timestamp="$(date +%s)"
+          path="/api/v1/internal/torqueai/config-diagnostic"
+          base_url="${POLARIS_PRODUCTION_API_URL%/}"
+          trigger_url="${base_url}${path}"
+          signature="$(
+            CANONICAL_METHOD="POST" \
+            CANONICAL_PATH="${path}" \
+            CANONICAL_TIMESTAMP="${timestamp}" \
+            POLARIS_TORQUEAI_SYNC_TRIGGER_SECRET="${POLARIS_TORQUEAI_SYNC_TRIGGER_SECRET}" \
+            python -c 'import hashlib,hmac,os; body=hashlib.sha256(b"").hexdigest(); canonical="\n".join([os.environ["CANONICAL_METHOD"], os.environ["CANONICAL_PATH"], os.environ["CANONICAL_TIMESTAMP"], body]); print(hmac.new(os.environ["POLARIS_TORQUEAI_SYNC_TRIGGER_SECRET"].encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest())'
+          )"
+
+          http_status="$(
+            curl --silent --show-error \
+              --output response.json \
+              --write-out "%{http_code}" \
+              --connect-timeout 30 \
+              --max-time 60 \
+              --request POST \
+              --header "X-Polaris-Job-Timestamp: ${timestamp}" \
+              --header "X-Polaris-Job-Signature: ${signature}" \
+              "${trigger_url}"
+          )"
+
+          HTTP_STATUS="${http_status}" python - <<'PY'
+          import json
+          import os
+
+          allowed_keys = (
+              "status",
+              "provider",
+              "token_configured",
+              "token_has_bearer_prefix",
+              "token_has_wrapping_quotes",
+              "token_has_outer_whitespace",
+              "token_has_line_break",
+              "base_url_configured",
+              "base_url_https_origin",
+              "provider_called",
+              "scheduler_called",
+              "dispatch_claimed",
+              "raw_dispatches_returned",
+              "secrets_exposed",
+          )
+
+          try:
+              with open("response.json", "r", encoding="utf-8") as handle:
+                  response_payload = json.load(handle)
+          except (OSError, ValueError, TypeError):
+              response_payload = {}
+
+          payload = response_payload if isinstance(response_payload, dict) else {}
+          detail = payload.get("detail")
+          if isinstance(detail, dict):
+              payload = detail
+
+          sanitized = {key: payload.get(key) for key in allowed_keys if key in payload}
+          http_status = int(os.environ["HTTP_STATUS"])
+          print(f"TorqueAI config diagnostic HTTP: {http_status}")
+          print(json.dumps(sanitized, sort_keys=True))
+
+          if not 200 <= http_status < 300:
+              raise SystemExit(
+                  f"TorqueAI configuration diagnostic completed with non-success HTTP {http_status}. No retry will be attempted."
+              )
+          if payload.get("status") != "ok" or payload.get("provider") != "torqueai":
+              raise SystemExit("TorqueAI configuration diagnostic did not produce the expected status.")
+          if payload.get("provider_called") is not False:
+              raise SystemExit("TorqueAI configuration diagnostic safety contract failed.")
+          if payload.get("scheduler_called") is not False:
+              raise SystemExit("TorqueAI configuration diagnostic safety contract failed.")
+          if payload.get("dispatch_claimed") is not False:
+              raise SystemExit("TorqueAI configuration diagnostic safety contract failed.")
+          if payload.get("raw_dispatches_returned") is not False:
+              raise SystemExit("TorqueAI configuration diagnostic safety contract failed.")
+          if payload.get("secrets_exposed") is not False:
+              raise SystemExit("TorqueAI configuration diagnostic safety contract failed.")
+          PY
