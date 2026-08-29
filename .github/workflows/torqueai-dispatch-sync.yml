@@ -53,17 +53,9 @@ jobs:
               "${trigger_url}"
           )"
 
-          if [ "${http_status}" -lt 200 ] || [ "${http_status}" -ge 300 ]; then
-            echo "TorqueAI scheduled-sync trigger completed with non-success HTTP ${http_status}. No retry will be attempted."
-            exit 1
-          fi
-
           HTTP_STATUS="${http_status}" python - <<'PY'
           import json
           import os
-
-          with open("response.json", "r", encoding="utf-8") as handle:
-              payload = json.load(handle)
 
           allowed_keys = (
               "status",
@@ -84,10 +76,27 @@ jobs:
               "raw_dispatches_returned",
               "secrets_exposed",
           )
+
+          try:
+              with open("response.json", "r", encoding="utf-8") as handle:
+                  response_payload = json.load(handle)
+          except (OSError, ValueError, TypeError):
+              response_payload = {}
+
+          payload = response_payload if isinstance(response_payload, dict) else {}
+          detail = payload.get("detail")
+          if isinstance(detail, dict):
+              payload = detail
+
           sanitized = {key: payload.get(key) for key in allowed_keys if key in payload}
-          print(f"TorqueAI scheduled-sync HTTP: {os.environ['HTTP_STATUS']}")
+          http_status = int(os.environ["HTTP_STATUS"])
+          print(f"TorqueAI scheduled-sync HTTP: {http_status}")
           print(json.dumps(sanitized, sort_keys=True))
 
+          if not 200 <= http_status < 300:
+              raise SystemExit(
+                  f"TorqueAI scheduled-sync trigger completed with non-success HTTP {http_status}. No retry will be attempted."
+              )
           if payload.get("status") not in {"executed", "already_claimed"}:
               raise SystemExit("TorqueAI scheduled-sync did not produce an accepted execution status.")
           if payload.get("raw_dispatches_returned") is not False:
