@@ -32,7 +32,7 @@ CONTROLLED_VALIDATION_WINDOW_ENABLED_ENV_VAR = (
 SCHEDULER_DISPATCH_RESOURCE = "vehicle_utilization_scheduler_dispatch"
 SCHEDULER_MODE = "scheduled_production_ingestion"
 SCHEDULE_START_HOUR = 6
-SCHEDULE_END_HOUR = 9
+SCHEDULE_END_HOUR = 13
 CONTROLLED_VALIDATION_START_HOUR = 11
 CONTROLLED_VALIDATION_END_HOUR = 23
 
@@ -119,10 +119,10 @@ def inside_schedule_window(*, now: datetime | None = None) -> bool:
     local_now = scheduler_local_now(now=now)
     if controlled_validation_window_enabled():
         return CONTROLLED_VALIDATION_START_HOUR <= local_now.hour <= CONTROLLED_VALIDATION_END_HOUR
-    # GitHub scheduled workflows can start later than their nominal cron minute.
-    # Keep a bounded morning acceptance window and rely on the durable same-local-day
-    # dispatch claim to ensure that delayed or duplicate wakeups cannot execute the
-    # provider path more than once.
+    # GitHub scheduled workflows can start hours later than their nominal cron minute.
+    # Keep a bounded daytime acceptance window and rely on the durable same-local-day
+    # dispatch claim to ensure delayed or duplicate wakeups cannot execute the provider
+    # path more than once.
     return SCHEDULE_START_HOUR <= local_now.hour <= SCHEDULE_END_HOUR
 
 
