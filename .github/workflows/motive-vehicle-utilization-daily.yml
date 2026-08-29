@@ -76,4 +76,32 @@ jobs:
           error_code = payload.get("error_code")
           if error_code:
               print(f"Scheduler error code: {error_code}")
+
+          production_result = payload.get("production_result")
+          if isinstance(production_result, dict):
+              allowed_production_fields = (
+                  "status",
+                  "horizon_days",
+                  "selected_vehicle_count",
+                  "windows_attempted",
+                  "windows_completed",
+                  "windows_failed",
+                  "provider_calls_attempted",
+                  "provider_calls_completed",
+                  "rollups_returned",
+                  "missing_requested_vehicle_count",
+                  "records_inserted",
+                  "records_unchanged",
+                  "records_updated",
+                  "reconciled_fields_count",
+                  "checkpoint_advanced",
+                  "sync_history_written",
+                  "secrets_exposed",
+              )
+              sanitized_production_result = {
+                  key: production_result.get(key)
+                  for key in allowed_production_fields
+                  if key in production_result
+              }
+              print("Production result: " + json.dumps(sanitized_production_result, sort_keys=True))
           PY
