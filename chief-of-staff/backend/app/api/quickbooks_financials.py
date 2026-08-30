@@ -194,7 +194,8 @@ def executive_summary(principal: AuthenticatedPrincipal = Depends(require_permis
     bs_metrics = _report_metrics(balance_sheet.payload)
     header = profit_loss.payload.get("Header", {})
     revenue = _first(pl_values, "total income", "total revenue", "income")
-    gross_profit = _first(pl_values, "gross profit")
+    gross_profit_metric = get_profit_loss_gross_profit_metric(profit_loss.payload)
+    gross_profit = _metric_value(gross_profit_metric)
     expenses = _first(pl_values, "total expenses", "expenses")
     net_income = _first(pl_values, "net income", "net operating income", "profit")
     cash = _first(bs_values, "total bank accounts", "total cash and cash equivalent", "cash and cash equivalents", "bank accounts")
@@ -221,7 +222,7 @@ def executive_summary(principal: AuthenticatedPrincipal = Depends(require_permis
         "metrics_metadata": {
             "revenue": _metric_metadata(_first_report_metric(pl_metrics, "total income", "total revenue", "income"), profit_loss, "ProfitAndLoss"),
             "expenses": _metric_metadata(_first_report_metric(pl_metrics, "total expenses", "expenses"), profit_loss, "ProfitAndLoss"),
-            "gross_profit": _metric_metadata(_first_report_metric(pl_metrics, "gross profit"), profit_loss, "ProfitAndLoss"),
+            "gross_profit": _metric_metadata(gross_profit_metric, profit_loss, "ProfitAndLoss"),
             "net_income": _metric_metadata(_first_report_metric(pl_metrics, "net income", "net operating income", "profit"), profit_loss, "ProfitAndLoss"),
             "cash": _metric_metadata(cash_metric, balance_sheet, "BalanceSheet", value_override=cash),
             "accounts_receivable": _metric_metadata(accounts_receivable_metric, balance_sheet, "BalanceSheet"),
@@ -241,6 +242,14 @@ def get_balance_sheet_metric(report_payload: dict[str, Any], label: str) -> Repo
         if _metric_total_key(metric.label) == target and metric.normalized_label.startswith("total "):
             return metric
     return None
+
+
+def get_profit_loss_gross_profit_metric(report_payload: dict[str, Any]) -> ReportMetric | None:
+    """Return QuickBooks-authored Gross Profit without recalculating it in Polaris."""
+    metric = _first_report_metric(_report_metrics(report_payload), "gross profit")
+    if metric is not None:
+        return metric
+    return _report_group_metric(report_payload, "GrossProfit")
 
 
 def _report_values(payload: dict[str, Any]) -> dict[str, str]:
@@ -287,6 +296,40 @@ def _first_report_metric(metrics: list[ReportMetric], *names: str) -> ReportMetr
             if metric.normalized_label == name:
                 return metric
     return None
+
+
+def _report_group_metric(payload: dict[str, Any], group: str) -> ReportMetric | None:
+    target = _normalize_report_group(group)
+    found: ReportMetric | None = None
+
+    def visit(node: Any) -> None:
+        nonlocal found
+        if found is not None:
+            return
+        if isinstance(node, dict):
+            if _normalize_report_group(node.get("group")) == target:
+                summary = node.get("Summary")
+                summary_columns = summary.get("ColData") if isinstance(summary, dict) else None
+                columns = summary_columns or node.get("ColData")
+                if isinstance(columns, list) and columns:
+                    raw_label = str((columns[0] or {}).get("value") or "").strip() or group
+                    for column in reversed(columns[1:]):
+                        amount = _decimal_text((column or {}).get("value"))
+                        if amount is not None:
+                            found = ReportMetric(label=raw_label, normalized_label=raw_label.lower(), value=amount)
+                            return
+            for value in node.values():
+                visit(value)
+        elif isinstance(node, list):
+            for item in node:
+                visit(item)
+
+    visit(payload.get("Rows", {}))
+    return found
+
+
+def _normalize_report_group(value: Any) -> str:
+    return "".join(character for character in str(value or "").lower() if character.isalnum())
 
 
 def _metric_value(metric: ReportMetric | None) -> str | None:
