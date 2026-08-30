@@ -2,8 +2,8 @@
 
 Status: Current handoff for continuation in a new engineering conversation
 Repository: `ThePolarisLab/Polaris-Lab`
-Main SHA at handoff: `8d46212ba8b13a7f97cb7dc1b8974c23b9d625db`
-Latest merged PR: #252 `ci(torqueai): enable hourly dispatch sync`
+Main SHA at handoff: `4fc76a5ab085390cdecd9b78f7911e4ea24c0e9f`
+Latest merged PR: #253 `docs(kb): record TorqueAI production sync milestone for 2026-08-29`
 
 ## Working rules
 
@@ -190,6 +190,7 @@ Reached:
   - 30 unchanged;
   - tenant scope validated;
   - no raw dispatch payload or secrets exposed.
+- PR #253 merged the production-sync milestone documentation after the first natural Stage 2 execution was proven.
 
 Immediate remaining check:
 - observe continued hourly schedule reliability over a short period; the first natural Stage 2 execution is already proven.
