@@ -64,6 +64,22 @@ After configuration correction, Stage 1 production certification succeeded for t
 
 That evidence satisfied the explicit gate for enabling Stage 2 hourly scheduling.
 
+The first natural post-merge Stage 2 schedule also succeeded on exact merge SHA `8d46212ba8b13a7f97cb7dc1b8974c23b9d625db`:
+
+- workflow run #8 / run ID `33283222863`;
+- created 2026-08-30 00:24 UTC;
+- HTTP 200;
+- `status: executed`;
+- trigger slot `2026-08-30T00:00:00Z`;
+- 31 rows validated;
+- 0 inserted;
+- 1 updated;
+- 30 unchanged;
+- tenant scope validated;
+- no raw dispatch payload or secrets exposed.
+
+This proves the first unattended Stage 2 execution. Continued hourly schedule reliability remains an observation gate rather than an activation blocker.
+
 ## Completed Work
 
 - Merged durable TorqueAI dispatch ingestion, read API, and Dispatch dashboard gates.
@@ -71,10 +87,11 @@ That evidence satisfied the explicit gate for enabling Stage 2 hourly scheduling
 - Added safe sanitized certification/configuration diagnostics during production troubleshooting.
 - Completed successful controlled production scheduler certification.
 - Merged PR #252 enabling hourly `17 * * * *` scheduling while retaining manual `workflow_dispatch`.
+- Confirmed the first natural post-merge hourly Stage 2 execution succeeded on the exact merged `main` SHA.
 
 ## Remaining Gates
 
-- Observe the first unattended hourly production cycles and confirm expected `executed` / `already_claimed` behavior without duplicate provider calls.
+- Observe continued hourly schedule reliability over a short period and confirm expected `executed` / `already_claimed` behavior without duplicate provider calls; the first natural Stage 2 execution is already proven.
 - Monitor sanitized sync evidence for provider/authentication failures and pagination bounds.
 - Keep broader operational interpretation, alerts, Daily Brief semantics, billing/financial enrichment, raw stop/address/location persistence, and provider retry policy as separately reviewed future gates.
 
