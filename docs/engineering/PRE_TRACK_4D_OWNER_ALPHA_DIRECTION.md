@@ -44,9 +44,10 @@ Current position:
 - production connector certified;
 - durable dispatch ingestion implemented;
 - durable read API and Dispatch dashboard implemented;
-- successful production certification on 2026-08-29 validated 31 provider rows: 23 inserted, 1 updated, 7 unchanged;
+- successful controlled production certification on 2026-08-29 validated 31 provider rows: 23 inserted, 1 updated, 7 unchanged;
 - Stage 2 hourly schedule (`17 * * * *`) merged in PR #252;
-- first natural post-merge scheduled execution and short-term schedule reliability still require observation.
+- first natural post-merge scheduled run succeeded on exact merge SHA `8d46212ba8b13a7f97cb7dc1b8974c23b9d625db` (workflow run #8 / run ID `33283222863`): HTTP 200, `status=executed`, 31 rows validated, 0 inserted, 1 updated, 30 unchanged, no raw dispatches or secrets exposed;
+- continued short-term hourly reliability should still be observed before treating the scheduler as hands-off operational infrastructure.
 
 ### 2. Motive - Fleet operations
 
@@ -189,7 +190,7 @@ Before declaring Owner Alpha ready, focus only on the following gates.
 
 ### Gate 1 - Stabilize existing trusted sources
 
-- observe the natural TorqueAI hourly schedule after Stage 2 merge and establish short-term reliability;
+- observe continued TorqueAI hourly schedule reliability after the successful first natural Stage 2 run;
 - confirm Motive daily ingestion remains healthy;
 - confirm ACE daily feed remains healthy;
 - complete the important QuickBooks reconciliation needed to avoid misleading executive financial information;
