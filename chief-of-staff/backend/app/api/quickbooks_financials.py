@@ -245,11 +245,33 @@ def get_balance_sheet_metric(report_payload: dict[str, Any], label: str) -> Repo
 
 
 def get_profit_loss_gross_profit_metric(report_payload: dict[str, Any]) -> ReportMetric | None:
-    """Return QuickBooks-authored Gross Profit without recalculating it in Polaris."""
-    metric = _first_report_metric(_report_metrics(report_payload), "gross profit")
+    """Return Gross Profit from QuickBooks evidence, deriving only from QBO totals when omitted."""
+    metrics = _report_metrics(report_payload)
+    metric = _first_report_metric(metrics, "gross profit")
     if metric is not None:
         return metric
-    return _report_group_metric(report_payload, "GrossProfit")
+
+    metric = _report_group_metric(report_payload, "GrossProfit")
+    if metric is not None:
+        return metric
+
+    income_metric = _first_report_metric(metrics, "total income", "total revenue", "income")
+    cogs_metric = _first_report_metric(metrics, "total cost of goods sold", "cost of goods sold")
+    if cogs_metric is None:
+        cogs_metric = _report_group_metric(report_payload, "COGS")
+    if income_metric is None or cogs_metric is None:
+        return None
+
+    try:
+        derived_value = Decimal(income_metric.value) - Decimal(cogs_metric.value)
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+    return ReportMetric(
+        label="Derived: QuickBooks Total Income - Cost of Goods Sold",
+        normalized_label="gross profit",
+        value=str(derived_value),
+    )
 
 
 def _report_values(payload: dict[str, Any]) -> dict[str, str]:
