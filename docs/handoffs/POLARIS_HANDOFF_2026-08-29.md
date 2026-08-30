@@ -168,7 +168,7 @@ Reached:
 - read API implemented;
 - Dispatch dashboard implemented;
 - durable hourly claim/idempotency implemented;
-- successful production certification on 2026-08-29 for the 21:00 UTC slot:
+- controlled production certification on 2026-08-29 for the 21:00 UTC slot succeeded:
   - HTTP 200;
   - status `executed`;
   - 1 page fetched;
@@ -177,10 +177,22 @@ Reached:
   - 1 updated;
   - 7 unchanged;
   - no raw dispatch payload or secrets exposed;
-- PR #252 merged Stage 2 schedule `17 * * * *` while retaining manual `workflow_dispatch` and no application-level provider retry.
+- PR #252 merged Stage 2 schedule `17 * * * *` while retaining manual `workflow_dispatch` and no application-level provider retry;
+- first natural post-merge schedule also succeeded on exact merge SHA `8d46212ba8b13a7f97cb7dc1b8974c23b9d625db`:
+  - workflow run #8 / run ID `33283222863`;
+  - created 2026-08-30 00:24 UTC;
+  - HTTP 200;
+  - status `executed`;
+  - trigger slot `2026-08-30T00:00:00Z`;
+  - 31 rows validated;
+  - 0 inserted;
+  - 1 updated;
+  - 30 unchanged;
+  - tenant scope validated;
+  - no raw dispatch payload or secrets exposed.
 
 Immediate remaining check:
-- observe the first natural post-merge hourly scheduled run and a short reliability period.
+- observe continued hourly schedule reliability over a short period; the first natural Stage 2 execution is already proven.
 
 Do not rerun previously consumed hourly slots.
 
@@ -256,7 +268,7 @@ Decision remains open until the pilot and official API feasibility are tested.
 ## Pre-Track 4D gates
 
 1. Stabilize existing five operational sources:
-   - TorqueAI hourly schedule observation;
+   - continued TorqueAI hourly schedule reliability after the first successful natural Stage 2 run;
    - Motive daily scheduler health;
    - ACE daily feed health;
    - QuickBooks critical reconciliation;
