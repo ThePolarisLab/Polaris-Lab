@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from app.api.quickbooks_financials import _first, _first_report_metric, _report_metrics, _report_values, get_balance_sheet_metric
+from app.api.quickbooks_financials import (
+    _first,
+    _first_report_metric,
+    _report_metrics,
+    _report_values,
+    get_balance_sheet_metric,
+    get_profit_loss_gross_profit_metric,
+)
 
 
 def _col(label: str, value: str = "") -> list[dict[str, str]]:
@@ -28,6 +35,47 @@ def _payload(rows: list[dict]) -> dict:
         },
         "Rows": {"Row": rows},
     }
+
+
+def test_profit_loss_gross_profit_uses_visible_quickbooks_label_when_present():
+    metric = get_profit_loss_gross_profit_metric(_payload([_row("Gross Profit", "3578117.10")]))
+
+    assert metric is not None
+    assert metric.label == "Gross Profit"
+    assert metric.value == "3578117.10"
+
+
+def test_profit_loss_gross_profit_accepts_quickbooks_group_when_summary_label_is_blank():
+    payload = {
+        "Header": {
+            "ReportName": "ProfitAndLoss",
+            "Currency": "CAD",
+            "ReportBasis": "Accrual",
+            "StartPeriod": "2026-01-01",
+            "EndPeriod": "2026-08-30",
+        },
+        "Rows": {
+            "Row": [
+                {
+                    "type": "Section",
+                    "group": "GrossProfit",
+                    "Summary": {"ColData": _col("", "3578117.10")},
+                }
+            ]
+        },
+    }
+
+    metric = get_profit_loss_gross_profit_metric(payload)
+
+    assert metric is not None
+    assert metric.label == "GrossProfit"
+    assert metric.value == "3578117.10"
+
+
+def test_profit_loss_gross_profit_fails_closed_without_label_or_group():
+    metric = get_profit_loss_gross_profit_metric(_payload([_row("Total Income", "3976670.07")]))
+
+    assert metric is None
 
 
 def test_profit_loss_net_income_accepts_quickbooks_profit_footer_label():
