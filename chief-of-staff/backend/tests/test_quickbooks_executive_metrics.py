@@ -72,7 +72,22 @@ def test_profit_loss_gross_profit_accepts_quickbooks_group_when_summary_label_is
     assert metric.value == "3578117.10"
 
 
-def test_profit_loss_gross_profit_fails_closed_without_label_or_group():
+def test_profit_loss_gross_profit_derives_from_quickbooks_income_and_cogs_when_direct_value_is_absent():
+    payload = _payload(
+        [
+            _row("Total Income", "3976670.07"),
+            _row("Total Cost of Goods Sold", "398552.97"),
+        ]
+    )
+
+    metric = get_profit_loss_gross_profit_metric(payload)
+
+    assert metric is not None
+    assert metric.label == "Derived: QuickBooks Total Income - Cost of Goods Sold"
+    assert metric.value == "3578117.10"
+
+
+def test_profit_loss_gross_profit_fails_closed_without_label_group_or_cogs():
     metric = get_profit_loss_gross_profit_metric(_payload([_row("Total Income", "3976670.07")]))
 
     assert metric is None
