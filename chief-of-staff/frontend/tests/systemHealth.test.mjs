@@ -10,11 +10,14 @@ test("System Health uses the dedicated passive health component", () => {
   assert.match(app, /page === "system-health" \? <SystemHealth \/>/);
 });
 
-test("System Health reads runtime, connector, and freshness state without provider actions", () => {
+test("System Health reads runtime, connector, freshness, ACE, and Outlook evidence without provider actions", () => {
   const expectedReads = [
     "/api/v1/system/health",
     "/api/v1/connectors/quickbooks",
     "/api/v1/outlook/status",
+    "/api/v1/outlook/sync-history?limit=1",
+    "/api/v1/outlook/attention?limit=25",
+    "/ace/feed-health",
     "/api/v1/motive/status",
     "/api/v1/torqueai/status",
     "/api/v1/system/connector-freshness",
@@ -22,8 +25,7 @@ test("System Health reads runtime, connector, and freshness state without provid
 
   for (const path of expectedReads) assert.match(systemHealth, new RegExp(path.replaceAll("/", "\\/")));
   assert.doesNotMatch(systemHealth, /apiClient\.post/);
-  assert.doesNotMatch(systemHealth, /\/sync/);
-  assert.doesNotMatch(systemHealth, /\/verify/);
+  assert.doesNotMatch(systemHealth, /\/sync\"|\/verify\"|outlook-latest/);
   assert.doesNotMatch(systemHealth, /quickbooks\.api\.intuit\.com|graph\.microsoft\.com|api\.gomotive\.com/i);
 });
 
@@ -37,8 +39,19 @@ test("System Health distinguishes scheduled freshness from manual connector age"
   assert.match(systemHealth, /Recovery:/);
 });
 
+test("System Health exposes ACE feed health and Outlook general-mail production evidence", () => {
+  assert.match(systemHealth, /ACE daily feed/);
+  assert.match(systemHealth, /freshness threshold/);
+  assert.match(systemHealth, /latest successful import/);
+  assert.match(systemHealth, /Outlook general-mail evidence/);
+  assert.match(systemHealth, /messages discovered/);
+  assert.match(systemHealth, /attachments indexed/);
+  assert.match(systemHealth, /current attention candidates/);
+  assert.match(systemHealth, /No general Outlook synchronization history is recorded/);
+});
+
 test("System Health keeps provider boundaries explicit", () => {
-  assert.match(systemHealth, /Status reads do not verify or synchronize providers/);
+  assert.match(systemHealth, /Status reads do not verify or synchronize providers or run ACE imports/);
   assert.match(systemHealth, /governed Polaris scheduler contracts, not provider SLAs/);
-  assert.match(systemHealth, /provider verification or synchronization was triggered/);
+  assert.match(systemHealth, /provider verification, synchronization, or import was triggered/);
 });
