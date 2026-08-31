@@ -10,7 +10,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database.database import SessionLocal
-from app.models.torqueai import TorqueAIDispatch
+from app.models.torqueai import TorqueAIDispatch, TorqueAIDispatchSyncRun, TorqueAIDispatchSyncState
 from app.security.dependencies import require_permission
 from app.security.models import AuthenticatedPrincipal, Permission
 
@@ -24,6 +24,57 @@ TORQUEAI_READ_MAX_RANGE_DAYS = 31
 def _db() -> Session:
     with SessionLocal() as session:
         yield session
+
+
+@router.get("/status")
+def durable_torqueai_status(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Return tenant-scoped TorqueAI ingestion health without contacting TorqueAI."""
+    organization_id = principal.organization_id
+    latest_run = (
+        session.query(TorqueAIDispatchSyncRun)
+        .filter(TorqueAIDispatchSyncRun.organization_id == organization_id)
+        .order_by(TorqueAIDispatchSyncRun.started_at.desc(), TorqueAIDispatchSyncRun.id.desc())
+        .first()
+    )
+    sync_state = (
+        session.query(TorqueAIDispatchSyncState)
+        .filter(TorqueAIDispatchSyncState.organization_id == organization_id)
+        .one_or_none()
+    )
+    records_stored = (
+        session.query(TorqueAIDispatch)
+        .filter(TorqueAIDispatch.organization_id == organization_id)
+        .count()
+    )
+
+    health_status, message = _torqueai_health_presentation(latest_run, sync_state)
+    return {
+        "health": {
+            "status": health_status,
+            "message": message,
+        },
+        "status": {
+            "connection_status": health_status,
+            "records_stored": records_stored,
+            "latest_run_status": latest_run.status if latest_run is not None else None,
+            "latest_run_trigger_mode": latest_run.trigger_mode if latest_run is not None else None,
+            "latest_run_trigger_slot": latest_run.trigger_slot if latest_run is not None else None,
+            "latest_run_started_at": latest_run.started_at.isoformat() if latest_run is not None else None,
+            "latest_run_completed_at": latest_run.completed_at.isoformat() if latest_run is not None and latest_run.completed_at else None,
+            "latest_run_error_code": latest_run.error_code if latest_run is not None else None,
+            "last_successful_window_start": sync_state.last_successful_window_start.isoformat() if sync_state is not None else None,
+            "last_successful_window_end": sync_state.last_successful_window_end.isoformat() if sync_state is not None else None,
+            "last_successful_completed_at": sync_state.last_successful_completed_at.isoformat() if sync_state is not None else None,
+            "last_successful_run_id": sync_state.last_successful_run_id if sync_state is not None else None,
+            "read_only": True,
+            "provider_called": False,
+            "tenant_scope_validated": True,
+            "secrets_exposed": False,
+        },
+    }
 
 
 @router.get("/dispatches")
@@ -94,6 +145,21 @@ def list_durable_torqueai_dispatches(
         "tenant_scope_validated": True,
         "secrets_exposed": False,
     }
+
+
+def _torqueai_health_presentation(
+    latest_run: TorqueAIDispatchSyncRun | None,
+    sync_state: TorqueAIDispatchSyncState | None,
+) -> tuple[str, str]:
+    if latest_run is None:
+        return "not_started", "No TorqueAI ingestion run has been recorded yet."
+    if latest_run.status == "claimed":
+        return "checking", "A scheduled TorqueAI ingestion slot has been claimed."
+    if latest_run.status == "success":
+        return "healthy", "Latest TorqueAI ingestion completed successfully."
+    if sync_state is not None:
+        return "degraded", "Latest TorqueAI ingestion failed; prior successful durable data remains available."
+    return "degraded", "Latest TorqueAI ingestion failed and no successful durable window is recorded."
 
 
 def _validate_date_window(date_from: date | None, date_to: date | None) -> None:
