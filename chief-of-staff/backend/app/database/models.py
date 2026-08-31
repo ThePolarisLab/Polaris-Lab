@@ -24,6 +24,7 @@ from app.models.financial_snapshot import (  # noqa: F401
     FinancialSyncHistory,
 )
 from app.models.fuel import FuelPriceEvidence, FuelPriceImportRun  # noqa: F401
+from app.models.fuel_invoice import FuelInvoiceImportRun, FuelInvoiceLineEvidence  # noqa: F401
 from app.models.memory import MemoryEntry  # noqa: F401
 from app.models.motive import (  # noqa: F401
     MotiveCredential,
