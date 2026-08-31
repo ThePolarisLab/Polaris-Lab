@@ -34,3 +34,10 @@ test("Financial overview exposes all reconciliation KPIs with exact currency for
   assert.match(overview, /Accounting basis/);
   assert.match(overview, /Last synchronized/);
 });
+
+test("Missing Gross Profit is labeled as provider-unavailable without Polaris derivation", () => {
+  assert.match(overview, /Not provided by QuickBooks API/);
+  assert.match(overview, /key === "gross_profit"/);
+  assert.doesNotMatch(overview, /Cost of Goods Sold/);
+  assert.doesNotMatch(overview, /Total Income -/);
+});
