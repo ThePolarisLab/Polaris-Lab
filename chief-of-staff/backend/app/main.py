@@ -21,6 +21,7 @@ from app.api.fuel import router as fuel_router
 from app.api.github_engine import router as github_engine_router
 from app.api.identity import router as identity_router
 from app.api.internal_ace import router as internal_ace_router
+from app.api.internal_fuel import router as internal_fuel_router
 from app.api.internal_motive import router as internal_motive_router
 from app.api.internal_torqueai import router as internal_torqueai_router
 from app.api.memory import router as memory_router
@@ -99,6 +100,7 @@ app.include_router(organizations_router)
 app.include_router(identity_router)
 app.include_router(auth_router)
 app.include_router(internal_ace_router)
+app.include_router(internal_fuel_router)
 app.include_router(internal_motive_router)
 app.include_router(internal_torqueai_router)
 
