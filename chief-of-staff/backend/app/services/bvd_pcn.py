@@ -157,7 +157,7 @@ def import_bvd_pcn_pdf(
 
     started = datetime.now(timezone.utc)
     source_hash = sha256(content).hexdigest()
-    currency = _currency_from_filename(source_filename)
+    currency: str | None = None
     run = (
         db.query(FuelPriceImportRun)
         .filter(
@@ -180,7 +180,7 @@ def import_bvd_pcn_pdf(
             source_filename=source_filename,
             source_received_at=source_received_at,
             source_sha256=source_hash,
-            currency=currency,
+            currency=None,
             status="processing",
             started_at=started,
         )
@@ -191,7 +191,7 @@ def import_bvd_pcn_pdf(
         run.source_attachment_id = source_attachment_id or run.source_attachment_id
         run.source_filename = source_filename
         run.source_received_at = source_received_at or run.source_received_at
-        run.currency = currency
+        run.currency = None
         run.status = "processing"
         run.error_category = None
         run.records_read = 0
@@ -200,6 +200,8 @@ def import_bvd_pcn_pdf(
         run.completed_at = None
 
     try:
+        currency = _currency_from_filename(source_filename)
+        run.currency = currency
         document = parse_bvd_pcn_pdf(content, filename=source_filename)
         if _company_key(document.company_name) != _company_key(expected_company_name):
             raise BvdPcnImportError("company_identity_mismatch")
