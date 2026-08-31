@@ -17,7 +17,7 @@ from app.models.fuel import FuelPriceEvidence, FuelPriceImportRun
 
 SUPPLIER = "bvd"
 SOURCE_KIND = "pcn_pdf"
-_EXPECTED_COLUMNS = (
+_CAD_COLUMNS = (
     "Site",
     "Name",
     "City",
@@ -37,11 +37,31 @@ _EXPECTED_COLUMNS = (
     "Your",
     "Savings",
 )
+_USD_COLUMNS = (
+    "Site",
+    "Name",
+    "City",
+    "State",
+    "Prod",
+    "Cost",
+    "Federal Tax",
+    "State Tax",
+    "Sales Tax",
+    "Freight",
+    "Other",
+    "Total Cost",
+    "Retail Price",
+    "Your Price",
+    "Savings",
+)
 _FILENAME_RE = re.compile(r"^pcn-(cad|usd)-.+\.pdf$", re.IGNORECASE)
-_ROW_RE = re.compile(r"^\s*\d{5}\s")
-_METADATA_RE = re.compile(
+_ROW_RE = re.compile(r"^\s*\d{3,6}\s")
+_CAD_METADATA_RE = re.compile(
     r"(?m)^\s*(?P<start>\d{4}-\d{2}-\d{2})\s+to\s+"
     r"(?P<end>\d{4}-\d{2}-\d{2})\s{2,}(?P<company>.+?)\s*$"
+)
+_USD_METADATA_RE = re.compile(
+    r"(?m)^\s*(?P<start>\d{4}-\d{2}-\d{2})\s{2,}(?P<company>.+?)\s*$"
 )
 
 
@@ -61,18 +81,23 @@ class BvdPcnPriceRow:
     region_code: str
     cost: str
     freight: str
-    base_price: str
-    fet: str
-    pft: str
-    pct: str
-    local_tax: str
-    fuel_price: str
     sales_tax: str
-    in_tax_price: str
-    qst: str
     retail_price: str
     contracted_price: str
     savings: str
+    product_code: str | None = None
+    base_price: str | None = None
+    fet: str | None = None
+    pft: str | None = None
+    pct: str | None = None
+    local_tax: str | None = None
+    fuel_price: str | None = None
+    in_tax_price: str | None = None
+    qst: str | None = None
+    federal_tax: str | None = None
+    state_tax: str | None = None
+    other_cost: str | None = None
+    total_cost: str | None = None
 
 
 @dataclass(frozen=True)
@@ -107,29 +132,19 @@ def parse_bvd_pcn_layout_text(text: str, *, currency: str) -> BvdPcnDocument:
     if normalized_currency not in {"CAD", "USD"}:
         raise BvdPcnImportError("currency_contract_error")
 
-    metadata = _METADATA_RE.search(text)
-    if metadata is None:
-        raise BvdPcnImportError("source_contract_error")
-    try:
-        effective_start = date.fromisoformat(metadata.group("start"))
-        effective_end = date.fromisoformat(metadata.group("end"))
-    except ValueError as exc:
-        raise BvdPcnImportError("source_contract_error") from exc
-    if effective_end < effective_start:
-        raise BvdPcnImportError("source_contract_error")
-
-    company_name = _clean(metadata.group("company"))
-    if not company_name:
-        raise BvdPcnImportError("source_contract_error")
+    effective_start, effective_end, company_name = _parse_metadata(
+        text,
+        currency=normalized_currency,
+    )
 
     parsed_rows: list[list[str]] = []
     for page_text in text.split("\n\f\n"):
-        _parse_layout_page(page_text, parsed_rows)
+        _parse_layout_page(page_text, parsed_rows, currency=normalized_currency)
 
     if not parsed_rows:
         raise BvdPcnImportError("source_contract_error")
 
-    rows = tuple(_normalize_row(values) for values in parsed_rows)
+    rows = tuple(_normalize_row(values, currency=normalized_currency) for values in parsed_rows)
     if len({row.supplier_site_id for row in rows}) != len(rows):
         raise BvdPcnImportError("duplicate_site_error")
 
@@ -232,6 +247,7 @@ def import_bvd_pcn_pdf(
                     site_name=row.site_name,
                     city=row.city,
                     region_code=row.region_code,
+                    product_code=row.product_code,
                     cost=row.cost,
                     freight=row.freight,
                     base_price=row.base_price,
@@ -243,6 +259,10 @@ def import_bvd_pcn_pdf(
                     sales_tax=row.sales_tax,
                     in_tax_price=row.in_tax_price,
                     qst=row.qst,
+                    federal_tax=row.federal_tax,
+                    state_tax=row.state_tax,
+                    other_cost=row.other_cost,
+                    total_cost=row.total_cost,
                     retail_price=row.retail_price,
                     contracted_price=row.contracted_price,
                     savings=row.savings,
@@ -290,21 +310,45 @@ def import_bvd_pcn_pdf(
         return _result(run, status="import_failed", replayed=False)
 
 
-def _parse_layout_page(page_text: str, parsed_rows: list[list[str]]) -> None:
+def _parse_metadata(text: str, *, currency: str) -> tuple[date, date, str]:
+    metadata = (_CAD_METADATA_RE if currency == "CAD" else _USD_METADATA_RE).search(text)
+    if metadata is None:
+        raise BvdPcnImportError("source_contract_error")
+    try:
+        effective_start = date.fromisoformat(metadata.group("start"))
+        effective_end = (
+            date.fromisoformat(metadata.group("end"))
+            if currency == "CAD"
+            else effective_start
+        )
+    except ValueError as exc:
+        raise BvdPcnImportError("source_contract_error") from exc
+    if effective_end < effective_start:
+        raise BvdPcnImportError("source_contract_error")
+
+    company_name = _clean(metadata.group("company"))
+    if not company_name:
+        raise BvdPcnImportError("source_contract_error")
+    return effective_start, effective_end, company_name
+
+
+def _parse_layout_page(page_text: str, parsed_rows: list[list[str]], *, currency: str) -> None:
+    expected_columns = _CAD_COLUMNS if currency == "CAD" else _USD_COLUMNS
+    region_label = "Prov" if currency == "CAD" else "State"
     header_line: str | None = None
-    name_start = city_start = prov_start = -1
+    name_start = city_start = region_start = -1
     current: list[str] | None = None
 
     for line in page_text.splitlines():
         if line.strip().startswith("Site") and "Savings" in line:
             columns = tuple(re.split(r"\s{2,}", line.strip()))
-            if columns != _EXPECTED_COLUMNS:
+            if columns != expected_columns:
                 raise BvdPcnImportError("source_contract_error")
             header_line = line
             name_start = line.find("Name")
             city_start = line.find("City")
-            prov_start = line.find("Prov")
-            if not (0 <= name_start < city_start < prov_start):
+            region_start = line.find(region_label)
+            if not (0 <= name_start < city_start < region_start):
                 raise BvdPcnImportError("source_contract_error")
             current = None
             continue
@@ -320,7 +364,7 @@ def _parse_layout_page(page_text: str, parsed_rows: list[list[str]]) -> None:
 
         if _ROW_RE.match(line):
             values = re.split(r"\s{2,}", line.strip())
-            if len(values) != len(_EXPECTED_COLUMNS):
+            if len(values) != len(expected_columns):
                 raise BvdPcnImportError("source_contract_error")
             current = values
             parsed_rows.append(current)
@@ -333,37 +377,60 @@ def _parse_layout_page(page_text: str, parsed_rows: list[list[str]]) -> None:
         leading = len(line) - len(line.lstrip())
         if name_start <= leading < city_start:
             current[1] = _clean(f"{current[1]} {stripped}")
-        elif city_start <= leading < prov_start:
+        elif city_start <= leading < region_start:
             current[2] = _clean(f"{current[2]} {stripped}")
         elif stripped and stripped != "Price" and not re.fullmatch(r"\d+\s*/\s*\d+", stripped):
             raise BvdPcnImportError("source_contract_error")
 
 
-def _normalize_row(values: list[str]) -> BvdPcnPriceRow:
+def _normalize_row(values: list[str], *, currency: str) -> BvdPcnPriceRow:
     supplier_site_id, site_name, city, region_code = (_clean(value) for value in values[:4])
     if not supplier_site_id.isdigit() or not site_name or not city or not region_code:
         raise BvdPcnImportError("source_contract_error")
 
-    decimals = [_decimal_text(value) for value in values[4:]]
+    if currency == "CAD":
+        decimals = [_decimal_text(value) for value in values[4:]]
+        return BvdPcnPriceRow(
+            supplier_site_id=supplier_site_id,
+            site_name=site_name,
+            city=city,
+            region_code=region_code.upper(),
+            cost=decimals[0],
+            freight=decimals[1],
+            base_price=decimals[2],
+            fet=decimals[3],
+            pft=decimals[4],
+            pct=decimals[5],
+            local_tax=decimals[6],
+            fuel_price=decimals[7],
+            sales_tax=decimals[8],
+            in_tax_price=decimals[9],
+            qst=decimals[10],
+            retail_price=decimals[11],
+            contracted_price=decimals[12],
+            savings=decimals[13],
+        )
+
+    product_code = _clean(values[4])
+    if not product_code:
+        raise BvdPcnImportError("source_contract_error")
+    decimals = [_decimal_text(value) for value in values[5:]]
     return BvdPcnPriceRow(
         supplier_site_id=supplier_site_id,
         site_name=site_name,
         city=city,
         region_code=region_code.upper(),
+        product_code=product_code.upper(),
         cost=decimals[0],
-        freight=decimals[1],
-        base_price=decimals[2],
-        fet=decimals[3],
-        pft=decimals[4],
-        pct=decimals[5],
-        local_tax=decimals[6],
-        fuel_price=decimals[7],
-        sales_tax=decimals[8],
-        in_tax_price=decimals[9],
-        qst=decimals[10],
-        retail_price=decimals[11],
-        contracted_price=decimals[12],
-        savings=decimals[13],
+        federal_tax=decimals[1],
+        state_tax=decimals[2],
+        sales_tax=decimals[3],
+        freight=decimals[4],
+        other_cost=decimals[5],
+        total_cost=decimals[6],
+        retail_price=decimals[7],
+        contracted_price=decimals[8],
+        savings=decimals[9],
     )
 
 
