@@ -111,6 +111,7 @@ class FuelInvoiceLineEvidence(Base):
     # supplier invoice values into calculated accounting facts at ingestion time.
     quantity: Mapped[str] = mapped_column(String(40), nullable=False)
     retail_price: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    unit_price: Mapped[str | None] = mapped_column(String(40), nullable=True)
     billed_price: Mapped[str] = mapped_column(String(40), nullable=False)
     sales_tax: Mapped[str | None] = mapped_column(String(40), nullable=True)
     hst: Mapped[str | None] = mapped_column(String(40), nullable=True)
