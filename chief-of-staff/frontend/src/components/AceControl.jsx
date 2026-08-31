@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, FileDown, RefreshCw, Search, ShieldCheck, XCircle } from "lucide-react";
+import { AlertTriangle, FileDown, RefreshCw, Search, ShieldCheck } from "lucide-react";
 import { apiClient } from "../apiClient";
+import AceReviewDrawer from "./AceReviewDrawer";
 import "./AceControl.css";
 
 const FILTERS = {
@@ -47,61 +48,23 @@ function filtersFromHash() {
 }
 
 function StatusPill({ movement }) {
-  const tone = movement.review_status === "critical" ? "critical" : movement.review_status === "review" ? "review" : movement.record_status === "Open" ? "open" : "clear";
+  const tone = movement.review_status === "critical"
+    ? "critical"
+    : movement.review_status === "review"
+      ? "review"
+      : movement.record_status === "Open"
+        ? "open"
+        : "clear";
   const label = movement.authorization_status === "UNAUTHORIZED - NO MOR PERMISSION"
     ? "Unauthorized"
     : movement.review_status === "critical"
       ? "Critical"
       : movement.review_status === "review"
         ? "Review"
-        : movement.record_status || "Clear";
+        : movement.review_status === "resolved"
+          ? "Resolved"
+          : movement.record_status || "Clear";
   return <span className={`ace-status ace-status-${tone}`}>{label}</span>;
-}
-
-function DetailDrawer({ movement, onClose }) {
-  if (!movement) return null;
-  const timeline = movement.events || [];
-  return (
-    <aside className="ace-detail-drawer" aria-label="ACE movement details">
-      <div className="ace-detail-header">
-        <div><small>In-Bond</small><h2>{movement.inbond_number}</h2><p>{movement.bill_of_lading_number || "No BOL"}</p></div>
-        <button type="button" onClick={onClose} aria-label="Close details"><XCircle size={20} /></button>
-      </div>
-      <StatusPill movement={movement} />
-      <div className="ace-detail-grid">
-        <div><span>Type</span><strong>{movement.inbond_type_code || "—"} {movement.inbond_type_description || ""}</strong></div>
-        <div><span>Status</span><strong>{movement.record_status || "—"}</strong></div>
-        <div><span>Shipper</span><strong>{movement.shipper_name || "—"}</strong></div>
-        <div><span>Consignee</span><strong>{movement.consignee_name || "—"}</strong></div>
-        <div><span>QP Filer</span><strong>{movement.qp_filer?.code || "—"} · {movement.qp_filer?.name || "—"}</strong></div>
-        <div><span>In-Bond Carrier</span><strong>{movement.inbond_carrier?.code || "—"} · {movement.inbond_carrier?.name || "—"}</strong></div>
-        <div><span>Bonded Carrier</span><strong>{movement.bonded_carrier?.code || "—"} · {movement.bonded_carrier?.name || "—"}</strong></div>
-        <div><span>Manifest Carrier</span><strong>{movement.manifest_carrier?.code || "—"} · {movement.manifest_carrier?.name || "—"}</strong></div>
-        <div><span>Route</span><strong>{movement.origination_port_name || "—"} → {movement.destination_port_name || "—"}</strong></div>
-        <div><span>Create / Depart / Arrival / Export</span><strong>{movement.create_date || "—"} · {movement.departure_date || "—"} · {movement.arrival_date || "—"} · {movement.export_date || "—"}</strong></div>
-        <div><span>Late / Overdue</span><strong>{movement.days_late || 0} / {movement.days_overdue_for_export || 0} days</strong></div>
-        <div><span>Transfer of liability</span><strong>{movement.transfer_of_liability_at || "—"}</strong></div>
-        <div><span>Penalty</span><strong>{movement.penalty_indicator == null ? "Unreported" : movement.penalty_indicator ? "Yes" : "No"}</strong></div>
-        <div><span>Authorization</span><strong>{movement.authorization_status || "—"}</strong></div>
-        <div><span>Authorization notes</span><strong>{movement.authorization_notes || "—"}</strong></div>
-        <div><span>Review reason</span><strong>{movement.review_reason || "None"}</strong></div>
-        <div><span>Resolution</span><strong>{movement.resolved_at ? `${movement.resolved_at} · ${movement.resolution_notes || "Resolved"}` : "Open"}</strong></div>
-        <div><span>Evidence</span><strong>{movement.evidence_reference || "—"}</strong></div>
-        <div><span>First / Last seen</span><strong>{movement.first_seen_at || "—"} · {movement.last_seen_at || "—"}</strong></div>
-      </div>
-      <section className="ace-timeline">
-        <h3>Movement history</h3>
-        {timeline.length === 0 && <p className="ace-muted">No recorded changes yet.</p>}
-        {timeline.map((event) => (
-          <div className="ace-timeline-item" key={event.id}>
-            <span>{new Date(event.occurred_at).toLocaleString()}</span>
-            <strong>{event.event_type.replaceAll("_", " ")}</strong>
-            <p>{event.detail || (event.field_name ? `${event.field_name}: ${event.old_value ?? "—"} → ${event.new_value ?? "—"}` : "")}</p>
-          </div>
-        ))}
-      </section>
-    </aside>
-  );
 }
 
 export default function AceControl() {
@@ -120,7 +83,10 @@ export default function AceControl() {
   const [feedHealth, setFeedHealth] = useState(null);
   const [error, setError] = useState("");
 
-  const query = useMemo(() => qs({ search, ...filters, active_only: activeOnly, counter_filter: counterFilter, limit: 250 }), [search, filters, activeOnly, counterFilter]);
+  const query = useMemo(
+    () => qs({ search, ...filters, active_only: activeOnly, counter_filter: counterFilter, limit: 250 }),
+    [search, filters, activeOnly, counterFilter],
+  );
 
   async function load() {
     try {
@@ -151,6 +117,11 @@ export default function AceControl() {
     }
   }
 
+  async function refreshMovement(id) {
+    await load();
+    await openMovement(id);
+  }
+
   function applyCounterFilter(label) {
     setSearch("");
     setFilters(FILTERS);
@@ -173,11 +144,22 @@ export default function AceControl() {
   function exportCsv() {
     const header = ["In-Bond", "BOL", "Status", "Shipper", "Consignee", "QP Filer", "In-Bond Carrier", "Bonded Carrier", "Manifest Carrier", "Origin", "Destination", "Review"];
     const rows = items.map((item) => [
-      item.inbond_number, item.bill_of_lading_number, item.record_status, item.shipper_name, item.consignee_name,
-      item.qp_filer?.code, item.inbond_carrier?.code, item.bonded_carrier?.code, item.manifest_carrier?.code,
-      item.origination_port_name, item.destination_port_name, item.review_reason,
+      item.inbond_number,
+      item.bill_of_lading_number,
+      item.record_status,
+      item.shipper_name,
+      item.consignee_name,
+      item.qp_filer?.code,
+      item.inbond_carrier?.code,
+      item.bonded_carrier?.code,
+      item.manifest_carrier?.code,
+      item.origination_port_name,
+      item.destination_port_name,
+      item.review_reason,
     ]);
-    const csv = [header, ...rows].map((row) => row.map((cell) => `"${String(cell ?? "").replaceAll('"', '""')}"`).join(",")).join("\n");
+    const csv = [header, ...rows]
+      .map((row) => row.map((cell) => `"${String(cell ?? "").replaceAll('"', '""')}"`).join(","))
+      .join("\n");
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -226,18 +208,29 @@ export default function AceControl() {
     if (!value) return "—";
     const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00` : value;
     const parsed = new Date(normalized);
-    return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+    return Number.isNaN(parsed.getTime())
+      ? value
+      : parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
   }
 
   return (
     <section className="ace-control-page">
       <div className="ace-page-heading">
-        <div><span className="ace-eyebrow"><ShieldCheck size={16} /> ACE CONTROL</span><h1>In-Bond / Bond Control</h1><p>Search, monitor, resolve, and report on scheduled ACE In-Bond Bills of Lading activity. Manifest is a separate source not connected yet.</p></div>
+        <div>
+          <span className="ace-eyebrow"><ShieldCheck size={16} /> ACE CONTROL</span>
+          <h1>In-Bond / Bond Control</h1>
+          <p>Search, monitor, resolve, and report on scheduled ACE In-Bond Bills of Lading activity. Manifest is a separate source not connected yet.</p>
+        </div>
         <div className="ace-action-stack">
-          <button type="button" className="ace-export-button" onClick={importLatestReport} disabled={importing}><RefreshCw size={17} className={importing ? "spin" : ""} /> {importing ? "Importing..." : "Import Latest ACE Report"}</button>
-          <button type="button" className="ace-export-button" onClick={exportCsv}><FileDown size={17} /> Export filtered report</button>
+          <button type="button" className="ace-export-button" onClick={importLatestReport} disabled={importing}>
+            <RefreshCw size={17} className={importing ? "spin" : ""} /> {importing ? "Importing..." : "Import Latest ACE Report"}
+          </button>
+          <button type="button" className="ace-export-button" onClick={exportCsv}>
+            <FileDown size={17} /> Export filtered report
+          </button>
         </div>
       </div>
+
       {importResult && <div className="ace-import-result">{importMessage(importResult)}</div>}
       {feedHealth && (
         <section className={`ace-feed-health ace-feed-${feedHealth.status || "unknown"}`} aria-label="ACE daily feed health">
@@ -254,15 +247,29 @@ export default function AceControl() {
 
       {summary && (
         <div className="ace-kpis">
-          {[['Active', summary.active], ['Open', summary.open], ['Exceptions', summary.exceptions], ['Overdue', summary.overdue], ['Late', summary.late], ['Unauthorized', summary.unauthorized]].map(([label, value]) => (
-            <button type="button" key={label} onClick={() => applyCounterFilter(label)}><span>{label}</span><strong>{value}</strong></button>
+          {[
+            ["Active", summary.active],
+            ["Open", summary.open],
+            ["Exceptions", summary.exceptions],
+            ["Overdue", summary.overdue],
+            ["Late", summary.late],
+            ["Unauthorized", summary.unauthorized],
+          ].map(([label, value]) => (
+            <button type="button" key={label} onClick={() => applyCounterFilter(label)}>
+              <span>{label}</span><strong>{value}</strong>
+            </button>
           ))}
         </div>
       )}
 
       <div className="ace-search-row">
-        <label className="ace-global-search"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search In-Bond, BOL/PAPS, shipper, consignee, carrier, QP filer, port…" /></label>
-        <label className="ace-toggle"><input type="checkbox" checked={activeOnly} onChange={(event) => setActiveOnly(event.target.checked)} /> Active only</label>
+        <label className="ace-global-search">
+          <Search size={18} />
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search In-Bond, BOL/PAPS, shipper, consignee, carrier, QP filer, port…" />
+        </label>
+        <label className="ace-toggle">
+          <input type="checkbox" checked={activeOnly} onChange={(event) => setActiveOnly(event.target.checked)} /> Active only
+        </label>
       </div>
 
       <div className="ace-filter-grid">
@@ -294,7 +301,17 @@ export default function AceControl() {
       <div className="ace-table-meta"><strong>{total}</strong> matching movements</div>
       <div className="ace-table-wrap">
         <table className="ace-table">
-          <thead><tr><th className="ace-col-identity">In-Bond / BOL</th><th className="ace-col-status">Status</th><th className="ace-col-dates">Create / Arrive Date</th><th className="ace-col-filer">QP Filer</th><th className="ace-col-carrier">In-Bond / Manifest Carrier</th><th className="ace-col-route">Route</th><th className="ace-col-exception">Exception</th></tr></thead>
+          <thead>
+            <tr>
+              <th className="ace-col-identity">In-Bond / BOL</th>
+              <th className="ace-col-status">Status</th>
+              <th className="ace-col-dates">Create / Arrive Date</th>
+              <th className="ace-col-filer">QP Filer</th>
+              <th className="ace-col-carrier">In-Bond / Manifest Carrier</th>
+              <th className="ace-col-route">Route</th>
+              <th className="ace-col-exception">Exception</th>
+            </tr>
+          </thead>
           <tbody>
             {loading && <tr><td colSpan="7">Loading ACE movements…</td></tr>}
             {!loading && items.length === 0 && <tr><td colSpan="7">No movements match these filters.</td></tr>}
@@ -312,7 +329,8 @@ export default function AceControl() {
           </tbody>
         </table>
       </div>
-      <DetailDrawer movement={selected} onClose={() => setSelected(null)} />
+
+      <AceReviewDrawer movement={selected} onClose={() => setSelected(null)} onChanged={refreshMovement} />
     </section>
   );
 }
