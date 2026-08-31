@@ -89,6 +89,7 @@ def upgrade() -> None:
         sa.Column("category", sa.String(length=40), nullable=False),
         sa.Column("quantity", sa.String(length=40), nullable=False),
         sa.Column("retail_price", sa.String(length=40), nullable=True),
+        sa.Column("unit_price", sa.String(length=40), nullable=True),
         sa.Column("billed_price", sa.String(length=40), nullable=False),
         sa.Column("sales_tax", sa.String(length=40), nullable=True),
         sa.Column("hst", sa.String(length=40), nullable=True),
