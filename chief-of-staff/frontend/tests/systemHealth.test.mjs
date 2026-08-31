@@ -23,7 +23,9 @@ test("System Health reads runtime, connector, freshness, ACE, and Outlook eviden
     "/api/v1/system/connector-freshness",
   ];
 
-  for (const path of expectedReads) assert.match(systemHealth, new RegExp(path.replaceAll("/", "\\/")));
+  for (const path of expectedReads) {
+    assert.ok(systemHealth.includes(path), `expected passive System Health read ${path}`);
+  }
   assert.doesNotMatch(systemHealth, /apiClient\.post/);
   assert.doesNotMatch(systemHealth, /\/sync\"|\/verify\"|outlook-latest/);
   assert.doesNotMatch(systemHealth, /quickbooks\.api\.intuit\.com|graph\.microsoft\.com|api\.gomotive\.com/i);
