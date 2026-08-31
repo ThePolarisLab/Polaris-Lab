@@ -33,14 +33,12 @@ class FakeOutlookConnector:
 
 
 def _message(message_id: str, filename: str, received: str, *, sender: str = fuel_outlook.BVD_PCN_SENDER):
-    currency = filename.split("-")[1]
     return {
         "id": message_id,
         "subject": f"BVD PCN {filename} EFFECTIVE 2026-08-31",
         "receivedDateTime": received,
         "hasAttachments": True,
-        "from": {"emailAddress": {"address": sender}},
-        "currency": currency,
+        "sender": {"emailAddress": {"address": sender}},
     }
 
 
