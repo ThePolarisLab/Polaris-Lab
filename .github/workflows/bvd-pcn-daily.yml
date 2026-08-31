@@ -1,0 +1,67 @@
+name: BVD PCN Daily Feed
+
+on:
+  schedule:
+    # BVD sends the next effective-day CAD/USD PCNs during the prior business day.
+    # Redundant UTC opportunities let late mail arrive while exact-file replay remains idempotent.
+    - cron: "15 19,21,23 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: bvd-pcn-daily-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    name: Trigger BVD PCN daily import
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.POLARIS_FUEL_BVD_SCHEDULED_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      POLARIS_PRODUCTION_API_URL: ${{ vars.POLARIS_PRODUCTION_API_URL }}
+      POLARIS_FUEL_BVD_CRON_TRIGGER_SECRET: ${{ secrets.POLARIS_FUEL_BVD_CRON_TRIGGER_SECRET }}
+    steps:
+      - name: Trigger Polaris BVD PCN scheduled import
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${POLARIS_PRODUCTION_API_URL}" ]; then
+            echo "POLARIS_PRODUCTION_API_URL is not configured."
+            exit 1
+          fi
+          if [ -z "${POLARIS_FUEL_BVD_CRON_TRIGGER_SECRET}" ]; then
+            echo "POLARIS_FUEL_BVD_CRON_TRIGGER_SECRET is not configured."
+            exit 1
+          fi
+
+          timestamp="$(date +%s)"
+          path="/api/v1/internal/fuel/bvd/pcn/scheduled-import"
+          base_url="${POLARIS_PRODUCTION_API_URL%/}"
+          trigger_url="${base_url}${path}"
+          signature="$(
+            CANONICAL_METHOD="POST" \
+            CANONICAL_PATH="${path}" \
+            CANONICAL_TIMESTAMP="${timestamp}" \
+            POLARIS_FUEL_BVD_CRON_TRIGGER_SECRET="${POLARIS_FUEL_BVD_CRON_TRIGGER_SECRET}" \
+            python -c 'import hashlib,hmac,os; body=hashlib.sha256(b"").hexdigest(); canonical="\n".join([os.environ["CANONICAL_METHOD"], os.environ["CANONICAL_PATH"], os.environ["CANONICAL_TIMESTAMP"], body]); print(hmac.new(os.environ["POLARIS_FUEL_BVD_CRON_TRIGGER_SECRET"].encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest())'
+          )"
+
+          curl --fail --silent --show-error \
+            --max-time 240 \
+            --request POST \
+            --header "X-Polaris-Job-Timestamp: ${timestamp}" \
+            --header "X-Polaris-Job-Signature: ${signature}" \
+            "${trigger_url}" > response.json
+
+          python - <<'PY'
+          import json
+          with open("response.json", "r", encoding="utf-8") as handle:
+              payload = json.load(handle)
+          print("BVD PCN scheduled trigger status:", payload.get("status"))
+          for currency, result in (payload.get("currencies") or {}).items():
+              print(currency, result.get("status"), result.get("effective_start"), result.get("records_read"))
+          PY
