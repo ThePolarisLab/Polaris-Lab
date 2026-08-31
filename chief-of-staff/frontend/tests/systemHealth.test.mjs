@@ -10,13 +10,14 @@ test("System Health uses the dedicated passive health component", () => {
   assert.match(app, /page === "system-health" \? <SystemHealth \/>/);
 });
 
-test("System Health reads runtime and connector state without provider actions", () => {
+test("System Health reads runtime, connector, and freshness state without provider actions", () => {
   const expectedReads = [
     "/api/v1/system/health",
     "/api/v1/connectors/quickbooks",
     "/api/v1/outlook/status",
     "/api/v1/motive/status",
     "/api/v1/torqueai/status",
+    "/api/v1/system/connector-freshness",
   ];
 
   for (const path of expectedReads) assert.match(systemHealth, new RegExp(path.replaceAll("/", "\\/")));
@@ -26,10 +27,18 @@ test("System Health reads runtime and connector state without provider actions",
   assert.doesNotMatch(systemHealth, /quickbooks\.api\.intuit\.com|graph\.microsoft\.com|api\.gomotive\.com/i);
 });
 
-test("System Health exposes durable TorqueAI and provider-boundary language", () => {
+test("System Health distinguishes scheduled freshness from manual connector age", () => {
   assert.match(systemHealth, /TorqueAI dispatch ingestion/);
-  assert.match(systemHealth, /last_successful_completed_at/);
-  assert.match(systemHealth, /records_stored/);
+  assert.match(systemHealth, /Motive vehicle utilization scheduler/);
+  assert.match(systemHealth, /Freshness:/);
+  assert.match(systemHealth, /cadence: hourly scheduled/);
+  assert.match(systemHealth, /Cadence: manual\/operator/);
+  assert.match(systemHealth, /manual connectors show age without inventing a stale threshold/);
+  assert.match(systemHealth, /Recovery:/);
+});
+
+test("System Health keeps provider boundaries explicit", () => {
   assert.match(systemHealth, /Status reads do not verify or synchronize providers/);
-  assert.match(systemHealth, /explicit governed Verify or Sync actions/);
+  assert.match(systemHealth, /governed Polaris scheduler contracts, not provider SLAs/);
+  assert.match(systemHealth, /provider verification or synchronization was triggered/);
 });

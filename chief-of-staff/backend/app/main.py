@@ -13,6 +13,7 @@ from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.api.code_understanding import router as code_understanding_router
 from app.api.company import router as company_router
+from app.api.connector_freshness import router as connector_freshness_router
 from app.api.connectors import router as connectors_router
 from app.api.dashboard import router as dashboard_router
 from app.api.events import router as events_router
@@ -80,6 +81,7 @@ app.include_router(code_understanding_router, dependencies=[Depends(require_perm
 app.include_router(refactoring_router, dependencies=[Depends(require_permission(Permission.CONNECTOR_READ))])
 app.include_router(work_context_router, dependencies=executive_read)
 app.include_router(system_router)
+app.include_router(connector_freshness_router)
 app.include_router(connectors_router)
 app.include_router(torqueai_router)
 app.include_router(motive_router)
