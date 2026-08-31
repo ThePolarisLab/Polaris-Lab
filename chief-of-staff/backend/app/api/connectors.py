@@ -1,6 +1,6 @@
 """Builder-facing Connector SDK endpoints."""
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.connectors.base import BaseConnector
-from app.connectors.models import ConnectorHealth, SyncResult
+from app.connectors.models import ConnectorHealth, ConnectorStatus, SyncResult
 from app.connectors.motive import MotiveConnector
 from app.connectors.outlook import OutlookConnector
 from app.connectors.outlook_credentials import OutlookCredentialStore
@@ -45,11 +45,66 @@ def _tenant_connector(connector: BaseConnector, principal: AuthenticatedPrincipa
     return connector
 
 
+def _connector_health(connector: BaseConnector, principal: AuthenticatedPrincipal) -> ConnectorHealth:
+    tenant_connector = _tenant_connector(connector, principal)
+    if isinstance(tenant_connector, QuickBooksConnector):
+        return _quickbooks_passive_health(tenant_connector)
+    return tenant_connector.health()
+
+
+def _quickbooks_passive_health(connector: QuickBooksConnector) -> ConnectorHealth:
+    """Build QuickBooks health from durable credential/sync metadata only.
+
+    Opening Connector Center or System Health must not refresh OAuth or call Intuit.
+    Live provider verification remains an explicit operator action through /qbo/verification.
+    """
+    details = connector.safe_status(include_resources=True)
+    authorization = str(details.get("authorization_status") or "authorization_required")
+    verification = str(details.get("identity_verification_status") or "authorization_required")
+    reauthorization_required = bool(details.get("reauthorization_required"))
+
+    if reauthorization_required:
+        connector_status = ConnectorStatus.REAUTHORIZATION_REQUIRED
+        message = "QuickBooks reauthorization is required."
+    elif authorization != "authorized":
+        connector_status = ConnectorStatus.AUTHORIZATION_REQUIRED
+        message = "QuickBooks authorization is required."
+    elif verification == "company_mismatch":
+        connector_status = ConnectorStatus.COMPANY_MISMATCH
+        message = "QuickBooks company identity does not match the configured organization."
+    elif verification == "healthy":
+        connector_status = ConnectorStatus.HEALTHY
+        company = details.get("verified_company_name") or "the verified company"
+        message = f"Connected to {company}."
+    else:
+        connector_status = ConnectorStatus.CONNECTED_UNVERIFIED
+        message = "QuickBooks is authorized; provider verification has not been confirmed."
+
+    return ConnectorHealth(
+        name="quickbooks",
+        status=connector_status,
+        last_sync_at=_safe_datetime(details.get("last_successful_sync_time")),
+        message=message,
+        details=details,
+    )
+
+
+def _safe_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 @router.get("", response_model=list[ConnectorHealth])
 def list_connectors(
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
 ) -> list[ConnectorHealth]:
-    return [_tenant_connector(connector, principal).health() for connector in connector_registry.list()]
+    return [_connector_health(connector, principal) for connector in connector_registry.list()]
 
 
 @router.get("/torqueai/certification")
@@ -99,7 +154,7 @@ def get_connector(
         connector = connector_registry.get(name)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    return _tenant_connector(connector, principal).health()
+    return _connector_health(connector, principal)
 
 
 @router.post("/{name}/sync", response_model=SyncResult)
