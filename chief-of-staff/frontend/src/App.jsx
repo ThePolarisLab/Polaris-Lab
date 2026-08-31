@@ -33,6 +33,7 @@ import DispatchDashboard from "./components/DispatchDashboard";
 import ExecutiveDashboard from "./components/ExecutiveDashboard";
 import { ExecutiveRouteView } from "./components/ExecutiveViews";
 import FinancialOverview from "./components/FinancialOverview";
+import SystemHealth from "./components/SystemHealth";
 import { runtimeConfig } from "./runtimeConfig";
 import "./App.css";
 
@@ -162,7 +163,7 @@ function ExecutiveWorkspace({ page, session, forbiddenMessage, onOpenMenu, onLog
         </div>
       </header>
       {forbiddenMessage && <div className="forbidden-banner" role="alert">{forbiddenMessage}</div>}
-      <main className="workspace-main">{page === "dashboard" ? <ExecutiveDashboard /> : page === "daily-brief" ? <DailyBrief /> : page === "financial" ? <FinancialOverview /> : page === "dispatch" ? <DispatchDashboard /> : page === "ace" ? <AceControl /> : <ExecutiveRouteView page={page} />}</main>
+      <main className="workspace-main">{page === "dashboard" ? <ExecutiveDashboard /> : page === "daily-brief" ? <DailyBrief /> : page === "financial" ? <FinancialOverview /> : page === "dispatch" ? <DispatchDashboard /> : page === "ace" ? <AceControl /> : page === "system-health" ? <SystemHealth /> : <ExecutiveRouteView page={page} />}</main>
       <footer className="workspace-statusbar"><span><span className="status-dot" aria-hidden="true" />{runtimeConfig.workspace.workspaceName}</span><span>Evidence · Intelligence · Action</span></footer>
     </div>
   );
