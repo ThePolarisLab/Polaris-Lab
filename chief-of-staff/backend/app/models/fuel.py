@@ -98,17 +98,30 @@ class FuelPriceEvidence(Base):
 
     # Exact provider-authored decimal text is retained. Polaris does not recompute
     # BVD price components or round them into a new accounting representation.
+    # CAD and USD PCN files use different provider layouts, so source-specific
+    # components remain nullable rather than being forced into the wrong labels.
+    product_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
     cost: Mapped[str] = mapped_column(String(40), nullable=False)
     freight: Mapped[str] = mapped_column(String(40), nullable=False)
-    base_price: Mapped[str] = mapped_column(String(40), nullable=False)
-    fet: Mapped[str] = mapped_column(String(40), nullable=False)
-    pft: Mapped[str] = mapped_column(String(40), nullable=False)
-    pct: Mapped[str] = mapped_column(String(40), nullable=False)
-    local_tax: Mapped[str] = mapped_column(String(40), nullable=False)
-    fuel_price: Mapped[str] = mapped_column(String(40), nullable=False)
+
+    # CAD-specific PCN components.
+    base_price: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    fet: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    pft: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    pct: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    local_tax: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    fuel_price: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    in_tax_price: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    qst: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+    # USD-specific PCN components.
+    federal_tax: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    state_tax: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    other_cost: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    total_cost: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+    # Shared provider-authored fields used by Fuel reconciliation.
     sales_tax: Mapped[str] = mapped_column(String(40), nullable=False)
-    in_tax_price: Mapped[str] = mapped_column(String(40), nullable=False)
-    qst: Mapped[str] = mapped_column(String(40), nullable=False)
     retail_price: Mapped[str] = mapped_column(String(40), nullable=False)
     contracted_price: Mapped[str] = mapped_column(String(40), nullable=False)
     savings: Mapped[str] = mapped_column(String(40), nullable=False)
