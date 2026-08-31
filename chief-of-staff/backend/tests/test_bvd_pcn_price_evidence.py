@@ -50,6 +50,32 @@ LAYOUT_TEXT = "\n".join(
     ]
 )
 
+USD_HEADER = (
+    "Site      Name                City                               State     Prod      Cost        Federal Tax      "
+    "State Tax     Sales Tax      Freight     Other        Total Cost     Retail Price     Your Price      Savings"
+)
+USD_ROW_ONE = (
+    "1277      LOVES #368          Clanton                            AL        ULSD      4.4456      0.2483           "
+    "0.3175        0              0.1187      0.02         5.15           5.779            5.15            0.629"
+)
+USD_ROW_TWO = (
+    "8313      LOVES #877          Cullman                            AL        ULSD      4.4229      0.2483           "
+    "0.3175        0              0.065       0.01         5.064          5.749            5.064           0.685"
+)
+USD_LAYOUT_TEXT = "\n".join(
+    [
+        "                           Effective Date                                                                                                     Company Name:",
+        "                            2026-08-31                                                                                              MOR LOGISTICS MANITOBA LIMITED",
+        "",
+        USD_HEADER,
+        "",
+        USD_ROW_ONE,
+        "",
+        USD_ROW_TWO,
+        "RETAIL PRICES ARE SUBJECT TO CHANGE AT ANY TIME",
+    ]
+)
+
 
 def _row(site: str = "90001") -> BvdPcnPriceRow:
     return BvdPcnPriceRow(
@@ -74,6 +100,26 @@ def _row(site: str = "90001") -> BvdPcnPriceRow:
     )
 
 
+def _usd_row(site: str = "1277") -> BvdPcnPriceRow:
+    return BvdPcnPriceRow(
+        supplier_site_id=site,
+        site_name="LOVES #368",
+        city="Clanton",
+        region_code="AL",
+        product_code="ULSD",
+        cost="4.4456",
+        federal_tax="0.2483",
+        state_tax="0.3175",
+        sales_tax="0",
+        freight="0.1187",
+        other_cost="0.02",
+        total_cost="5.15",
+        retail_price="5.779",
+        contracted_price="5.15",
+        savings="0.629",
+    )
+
+
 def _document(*rows: BvdPcnPriceRow) -> BvdPcnDocument:
     return BvdPcnDocument(
         currency="CAD",
@@ -81,6 +127,16 @@ def _document(*rows: BvdPcnPriceRow) -> BvdPcnDocument:
         effective_end=date(2026, 9, 1),
         company_name="MOR LOGISTICS MANITOBA LIMITED",
         rows=tuple(rows or (_row(),)),
+    )
+
+
+def _usd_document(*rows: BvdPcnPriceRow) -> BvdPcnDocument:
+    return BvdPcnDocument(
+        currency="USD",
+        effective_start=date(2026, 8, 31),
+        effective_end=date(2026, 8, 31),
+        company_name="MOR LOGISTICS MANITOBA LIMITED",
+        rows=tuple(rows or (_usd_row(),)),
     )
 
 
@@ -107,6 +163,32 @@ def test_layout_parser_preserves_provider_values_and_wrapped_city() -> None:
     assert document.rows[0].savings == "0.2187"
     assert document.rows[1].city == "TEST CITY EXTENSION"
     assert document.rows[1].sales_tax == "0.2477"
+    assert document.rows[0].product_code is None
+    assert document.rows[0].federal_tax is None
+
+
+def test_usd_layout_parser_preserves_real_provider_contract() -> None:
+    document = parse_bvd_pcn_layout_text(USD_LAYOUT_TEXT, currency="USD")
+
+    assert document.currency == "USD"
+    assert document.effective_start == date(2026, 8, 31)
+    assert document.effective_end == date(2026, 8, 31)
+    assert document.company_name == "MOR LOGISTICS MANITOBA LIMITED"
+    assert len(document.rows) == 2
+    first = document.rows[0]
+    assert first.supplier_site_id == "1277"
+    assert first.product_code == "ULSD"
+    assert first.federal_tax == "0.2483"
+    assert first.state_tax == "0.3175"
+    assert first.sales_tax == "0"
+    assert first.freight == "0.1187"
+    assert first.other_cost == "0.02"
+    assert first.total_cost == "5.15"
+    assert first.retail_price == "5.779"
+    assert first.contracted_price == "5.15"
+    assert first.savings == "0.629"
+    assert first.base_price is None
+    assert first.qst is None
 
 
 def test_layout_parser_fails_closed_when_provider_header_drifts() -> None:
@@ -117,6 +199,16 @@ def test_layout_parser_fails_closed_when_provider_header_drifts() -> None:
         assert exc.category == "source_contract_error"
     else:
         raise AssertionError("provider header drift must fail closed")
+
+
+def test_usd_layout_parser_fails_closed_when_provider_header_drifts() -> None:
+    bad = USD_LAYOUT_TEXT.replace("Total Cost", "Gross Cost", 1)
+    try:
+        parse_bvd_pcn_layout_text(bad, currency="USD")
+    except BvdPcnImportError as exc:
+        assert exc.category == "source_contract_error"
+    else:
+        raise AssertionError("USD provider header drift must fail closed")
 
 
 def test_import_persists_immutable_evidence_and_deduplicates_exact_file_replay(monkeypatch) -> None:
@@ -153,6 +245,41 @@ def test_import_persists_immutable_evidence_and_deduplicates_exact_file_replay(m
     assert evidence.contracted_price == "1.9503"
     assert evidence.retail_price == "2.169"
     assert evidence.source_sha256
+
+
+def test_import_persists_usd_source_specific_components_without_cad_relabeling(monkeypatch) -> None:
+    db = _session()
+    monkeypatch.setattr(bvd_pcn, "parse_bvd_pcn_pdf", lambda content, *, filename: _usd_document(_usd_row()))
+
+    result = import_bvd_pcn_pdf(
+        db,
+        "org-1",
+        content=b"certified-bvd-usd-pcn",
+        source_filename="pcn-usd-test.pdf",
+        expected_company_name="MOR LOGISTICS MANITOBA LIMITED",
+        source_message_id="usd-message-1",
+        source_attachment_id="usd-attachment-1",
+    )
+
+    assert result["status"] == "import_success"
+    assert result["currency"] == "USD"
+    assert result["effective_start"] == "2026-08-31"
+    assert result["effective_end"] == "2026-08-31"
+    evidence = db.query(FuelPriceEvidence).filter_by(organization_id="org-1", supplier_site_id="1277").one()
+    assert evidence.product_code == "ULSD"
+    assert evidence.federal_tax == "0.2483"
+    assert evidence.state_tax == "0.3175"
+    assert evidence.other_cost == "0.02"
+    assert evidence.total_cost == "5.15"
+    assert evidence.contracted_price == "5.15"
+    assert evidence.base_price is None
+    assert evidence.fet is None
+    assert evidence.pft is None
+    assert evidence.pct is None
+    assert evidence.local_tax is None
+    assert evidence.fuel_price is None
+    assert evidence.in_tax_price is None
+    assert evidence.qst is None
 
 
 def test_same_provider_file_hash_is_isolated_by_tenant(monkeypatch) -> None:
