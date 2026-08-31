@@ -30,7 +30,6 @@ from app.api.motive_vehicle_utilization_kpi import router as motive_vehicle_util
 from app.api.motive_vehicle_utilization_production import router as motive_vehicle_utilization_production_router
 from app.api.organizations import router as organizations_router
 from app.api.outlook import router as outlook_router
-from app.api.quickbooks_diagnostics import router as quickbooks_diagnostics_router
 from app.api.quickbooks_financials import router as quickbooks_financials_router
 from app.api.quickbooks_oauth import router as quickbooks_oauth_router
 from app.api.reasoning import router as reasoning_router
@@ -90,7 +89,6 @@ app.include_router(motive_vehicle_utilization_production_router)
 app.include_router(outlook_router)
 app.include_router(quickbooks_oauth_router)
 app.include_router(quickbooks_financials_router)
-app.include_router(quickbooks_diagnostics_router)
 app.include_router(ace_router)
 app.include_router(events_router, dependencies=organization_read)
 app.include_router(organizations_router)

@@ -28,6 +28,20 @@ function metricSource(metadata) {
   return [report, label].filter(Boolean).join(" · ") || "QuickBooks snapshot";
 }
 
+function metricIsUnavailable(value) {
+  return value === null || value === undefined || value === "";
+}
+
+function metricValue(key, value, currency) {
+  if (key === "gross_profit" && metricIsUnavailable(value)) return "Unavailable";
+  return moneyExact(value, currency);
+}
+
+function metricProvenance(key, value, metadata) {
+  if (key === "gross_profit" && metricIsUnavailable(value)) return "Not provided by QuickBooks API";
+  return metricSource(metadata);
+}
+
 export default function FinancialOverview() {
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -103,8 +117,8 @@ export default function FinancialOverview() {
             {FINANCIAL_METRICS.map(({ key, label }) => (
               <article className="financial-kpi-card" key={key}>
                 <span>{label}</span>
-                <strong>{moneyExact(metrics[key], summary.currency)}</strong>
-                <small>{metricSource(metadata[key])}</small>
+                <strong>{metricValue(key, metrics[key], summary.currency)}</strong>
+                <small>{metricProvenance(key, metrics[key], metadata[key])}</small>
               </article>
             ))}
           </div>
