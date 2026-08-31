@@ -92,19 +92,20 @@ class FuelPriceEvidence(Base):
     effective_end: Mapped[date] = mapped_column(Date, nullable=False, index=True)
 
     supplier_site_id: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
-    site_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    city: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    brand: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    site_name: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    location_name: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    city: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
     region_code: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
 
     # Exact provider-authored decimal text is retained. Polaris does not recompute
-    # BVD price components or round them into a new accounting representation.
-    # CAD and USD PCN files use different provider layouts, so source-specific
-    # components remain nullable rather than being forced into the wrong labels.
+    # supplier price components or round them into a new accounting representation.
     product_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    cost: Mapped[str] = mapped_column(String(40), nullable=False)
-    freight: Mapped[str] = mapped_column(String(40), nullable=False)
 
-    # CAD-specific PCN components.
+    # BVD-specific shared/source components. Nullable because Eco reports do not
+    # expose these fields under the same provider-authored labels.
+    cost: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    freight: Mapped[str | None] = mapped_column(String(40), nullable=True)
     base_price: Mapped[str | None] = mapped_column(String(40), nullable=True)
     fet: Mapped[str | None] = mapped_column(String(40), nullable=True)
     pft: Mapped[str | None] = mapped_column(String(40), nullable=True)
@@ -113,18 +114,25 @@ class FuelPriceEvidence(Base):
     fuel_price: Mapped[str | None] = mapped_column(String(40), nullable=True)
     in_tax_price: Mapped[str | None] = mapped_column(String(40), nullable=True)
     qst: Mapped[str | None] = mapped_column(String(40), nullable=True)
-
-    # USD-specific PCN components.
     federal_tax: Mapped[str | None] = mapped_column(String(40), nullable=True)
     state_tax: Mapped[str | None] = mapped_column(String(40), nullable=True)
     other_cost: Mapped[str | None] = mapped_column(String(40), nullable=True)
     total_cost: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
-    # Shared provider-authored fields used by Fuel reconciliation.
-    sales_tax: Mapped[str] = mapped_column(String(40), nullable=False)
-    retail_price: Mapped[str] = mapped_column(String(40), nullable=False)
+    # Eco CAD source fields. Eco CAD's invoice Billed price corresponds to the
+    # provider-authored Total Price; Price and GST/HST remain separate evidence.
+    eco_price: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    eco_gst_hst: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    eco_total_price: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+    # Cross-provider fields. contracted_price is the provider-authored rate used
+    # for later quote-vs-invoice comparison: BVD Your Price, Eco USD Your Price,
+    # or Eco CAD Total Price. Other fields remain nullable when a supplier does
+    # not publish them in its rate report.
+    sales_tax: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    retail_price: Mapped[str | None] = mapped_column(String(40), nullable=True)
     contracted_price: Mapped[str] = mapped_column(String(40), nullable=False)
-    savings: Mapped[str] = mapped_column(String(40), nullable=False)
+    savings: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
