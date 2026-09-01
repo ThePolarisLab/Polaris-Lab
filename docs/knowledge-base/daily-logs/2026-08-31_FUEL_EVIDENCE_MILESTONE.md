@@ -56,7 +56,7 @@ PR #274 added authenticated manual Outlook import routes for the newest trusted 
 - Eco CAD quoted-price evidence: 67 rows, production import and exact replay certified.
 - Eco USD quoted-price evidence: 350 rows, production import and exact replay certified.
 - Eco CAD production cross-check showed invoice Unit price `1.8520` / Billed price `2.0928` aligning with rate-sheet Price `1.852` / Total Price `2.0928`.
-- Real invoice evidence includes BVD fuel invoice 988495, newer BVD Express-only invoice 988488, Eco USD invoice U9165021 with 112 transaction rows, and Eco CAD invoice C9193095 with 4 transaction rows.
+- Real invoice evidence includes BVD fuel invoice 988495, newer BVD Express-only invoice 988488, Eco USD invoice U9165021, and Eco CAD invoice C9193095 with 4 transaction rows. The original USD count of 112 was incomplete; the 2026-09-01 parser investigation established 135 rows (see the [certification follow-up](../../engineering/ECO_USD_INVOICE_CERTIFICATION_FOLLOWUP.md)).
 - Live Outlook evidence confirmed BVD invoice sender `applications@bvdpetroleum.com` and Eco invoice sender `Billing@ecopetroleum.ca`.
 
 ## Completed Work
