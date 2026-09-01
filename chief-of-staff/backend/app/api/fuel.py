@@ -11,6 +11,11 @@ from app.connectors.outlook import OutlookConnector
 from app.connectors.outlook_credentials import OutlookCredentialStore
 from app.database.database import SessionLocal
 from app.fuel.eco_outlook_import import EcoPriceOutlookImportError, import_latest_eco_price_outlook
+from app.fuel.invoice_outlook_import import (
+    FuelInvoiceOutlookImportError,
+    import_latest_bvd_invoice_outlook,
+    import_latest_eco_invoice_outlook,
+)
 from app.fuel.outlook_import import BvdPcnOutlookImportError, import_latest_bvd_pcn_outlook
 from app.organizations.models import Organization
 from app.security.dependencies import require_permission
@@ -81,4 +86,46 @@ def import_latest_eco_price_from_outlook(
             currency=currency,
         )
     except EcoPriceOutlookImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/bvd/invoices/import-outlook-latest")
+def import_latest_bvd_invoice_from_outlook(
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.ORGANIZATION_WRITE)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Manually import the newest trusted BVD fuel invoice from Outlook."""
+
+    expected_company_name = _organization_company_name(session, principal.organization_id)
+    connector = OutlookConnector(credential_store=OutlookCredentialStore(principal.organization_id))
+    try:
+        return import_latest_bvd_invoice_outlook(
+            session,
+            principal.organization_id,
+            connector=connector,
+            expected_company_name=expected_company_name,
+        )
+    except FuelInvoiceOutlookImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/eco/invoices/import-outlook-latest")
+def import_latest_eco_invoice_from_outlook(
+    currency: str = Query(..., min_length=3, max_length=3),
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.ORGANIZATION_WRITE)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Manually import the newest trusted Eco CAD or USD fuel invoice from Outlook."""
+
+    expected_company_name = _organization_company_name(session, principal.organization_id)
+    connector = OutlookConnector(credential_store=OutlookCredentialStore(principal.organization_id))
+    try:
+        return import_latest_eco_invoice_outlook(
+            session,
+            principal.organization_id,
+            connector=connector,
+            expected_company_name=expected_company_name,
+            currency=currency,
+        )
+    except FuelInvoiceOutlookImportError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
