@@ -53,112 +53,131 @@ def parse_eco_invoice_pdf(content: bytes, filename: str) -> FuelInvoiceDocument:
         raise FuelInvoiceImportError("period_contract_error")
 
     lines: list[FuelInvoiceLine] = []
-    for page_text in pages:
-        raw_lines = [line.strip() for line in page_text.splitlines() if line.strip()]
-        index = 0
-        while index < len(raw_lines) - 1:
-            upper = _columns(raw_lines[index])
-            if not _is_transaction_upper(upper):
-                index += 1
-                continue
-            lower = _columns(raw_lines[index + 1])
+    # A transaction can straddle pages; remove only the repeated table headers.
+    raw_lines = [
+        line.strip()
+        for page_text in pages
+        for line in page_text.splitlines()
+        if line.strip() and not _is_table_header(line.strip())
+    ]
+    index = 0
+    while index < len(raw_lines):
+        upper = _columns(raw_lines[index])
+        if not raw_lines[index].startswith("***"):
+            index += 1
+            continue
+        # The certified USD money-code layout may omit the driver cell.
+        if (
+            currency == "USD"
+            and len(upper) == 10
+            and re.fullmatch(r"\d{4}-\d{2}-\d{2}", upper[1])
+            and upper[3] == "MC"
+        ):
+            upper.insert(1, None)
+        if not _is_transaction_upper(upper) or index + 1 >= len(raw_lines):
+            raise FuelInvoiceImportError("source_contract_error")
+        lower = _columns(raw_lines[index + 1])
+        # MC is non-location evidence. Preserve both absent cells as NULL,
+        # never shift financial fields or invent a city/state for these rows.
+        if currency == "USD" and upper[4] == "MC" and len(lower) == 9:
+            lower[2:2] = [None, None]
 
-            if currency == "USD":
-                if len(upper) != 11 or len(lower) != 11:
-                    raise FuelInvoiceImportError("source_contract_error")
-                (
-                    card_number,
-                    driver_name,
-                    transaction_date,
-                    site_name,
-                    product_code,
-                    retail_price,
-                    savings_ppu,
-                    quantity,
-                    _total_quantity,
-                    transaction_fee,
-                    final_amount,
-                ) = upper
-                (
-                    unit_raw,
-                    transaction_time,
-                    site_city,
-                    region_code,
-                    sales_tax,
-                    billed_price,
-                    discount_amount,
-                    pre_tax_amount,
-                    total_amount,
-                    cash_amount,
-                    row_currency,
-                ) = lower
-                unit_price = None
-            else:
-                if len(upper) != 10 or len(lower) != 10:
-                    raise FuelInvoiceImportError("source_contract_error")
-                (
-                    card_number,
-                    driver_name,
-                    transaction_date,
-                    site_name,
-                    product_code,
-                    unit_price,
-                    quantity,
-                    _total_quantity,
-                    transaction_fee,
-                    final_amount,
-                ) = upper
-                (
-                    unit_raw,
-                    transaction_time,
-                    site_city,
-                    region_code,
-                    sales_tax,
-                    billed_price,
-                    pre_tax_amount,
-                    total_amount,
-                    cash_amount,
-                    row_currency,
-                ) = lower
-                retail_price = None
-                savings_ppu = None
-                discount_amount = None
+        if currency == "USD":
+            if len(upper) != 11 or len(lower) != 11:
+                raise FuelInvoiceImportError("source_contract_error")
+            (
+                card_number,
+                driver_name,
+                transaction_date,
+                site_name,
+                product_code,
+                retail_price,
+                savings_ppu,
+                quantity,
+                _total_quantity,
+                transaction_fee,
+                final_amount,
+            ) = upper
+            (
+                unit_raw,
+                transaction_time,
+                site_city,
+                region_code,
+                sales_tax,
+                billed_price,
+                discount_amount,
+                pre_tax_amount,
+                total_amount,
+                cash_amount,
+                row_currency,
+            ) = lower
+            unit_price = None
+        else:
+            if len(upper) != 10 or len(lower) != 10:
+                raise FuelInvoiceImportError("source_contract_error")
+            (
+                card_number,
+                driver_name,
+                transaction_date,
+                site_name,
+                product_code,
+                unit_price,
+                quantity,
+                _total_quantity,
+                transaction_fee,
+                final_amount,
+            ) = upper
+            (
+                unit_raw,
+                transaction_time,
+                site_city,
+                region_code,
+                sales_tax,
+                billed_price,
+                pre_tax_amount,
+                total_amount,
+                cash_amount,
+                row_currency,
+            ) = lower
+            retail_price = None
+            savings_ppu = None
+            discount_amount = None
 
-            if row_currency.upper() != currency:
-                raise FuelInvoiceImportError("currency_contract_error")
-            try:
-                transaction_at = datetime.fromisoformat(f"{transaction_date} {transaction_time}")
-            except ValueError as exc:
-                raise FuelInvoiceImportError("source_contract_error") from exc
-            code = product_code.upper()
-            lines.append(
-                FuelInvoiceLine(
-                    provider_transaction_id=None,
-                    card_number=card_number,
-                    driver_name=driver_name,
-                    unit_raw=unit_raw,
-                    transaction_at=transaction_at,
-                    supplier_site_id=None,
-                    site_name=site_name,
-                    site_city=site_city,
-                    region_code=region_code.upper(),
-                    product_code=code,
-                    category=_ECO_CATEGORY.get(code, "OTHER"),
-                    quantity=validate_decimal_text(quantity),
-                    retail_price=validate_decimal_text(retail_price) if retail_price else None,
-                    unit_price=validate_decimal_text(unit_price) if unit_price else None,
-                    billed_price=validate_decimal_text(billed_price),
-                    sales_tax=validate_decimal_text(sales_tax),
-                    discount_per_unit=validate_decimal_text(savings_ppu) if savings_ppu else None,
-                    discount_amount=validate_decimal_text(discount_amount) if discount_amount else None,
-                    transaction_fee=validate_decimal_text(transaction_fee),
-                    pre_tax_amount=validate_decimal_text(pre_tax_amount),
-                    total_amount=validate_decimal_text(total_amount),
-                    final_amount=validate_decimal_text(final_amount),
-                    cash_amount=validate_decimal_text(cash_amount),
-                )
+        if row_currency.upper() != currency:
+            raise FuelInvoiceImportError("currency_contract_error")
+        try:
+            transaction_at = datetime.fromisoformat(f"{transaction_date} {transaction_time}")
+        except ValueError as exc:
+            raise FuelInvoiceImportError("source_contract_error") from exc
+        code = product_code.upper()
+        lines.append(
+            FuelInvoiceLine(
+                provider_transaction_id=None,
+                card_number=card_number,
+                driver_name=driver_name,
+                unit_raw=unit_raw,
+                transaction_at=transaction_at,
+                supplier_site_id=None,
+                site_name=site_name,
+                site_city=site_city,
+                region_code=region_code.upper() if region_code else None,
+                product_code=code,
+                category=_ECO_CATEGORY.get(code, "OTHER"),
+                quantity=validate_decimal_text(quantity),
+                retail_price=validate_decimal_text(retail_price) if retail_price else None,
+                unit_price=validate_decimal_text(unit_price) if unit_price else None,
+                billed_price=validate_decimal_text(billed_price),
+                sales_tax=validate_decimal_text(sales_tax),
+                discount_per_unit=validate_decimal_text(savings_ppu) if savings_ppu else None,
+                discount_amount=validate_decimal_text(discount_amount) if discount_amount else None,
+                transaction_fee=validate_decimal_text(transaction_fee),
+                pre_tax_amount=validate_decimal_text(pre_tax_amount),
+                total_amount=validate_decimal_text(total_amount),
+                final_amount=validate_decimal_text(final_amount),
+                cash_amount=validate_decimal_text(cash_amount),
             )
-            index += 2
+        )
+        index += 2
 
     if not lines:
         raise FuelInvoiceImportError("source_contract_error")
@@ -201,7 +220,19 @@ def _header(page_text: str, text: str) -> tuple[str, str, date, date, str]:
     return company_name, invoice_match.group(1), period_start, period_end, currency_match.group(1).upper()
 
 
-def _is_transaction_upper(parts: list[str]) -> bool:
+def _is_table_header(line: str) -> bool:
+    return (
+        line.startswith("Card #")
+        and "Driver Name" in line
+        and line.endswith("Final AMT")
+    ) or (
+        line.startswith("Vehicle #")
+        and "Time(CST)" in line
+        and line.endswith("Currency")
+    )
+
+
+def _is_transaction_upper(parts: list[str | None]) -> bool:
     return (
         len(parts) in {10, 11}
         and parts[0].startswith("***")

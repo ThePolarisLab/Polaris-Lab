@@ -143,6 +143,87 @@ def test_eco_cad_parser_preserves_unit_price_and_billed_price(monkeypatch) -> No
     assert def_line.billed_price == "1.5441"
 
 
+@pytest.mark.parametrize("blank_driver", [False, True])
+def test_eco_usd_money_code_preserves_absent_cells(monkeypatch, blank_driver) -> None:
+    layout = ECO_USD_LAYOUT.replace("101  21:03  UNKNOWN  ND", "101  21:03")
+    if blank_driver:
+        layout = layout.replace("***40547  SINGH  2026", "***40547  2026")
+    monkeypatch.setattr(eco_invoice, "PdfReader", lambda _: _Reader(layout))
+    document = eco_invoice.parse_eco_invoice_pdf(b"provider", "Mor_08-23_08-29_USD.pdf")
+    money = document.lines[1]
+    assert len(document.lines) == 2
+    assert money.driver_name == (None if blank_driver else "SINGH")
+    assert money.site_city is None
+    assert money.region_code is None
+    assert money.category == "MONEY_CODE"
+    assert money.sales_tax == "0.00"
+    assert money.billed_price == "95.0000"
+    assert money.discount_amount == "0.00"
+    assert money.pre_tax_amount == "95.00"
+    assert money.total_amount == "95.00"
+    assert money.final_amount == "95.00"
+    assert money.cash_amount == "0.00"
+
+
+def test_eco_usd_transaction_continues_after_repeated_page_headers(monkeypatch) -> None:
+    before, after = ECO_USD_LAYOUT.split("2201  03:01", 1)
+    reader = _Reader(before)
+    reader.pages.append(_Page(
+        "Card #  Driver Name  Date  Site Name  Product  Retail price  Savings PPU  QTY  Total QTY  Trans Fees  Final AMT\n"
+        "Vehicle #  Time(CST)  Site City  State  Sales Tax  Billed price  Discount  PreTax  Total AMT  Cash  Currency\n"
+        "2201  03:01" + after
+    ))
+    monkeypatch.setattr(eco_invoice, "PdfReader", lambda _: reader)
+    document = eco_invoice.parse_eco_invoice_pdf(b"provider", "Mor_08-23_08-29_USD.pdf")
+    assert len(document.lines) == 2
+    assert document.lines[0].site_city == "GRAND FORKS"
+    assert document.lines[0].billed_price == "5.0460"
+
+
+@pytest.mark.parametrize("layout", [
+    # Missing fuel location is not covered by the money-code exception.
+    ECO_USD_LAYOUT.replace("2201  03:01  GRAND FORKS  ND", "2201  03:01"),
+    # One absent location is ambiguous, so do not guess which field is missing.
+    ECO_USD_LAYOUT.replace("101  21:03  UNKNOWN  ND", "101  21:03  ND"),
+    # Missing financial fields must never be interpreted as absent location.
+    ECO_USD_LAYOUT.replace("101  21:03  UNKNOWN  ND  0.00  95.0000", "101  21:03  UNKNOWN  ND"),
+    # A malformed card row must fail, not silently disappear from the import.
+    ECO_USD_LAYOUT.replace("***40547  SINGH  2026-08-24", "***40547  SINGH  invalid-date"),
+    # An unfinished transaction at EOF must also fail closed.
+    ECO_USD_LAYOUT + "\n***12345  DRIVER  2026-08-24  STATION  ULSD  5.00  0.00  1.0  1.0  0.00  5.00",
+    # Page summaries cannot be skipped to join unrelated row halves.
+    ECO_USD_LAYOUT.replace("2201  03:01", "Summary for Unit: 2201\n2201  03:01"),
+])
+def test_eco_usd_malformed_rows_fail_closed(monkeypatch, layout) -> None:
+    monkeypatch.setattr(eco_invoice, "PdfReader", lambda _: _Reader(layout))
+    with pytest.raises(FuelInvoiceImportError) as exc:
+        eco_invoice.parse_eco_invoice_pdf(b"provider", "Mor_08-23_08-29_USD.pdf")
+    assert exc.value.category == "source_contract_error"
+
+
+def test_eco_usd_blank_cells_persist_and_replay_without_duplicates(monkeypatch) -> None:
+    layout = ECO_USD_LAYOUT.replace("101  21:03  UNKNOWN  ND", "101  21:03")
+    layout = layout.replace("***40547  SINGH  2026", "***40547  2026")
+    monkeypatch.setattr(eco_invoice, "PdfReader", lambda _: _Reader(layout))
+    with _session() as db:
+        args = dict(
+            supplier="eco", content=b"synthetic-blank-cell-pdf",
+            source_filename="Mor_08-23_08-29_USD.pdf",
+            expected_company_name="MOR LOGISTICS MANITOBA LIMITED",
+            parser=eco_invoice.parse_eco_invoice_pdf,
+        )
+        first = import_fuel_invoice_pdf(db, "org-1", **args)
+        replay = import_fuel_invoice_pdf(db, "org-1", **args)
+        assert first["status"] == "import_success"
+        assert replay["status"] == "idempotent_replay"
+        assert replay["replayed"] is True
+        assert db.query(FuelInvoiceLineEvidence).count() == 2
+        money = db.query(FuelInvoiceLineEvidence).filter_by(category="MONEY_CODE").one()
+        assert money.driver_name is None
+        assert money.site_city is None
+        assert money.region_code is None
+
+
 def test_unit_normalization_applies_only_known_optional_m_rule() -> None:
     assert normalize_unit("2201") == "M2201"
     assert normalize_unit("M2201") == "M2201"
