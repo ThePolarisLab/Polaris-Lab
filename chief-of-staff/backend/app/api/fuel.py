@@ -20,6 +20,7 @@ from app.fuel.outlook_import import BvdPcnOutlookImportError, import_latest_bvd_
 from app.organizations.models import Organization
 from app.security.dependencies import require_permission
 from app.security.models import AuthenticatedPrincipal, Permission
+from app.fuel.price_reconciliation import PricePreviewError, preview_invoice_prices
 
 
 router = APIRouter(prefix="/api/v1/fuel", tags=["fuel"])
@@ -28,6 +29,19 @@ router = APIRouter(prefix="/api/v1/fuel", tags=["fuel"])
 def _db() -> Session:
     with SessionLocal() as session:
         yield session
+
+
+@router.get("/invoices/{invoice_run_id}/price-reconciliation")
+def invoice_price_reconciliation(
+    invoice_run_id: int,
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.ORGANIZATION_READ)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Read-only preview; never imports, contacts suppliers, or changes evidence."""
+    try:
+        return preview_invoice_prices(session, principal.organization_id, invoice_run_id)
+    except PricePreviewError as exc:
+        raise HTTPException(status_code=404 if str(exc) == "invoice_not_found" else 409, detail=str(exc)) from exc
 
 
 def _organization_company_name(session: Session, organization_id: str) -> str:
