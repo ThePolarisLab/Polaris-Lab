@@ -12,6 +12,7 @@ from app.services.eco_price_report import EcoPriceImportError
 from app.security.models import AuthenticatedPrincipal, Permission
 from app.security.dependencies import get_principal
 from app.api import fuel
+from app.database.database import Base
 
 
 DAY = datetime.now(timezone.utc).date() - timedelta(days=10)
@@ -155,7 +156,6 @@ def test_connector_reads_encoded_mailbox_message(monkeypatch):
 def test_real_persistence_replay_and_tenant_isolation(monkeypatch):
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
-    from app.database.database import Base
     from app.organizations.models import Organization
     from app.models.fuel import FuelPriceEvidence, FuelPriceImportRun
     from app.services import eco_price_report as service
