@@ -162,6 +162,15 @@ class OutlookConnector(BaseConnector):
             prefer_text_body=True,
         )
 
+    def get_message(self, message_id: str) -> dict[str, Any]:
+        """Read one mailbox-owned message, including its folder for source checks."""
+        return self._request_json(
+            "GET", f"/me/messages/{_quote_segment(message_id)}",
+            operation="message read",
+            params={"$select": _message_select() + ",parentFolderId"},
+            prefer_text_body=True,
+        )
+
     def delta_messages(self, folder_id: str, *, delta_link: str | None = None) -> dict[str, Any]:
         if delta_link:
             return self._request_absolute_json("GET", delta_link, operation="message delta", prefer_text_body=True)

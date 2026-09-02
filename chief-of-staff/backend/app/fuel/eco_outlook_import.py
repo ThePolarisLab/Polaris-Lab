@@ -163,6 +163,7 @@ def _message_candidate(
     *,
     currency: str,
     expected_company_name: str,
+    require_complete_attachments: bool = False,
 ) -> EcoPriceOutlookCandidate | None:
     subject = _clean(message.get("subject"))
     match = _SUBJECT_RE.fullmatch(subject)
@@ -181,6 +182,8 @@ def _message_candidate(
 
     effective = match.group("effective")
     attachment_payload = connector.list_attachments(message_id)
+    if require_complete_attachments and attachment_payload.get("@odata.nextLink"):
+        raise EcoPriceOutlookImportError("attachment_page_incomplete")
     matches = []
     for item in attachment_payload.get("value") or []:
         if not isinstance(item, dict) or bool(item.get("isInline")):
