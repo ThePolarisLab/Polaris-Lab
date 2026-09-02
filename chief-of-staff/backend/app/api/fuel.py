@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from typing import Any
+from datetime import date
+
+from pydantic import BaseModel, Field
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -11,6 +14,7 @@ from app.connectors.outlook import OutlookConnector
 from app.connectors.outlook_credentials import OutlookCredentialStore
 from app.database.database import SessionLocal
 from app.fuel.eco_outlook_import import EcoPriceOutlookImportError, import_latest_eco_price_outlook
+from app.fuel.eco_historical_import import import_historical_eco_price_outlook
 from app.fuel.invoice_outlook_import import (
     FuelInvoiceOutlookImportError,
     import_latest_bvd_invoice_outlook,
@@ -101,6 +105,30 @@ def import_latest_eco_price_from_outlook(
         )
     except EcoPriceOutlookImportError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class EcoHistoricalPriceRequest(BaseModel):
+    message_id: str = Field(min_length=1, max_length=2048)
+    currency: str = Field(pattern="^(CAD|USD)$")
+    effective_date: date
+
+
+@router.post("/eco/prices/import-outlook-selected")
+def import_selected_eco_price_from_outlook(
+    request: EcoHistoricalPriceRequest,
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.ORGANIZATION_WRITE)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Explicit single-sheet import; no date range, scheduler or latest fallback."""
+    try:
+        return import_historical_eco_price_outlook(
+            session, principal.organization_id,
+            connector=OutlookConnector(credential_store=OutlookCredentialStore(principal.organization_id)),
+            expected_company_name=_organization_company_name(session, principal.organization_id),
+            **request.model_dump(),
+        )
+    except EcoPriceOutlookImportError as exc:
+        raise HTTPException(status_code=400, detail=exc.category) from exc
 
 
 @router.post("/bvd/invoices/import-outlook-latest")
