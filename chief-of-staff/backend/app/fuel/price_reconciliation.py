@@ -10,7 +10,7 @@ from app.models.fuel import FuelPriceEvidence, FuelPriceImportRun
 from app.models.fuel_invoice import FuelInvoiceImportRun, FuelInvoiceLineEvidence
 
 
-POLICY_VERSION = "supplier-price-preview-v1"
+POLICY_VERSION = "supplier-price-preview-v2"
 MAX_INVOICE_LINES = 1000
 MAX_QUOTE_ROWS = 20000
 MAX_PRICE_RUNS = 500
@@ -56,9 +56,14 @@ def _station(line, quote):
 
 
 def _product(line, quote):
-    # Only an explicit same-product match, or BVD truck diesel -> ULSD.
-    # Blank BVD CAD product labels and reefer-to-ULSD mappings stay unresolved.
-    expected = {"TA": "ULSD"}.get(line.product_code, line.product_code) if line.supplier == "bvd" else line.product_code
+    # MOR's approved supplier policy uses the published ULSD quote for both
+    # truck diesel and reefer diesel. Preserve the invoice product/category;
+    # this only selects the applicable supplier quote for comparison.
+    expected_by_supplier = {
+        "bvd": {"TA": "ULSD", "TF": "ULSD"},
+        "eco": {"ULSR": "ULSD"},
+    }
+    expected = expected_by_supplier.get(line.supplier, {}).get(line.product_code, line.product_code)
     return bool(quote.product_code) and _key(quote.product_code) == _key(expected)
 
 
@@ -121,6 +126,18 @@ def _line_result(line, quotes, runs):
     valid_codes = {"bvd": {"TA": "TRUCK_FUEL", "TF": "REEFER_FUEL", "DF": "DEF"}, "eco": {"ULSD": "TRUCK_FUEL", "ULSR": "REEFER_FUEL", "DEFD": "DEF"}}
     if valid_codes.get(line.supplier, {}).get(line.product_code) != line.category:
         return dict(base, status="unresolved", reason="unsupported_product")
+    if line.category == "DEF":
+        # BVD and Eco do not publish DEF rates. The invoice rate is therefore
+        # the approved price basis, while quantity remains a separate evidence
+        # gate requiring both the fuel receipt and the Motive fuel entry.
+        return dict(
+            base,
+            status="not_applicable",
+            reason="supplier_def_rate_not_published",
+            price_verification_basis="invoice_billed_price_by_policy",
+            quantity_verification_status="pending_receipt_and_motive",
+            quantity_required_evidence=["fuel_receipt", "motive_fuel_entry"],
+        )
     if not line.transaction_at or line.currency not in {"CAD", "USD"}:
         return dict(base, status="unresolved", reason="missing_date_or_currency")
     if not line.region_code or (not line.supplier_site_id and not all((line.site_name, line.site_city))):

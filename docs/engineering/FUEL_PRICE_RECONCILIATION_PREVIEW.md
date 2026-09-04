@@ -1,4 +1,4 @@
-# Supplier price reconciliation preview V1
+# Supplier price reconciliation preview V2
 
 ## Scope and authorization
 
@@ -40,10 +40,17 @@ This closes invoice ingestion certification, not production price-comparison cer
   when the supplied ID fails. Eco without an ID requires exact full station-name
   and region matching (plus city if independently present on the quote).
   Case/whitespace normalization only; no fuzzy, city-only, brand or geographic aliases.
-- Require matching product labels. BVD truck TA maps to explicit ULSD.
-  Blank BVD CAD product labels do not become diesel by assumption. ULSR/TF
-  are not automatically equated to ULSD, and DEF is not diesel.
-  MC/OTHER are not applicable to this fuel price comparison.
+- Require matching product labels, subject only to MOR's approved supplier-rate
+  policy: Eco ULSR and BVD TF remain classified as reefer fuel but use the
+  supplier's published ULSD quote for the same station and effective date.
+  BVD truck TA also maps to explicit ULSD. Blank BVD CAD product labels do not
+  become diesel by assumption.
+- BVD and Eco do not publish DEF rates. For valid DEFD/DF invoice lines, the
+  invoice billed rate is the approved price basis and supplier-price comparison
+  is `not_applicable` with reason `supplier_def_rate_not_published`. This does
+  not verify DEF quantity: quantity remains `pending_receipt_and_motive` until
+  both the fuel receipt and corresponding Motive fuel entry are verified.
+  MC/OTHER are also not applicable to supplier-price comparison.
 - BVD and Eco USD compare Your Price; Eco CAD compares Total Price,
   never its pre-tax Price. Original source strings remain unchanged.
 - Decimal comparison has zero tolerance: every non-zero difference is returned.
@@ -61,6 +68,10 @@ Results are match, price_difference, fallback_match, fallback_difference,
 unresolved or not_applicable. Each resolved/fallback row links invoice and quote
 IDs, hashes, filenames, effective dates, comparison field, rates and policy version.
 No driver names, card identifiers or OAuth material are returned.
+
+DEF `not_applicable` rows expose the invoice-price policy basis, the pending
+quantity-verification state and the two required evidence classes. They do not
+claim a supplier price match or a completed receipt/Motive quantity match.
 
 Missing sheets mean no completed matching rate sheet is stored. The preview
 cannot claim no email was received because it does not inspect the mailbox.
