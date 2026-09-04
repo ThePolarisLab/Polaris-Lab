@@ -148,14 +148,43 @@ def test_bvd_id_match_and_product_mapping(db):
     assert result(db, run)["reason"] == "location_missing_from_rate_sheet"
 
 
-@pytest.mark.parametrize("category,code,expected", [
-    ("MONEY_CODE", "MC", "not_applicable"), ("OTHER", "CADV", "not_applicable"),
-    ("REEFER_FUEL", "ULSR", "unresolved"), ("DEF", "DEFD", "unresolved"),
+@pytest.mark.parametrize("category,code", [
+    ("MONEY_CODE", "MC"), ("OTHER", "CADV"),
 ])
-def test_no_cross_product_or_nonfuel_comparison(db, category, code, expected):
+def test_nonfuel_is_not_applicable(db, category, code):
     run, _ = invoice(db, category=category, product_code=code)
     quote(db)
-    assert result(db, run)["status"] == expected
+    assert result(db, run)["status"] == "not_applicable"
+
+
+@pytest.mark.parametrize("supplier,code", [("eco", "ULSR"), ("bvd", "TF")])
+def test_reefer_fuel_uses_ulsd_quote_without_changing_classification(db, supplier, code):
+    run, line = invoice(db, category="REEFER_FUEL", product_code=code)
+    run.supplier = line.supplier = supplier
+    if supplier == "bvd":
+        line.supplier_site_id = "123"
+    db.commit()
+    quote(db, supplier=supplier, product_code="ULSD")
+    r = result(db, run)
+    assert r["status"] == "match"
+    assert r["category"] == "REEFER_FUEL"
+    assert r["product_code"] == code
+    assert r["quote_price"] == "5.0"
+
+
+@pytest.mark.parametrize("supplier,code", [("eco", "DEFD"), ("bvd", "DF")])
+def test_def_uses_invoice_price_policy_and_leaves_quantity_pending(db, supplier, code):
+    run, line = invoice(db, category="DEF", product_code=code)
+    run.supplier = line.supplier = supplier
+    db.commit()
+    quote(db, supplier=supplier, product_code="ULSD")
+    r = result(db, run)
+    assert r["status"] == "not_applicable"
+    assert r["reason"] == "supplier_def_rate_not_published"
+    assert r["price_verification_basis"] == "invoice_billed_price_by_policy"
+    assert r["quantity_verification_status"] == "pending_receipt_and_motive"
+    assert r["quantity_required_evidence"] == ["fuel_receipt", "motive_fuel_entry"]
+    assert "quote_evidence_id" not in r
 
 
 def test_eco_cad_total_price_not_pretax(db):
