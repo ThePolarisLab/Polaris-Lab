@@ -28,6 +28,8 @@ This closes invoice ingestion certification, not production price-comparison cer
 
 ## Matching and arithmetic policy
 
+The current read-only policy version is `supplier-price-preview-v3`.
+
 - Match only completed, internally consistent source runs for the same tenant,
   supplier, currency and company. Verify source hashes, counts and effective dates.
 - Use the supplier-reported transaction calendar date without guessing a timezone.
@@ -38,8 +40,12 @@ This closes invoice ingestion certification, not production price-comparison cer
   "Exact effective-date quote unavailable; prior-date quote used."
 - BVD uses supplier site ID and region when available. Do not substitute a name
   when the supplied ID fails. Eco without an ID requires exact full station-name
-  and region matching (plus city if independently present on the quote).
-  Case/whitespace normalization only; no fuzzy, city-only, brand or geographic aliases.
+  and region matching (plus city if independently present on the quote), except
+  for two source-certified invoice/rate-sheet variants:
+  `TA EXPRESS GRAND FORKS` -> `TA EXPRESS - GRAND FORKS` and
+  `TA EXPRESS FAIRVIEW` -> `TA EXPRESS - FAIRVIEW`. City and region still match
+  exactly. Otherwise use case/whitespace normalization only; no fuzzy, city-only,
+  brand, general punctuation, or geographic aliases.
 - Require matching product labels, subject only to MOR's approved supplier-rate
   policy: Eco ULSR and BVD TF remain classified as reefer fuel but use the
   supplier's published ULSD quote for the same station and effective date.

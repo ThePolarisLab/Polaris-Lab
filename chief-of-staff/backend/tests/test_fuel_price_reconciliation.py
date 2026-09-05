@@ -129,6 +129,22 @@ def test_no_city_only_or_fuzzy_match(db):
     assert result(db, run)["reason"] == "location_missing_from_rate_sheet"
 
 
+@pytest.mark.parametrize("invoice_name,quote_name,city,region", [
+    ("TA EXPRESS GRAND FORKS", "TA EXPRESS - GRAND FORKS", "GRAND FORKS", "ND"),
+    ("TA EXPRESS FAIRVIEW", "TA EXPRESS - FAIRVIEW", "FAIRVIEW", "KS"),
+])
+def test_explicit_eco_station_aliases_match_provider_evidence(db, invoice_name, quote_name, city, region):
+    run, _ = invoice(db, site_name=invoice_name, site_city=city, region_code=region)
+    quote(db, location_name=quote_name, region_code=region)
+    assert result(db, run)["status"] == "match"
+
+
+def test_explicit_eco_station_alias_still_requires_city_and_region(db):
+    run, _ = invoice(db, site_name="TA EXPRESS GRAND FORKS", site_city="GRAND FORKS", region_code="ND")
+    quote(db, location_name="TA EXPRESS - GRAND FORKS", city="OTHER CITY", region_code="ND")
+    assert result(db, run)["reason"] == "location_missing_from_rate_sheet"
+
+
 def test_name_case_and_whitespace_normalization(db):
     run, _ = invoice(db, site_name=" ta   GRAND forks ")
     quote(db)
