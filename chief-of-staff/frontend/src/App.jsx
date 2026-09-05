@@ -33,6 +33,7 @@ import DispatchDashboard from "./components/DispatchDashboard";
 import ExecutiveDashboard from "./components/ExecutiveDashboard";
 import { ExecutiveRouteView } from "./components/ExecutiveViews";
 import FinancialOverview from "./components/FinancialOverview";
+import FuelReview from "./components/FuelReview";
 import SystemHealth from "./components/SystemHealth";
 import { runtimeConfig } from "./runtimeConfig";
 import "./App.css";
@@ -41,6 +42,7 @@ const EXECUTIVE_ROUTES = Object.freeze([
   { key: "dashboard", label: "Dashboard", description: "Current priorities and operating position", icon: LayoutDashboard },
   { key: "daily-brief", label: "Daily Brief", description: "The most important changes and next actions", icon: BookOpenText },
   { key: "financial", label: "Financial", description: "QuickBooks executive financial snapshot", icon: DollarSign },
+  { key: "fuel-review", label: "Fuel Review", description: "Prioritized supplier price exceptions and DEF quantity checks", icon: FileSearch },
   { key: "dispatch", label: "Dispatch", description: "Durable load, equipment, and dispatch records", icon: Truck },
   { key: "ace", label: "ACE", description: "In-bond, bond, exceptions, search, and reports", icon: ShieldCheck },
   { key: "evidence", label: "Evidence", description: "Trace facts, sources, and supporting records", icon: FileSearch },
@@ -163,7 +165,7 @@ function ExecutiveWorkspace({ page, session, forbiddenMessage, onOpenMenu, onLog
         </div>
       </header>
       {forbiddenMessage && <div className="forbidden-banner" role="alert">{forbiddenMessage}</div>}
-      <main className="workspace-main">{page === "dashboard" ? <ExecutiveDashboard /> : page === "daily-brief" ? <DailyBrief /> : page === "financial" ? <FinancialOverview /> : page === "dispatch" ? <DispatchDashboard /> : page === "ace" ? <AceControl /> : page === "system-health" ? <SystemHealth /> : <ExecutiveRouteView page={page} />}</main>
+      <main className="workspace-main">{page === "dashboard" ? <ExecutiveDashboard /> : page === "daily-brief" ? <DailyBrief /> : page === "financial" ? <FinancialOverview /> : page === "fuel-review" ? <FuelReview /> : page === "dispatch" ? <DispatchDashboard /> : page === "ace" ? <AceControl /> : page === "system-health" ? <SystemHealth /> : <ExecutiveRouteView page={page} />}</main>
       <footer className="workspace-statusbar"><span><span className="status-dot" aria-hidden="true" />{runtimeConfig.workspace.workspaceName}</span><span>Evidence · Intelligence · Action</span></footer>
     </div>
   );
