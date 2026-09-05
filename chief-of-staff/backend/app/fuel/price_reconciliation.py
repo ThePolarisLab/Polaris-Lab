@@ -10,10 +10,18 @@ from app.models.fuel import FuelPriceEvidence, FuelPriceImportRun
 from app.models.fuel_invoice import FuelInvoiceImportRun, FuelInvoiceLineEvidence
 
 
-POLICY_VERSION = "supplier-price-preview-v2"
+POLICY_VERSION = "supplier-price-preview-v3"
 MAX_INVOICE_LINES = 1000
 MAX_QUOTE_ROWS = 20000
 MAX_PRICE_RUNS = 500
+
+# Evidence-backed Eco naming differences between invoice U9165021 and the
+# supplier's 2026-08-23 through 2026-08-29 USD rate sheets. Keep this explicit:
+# punctuation is otherwise significant and no fuzzy station matching is used.
+ECO_STATION_NAME_ALIASES = {
+    "ta express fairview": "ta express - fairview",
+    "ta express grand forks": "ta express - grand forks",
+}
 
 
 class PricePreviewError(ValueError):
@@ -46,10 +54,13 @@ def _station(line, quote):
     if line.supplier != "eco" or not all((line.site_name, line.site_city, line.region_code)):
         return False
     # Eco Location may be a station name or just a city. Only an exact full
-    # station-name match qualifies; a city-only match is not enough.
+    # station-name match or an explicit evidence-backed alias qualifies; a
+    # city-only or fuzzy match is not enough.
     name = quote.site_name or quote.location_name
+    invoice_name = _key(line.site_name)
+    expected_quote_name = ECO_STATION_NAME_ALIASES.get(invoice_name, invoice_name)
     return (
-        _key(line.site_name) == _key(name)
+        expected_quote_name == _key(name)
         and (not quote.city or _key(line.site_city) == _key(quote.city))
         and _key(line.region_code) == _key(quote.region_code)
     )
