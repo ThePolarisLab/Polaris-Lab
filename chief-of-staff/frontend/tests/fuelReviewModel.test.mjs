@@ -42,6 +42,30 @@ test("line 66 sized delta stays in investigate and sorts ahead of tiny differenc
   assert.deepEqual(review.precisionCandidates.map((line) => line.line_number), [90]);
   assert.equal(review.priceDifferences[0].line_number, 66);
   assert.equal(review.netAnalyticalImpact, "1.62565");
+  assert.equal(review.openAnalyticalImpact, "1.62565");
+});
+
+test("approved-no-action remains a technical discrepancy but leaves open queues", () => {
+  const approved = difference({
+    line_number: 90,
+    rate_difference: "-0.0005",
+    analytical_impact: "-0.07475",
+    review: { disposition: "approved_no_action", approved: true },
+  });
+  const open = difference({
+    line_number: 66,
+    rate_difference: "0.1635",
+    analytical_impact: "1.70040",
+    review: { disposition: "not_reviewed", approved: false },
+  });
+  const review = buildFuelReview({ lines: [approved, open] });
+  assert.equal(review.priceDifferences.length, 2);
+  assert.deepEqual(review.openPriceDifferences.map((line) => line.line_number), [66]);
+  assert.deepEqual(review.approvedDifferences.map((line) => line.line_number), [90]);
+  assert.equal(review.approvedDifferences[0].status, "price_difference");
+  assert.equal(review.openAnalyticalImpact, "1.70040");
+  assert.equal(review.approvedAnalyticalImpact, "-0.07475");
+  assert.equal(review.netAnalyticalImpact, "1.62565");
 });
 
 test("DEF quantity review is separate from supplier price differences", () => {
