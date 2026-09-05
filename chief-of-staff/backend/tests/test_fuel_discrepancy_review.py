@@ -108,6 +108,7 @@ def make_quote(db, price="5.0000"):
         source_sha256=run.source_sha256,
         effective_start=DAY,
         effective_end=DAY,
+        supplier_site_id="test-ta-moriarty",
         location_name="TA MORIARTY",
         region_code="NM",
         product_code="ULSD",
