@@ -27,7 +27,6 @@ class TorqueAIDispatch(Base):
             name="uq_torqueai_dispatch_org_provider_identity",
         ),
         CheckConstraint("loaded_miles IS NULL OR loaded_miles >= 0", name="ck_torqueai_dispatch_loaded_miles_nonnegative"),
-        CheckConstraint("stop_count IS NULL OR stop_count >= 0", name="ck_torqueai_dispatch_stop_count_nonnegative"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -50,6 +49,48 @@ class TorqueAIDispatch(Base):
     truck_number: Mapped[str | None] = mapped_column(String(120), nullable=True)
     trailer_number: Mapped[str | None] = mapped_column(String(120), nullable=True)
     loaded_miles: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    source_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    first_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now, nullable=False)
+
+    organization = relationship("Organization")
+    operational_enrichment = relationship(
+        "TorqueAIDispatchOperational",
+        back_populates="dispatch",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+
+class TorqueAIDispatchOperational(Base):
+    """One-to-one enrichment for live-certified TorqueAI fields beyond the original gate."""
+
+    __tablename__ = "torqueai_dispatch_operational"
+    __table_args__ = (
+        UniqueConstraint("dispatch_id", name="uq_torqueai_dispatch_operational_dispatch"),
+        UniqueConstraint(
+            "organization_id",
+            "dispatch_id",
+            name="uq_torqueai_dispatch_operational_org_dispatch",
+        ),
+        CheckConstraint("stop_count IS NULL OR stop_count >= 0", name="ck_torqueai_dispatch_operational_stop_count_nonnegative"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("organizations.id", name="fk_torqueai_dispatch_operational_organization_id"),
+        nullable=False,
+        index=True,
+    )
+    dispatch_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("torqueai_dispatches.id", name="fk_torqueai_dispatch_operational_dispatch_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     currency: Mapped[str | None] = mapped_column(String(12), nullable=True)
     total_charge: Mapped[Decimal | None] = mapped_column(Numeric(16, 4), nullable=True)
     stop_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -60,6 +101,7 @@ class TorqueAIDispatch(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now, nullable=False)
 
     organization = relationship("Organization")
+    dispatch = relationship("TorqueAIDispatch", back_populates="operational_enrichment")
 
 
 class TorqueAIDispatchSyncRun(Base):
