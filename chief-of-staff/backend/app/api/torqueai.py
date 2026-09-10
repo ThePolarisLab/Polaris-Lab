@@ -6,21 +6,15 @@ from datetime import date, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from app.database.database import SessionLocal
-from app.models.torqueai import (
-    TorqueAIDispatch,
-    TorqueAIDispatchOperational,
-    TorqueAIDispatchSyncRun,
-    TorqueAIDispatchSyncState,
-)
+from app.models.torqueai import TorqueAIDispatch, TorqueAIDispatchOperational, TorqueAIDispatchStop, TorqueAIDispatchSyncRun, TorqueAIDispatchSyncState
 from app.security.dependencies import require_permission
 from app.security.models import AuthenticatedPrincipal, Permission
 
 router = APIRouter(prefix="/api/v1/torqueai", tags=["torqueai"])
-
 TORQUEAI_READ_DEFAULT_LIMIT = 50
 TORQUEAI_READ_MAX_LIMIT = 100
 TORQUEAI_READ_MAX_RANGE_DAYS = 31
@@ -36,31 +30,13 @@ def durable_torqueai_status(
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
     session: Session = Depends(_db),
 ) -> dict[str, Any]:
-    """Return tenant-scoped TorqueAI ingestion health without contacting TorqueAI."""
     organization_id = principal.organization_id
-    latest_run = (
-        session.query(TorqueAIDispatchSyncRun)
-        .filter(TorqueAIDispatchSyncRun.organization_id == organization_id)
-        .order_by(TorqueAIDispatchSyncRun.started_at.desc(), TorqueAIDispatchSyncRun.id.desc())
-        .first()
-    )
-    sync_state = (
-        session.query(TorqueAIDispatchSyncState)
-        .filter(TorqueAIDispatchSyncState.organization_id == organization_id)
-        .one_or_none()
-    )
-    records_stored = (
-        session.query(TorqueAIDispatch)
-        .filter(TorqueAIDispatch.organization_id == organization_id)
-        .count()
-    )
-
+    latest_run = session.query(TorqueAIDispatchSyncRun).filter(TorqueAIDispatchSyncRun.organization_id == organization_id).order_by(TorqueAIDispatchSyncRun.started_at.desc(), TorqueAIDispatchSyncRun.id.desc()).first()
+    sync_state = session.query(TorqueAIDispatchSyncState).filter(TorqueAIDispatchSyncState.organization_id == organization_id).one_or_none()
+    records_stored = session.query(TorqueAIDispatch).filter(TorqueAIDispatch.organization_id == organization_id).count()
     health_status, message = _torqueai_health_presentation(latest_run, sync_state)
     return {
-        "health": {
-            "status": health_status,
-            "message": message,
-        },
+        "health": {"status": health_status, "message": message},
         "status": {
             "connection_status": health_status,
             "records_stored": records_stored,
@@ -94,61 +70,74 @@ def list_durable_torqueai_dispatches(
     carrier: str | None = Query(None, max_length=255),
     trailer: str | None = Query(None, max_length=120),
     currency: str | None = Query(None, max_length=12),
+    stop_job: str | None = Query(None, max_length=120),
+    stop_city: str | None = Query(None, max_length=255),
+    stop_province: str | None = Query(None, max_length=120),
+    stop_country: str | None = Query(None, max_length=120),
     page: int = Query(1, ge=1),
     limit: int = Query(TORQUEAI_READ_DEFAULT_LIMIT, ge=1, le=TORQUEAI_READ_MAX_LIMIT),
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
     session: Session = Depends(_db),
 ) -> dict[str, Any]:
-    """Return minimized durable dispatch rows without contacting TorqueAI."""
+    """Return normalized durable dispatches and certified stops without provider access."""
     _validate_date_window(date_from, date_to)
-    status_value = _normalized_filter(dispatch_status, "status")
-    customer_value = _normalized_filter(customer, "customer")
-    dispatcher_value = _normalized_filter(dispatcher, "dispatcher")
-    driver_value = _normalized_filter(driver, "driver")
-    truck_value = _normalized_filter(truck, "truck")
-    carrier_value = _normalized_filter(carrier, "carrier")
-    trailer_value = _normalized_filter(trailer, "trailer")
-    currency_value = _normalized_filter(currency, "currency")
+    filters = {
+        "status": _normalized_filter(dispatch_status, "status"),
+        "customer": _normalized_filter(customer, "customer"),
+        "dispatcher": _normalized_filter(dispatcher, "dispatcher"),
+        "driver": _normalized_filter(driver, "driver"),
+        "truck": _normalized_filter(truck, "truck"),
+        "carrier": _normalized_filter(carrier, "carrier"),
+        "trailer": _normalized_filter(trailer, "trailer"),
+        "currency": _normalized_filter(currency, "currency"),
+        "stop_job": _normalized_filter(stop_job, "stop_job"),
+        "stop_city": _normalized_filter(stop_city, "stop_city"),
+        "stop_province": _normalized_filter(stop_province, "stop_province"),
+        "stop_country": _normalized_filter(stop_country, "stop_country"),
+    }
 
     query = session.query(TorqueAIDispatch).outerjoin(
         TorqueAIDispatchOperational,
-        (TorqueAIDispatchOperational.dispatch_id == TorqueAIDispatch.id)
-        & (TorqueAIDispatchOperational.organization_id == principal.organization_id),
+        (TorqueAIDispatchOperational.dispatch_id == TorqueAIDispatch.id) & (TorqueAIDispatchOperational.organization_id == principal.organization_id),
     ).filter(TorqueAIDispatch.organization_id == principal.organization_id)
 
     if date_from is not None and date_to is not None:
-        start_text = date_from.isoformat()
-        end_exclusive_text = (date_to + timedelta(days=1)).isoformat()
         query = query.filter(
             TorqueAIDispatch.ship_date_text.is_not(None),
-            TorqueAIDispatch.ship_date_text >= start_text,
-            TorqueAIDispatch.ship_date_text < end_exclusive_text,
+            TorqueAIDispatch.ship_date_text >= date_from.isoformat(),
+            TorqueAIDispatch.ship_date_text < (date_to + timedelta(days=1)).isoformat(),
         )
-    if status_value is not None:
-        query = query.filter(func.lower(TorqueAIDispatch.status) == status_value.lower())
-    if customer_value is not None:
-        query = query.filter(func.lower(TorqueAIDispatch.customer_name) == customer_value.lower())
-    if dispatcher_value is not None:
-        query = query.filter(func.lower(TorqueAIDispatch.dispatcher_name) == dispatcher_value.lower())
-    if driver_value is not None:
-        query = query.filter(func.lower(TorqueAIDispatch.driver_name) == driver_value.lower())
-    if truck_value is not None:
-        query = query.filter(func.lower(TorqueAIDispatch.truck_number) == truck_value.lower())
-    if carrier_value is not None:
-        query = query.filter(func.lower(TorqueAIDispatch.carrier_name) == carrier_value.lower())
-    if trailer_value is not None:
-        query = query.filter(func.lower(TorqueAIDispatch.trailer_number) == trailer_value.lower())
-    if currency_value is not None:
-        query = query.filter(func.lower(TorqueAIDispatchOperational.currency) == currency_value.lower())
+    field_map = {
+        "status": TorqueAIDispatch.status,
+        "customer": TorqueAIDispatch.customer_name,
+        "dispatcher": TorqueAIDispatch.dispatcher_name,
+        "driver": TorqueAIDispatch.driver_name,
+        "truck": TorqueAIDispatch.truck_number,
+        "carrier": TorqueAIDispatch.carrier_name,
+        "trailer": TorqueAIDispatch.trailer_number,
+        "currency": TorqueAIDispatchOperational.currency,
+    }
+    for name, column in field_map.items():
+        if filters[name] is not None:
+            query = query.filter(func.lower(column) == filters[name].lower())
+
+    stop_criteria = [TorqueAIDispatchStop.organization_id == principal.organization_id]
+    stop_map = {
+        "stop_job": TorqueAIDispatchStop.job,
+        "stop_city": TorqueAIDispatchStop.city,
+        "stop_province": TorqueAIDispatchStop.province,
+        "stop_country": TorqueAIDispatchStop.country,
+    }
+    has_stop_filter = False
+    for name, column in stop_map.items():
+        if filters[name] is not None:
+            has_stop_filter = True
+            stop_criteria.append(func.lower(column) == filters[name].lower())
+    if has_stop_filter:
+        query = query.filter(TorqueAIDispatch.operational_stops.any(and_(*stop_criteria)))
 
     total_count = query.count()
-    rows = (
-        query.order_by(TorqueAIDispatch.last_changed_at.desc(), TorqueAIDispatch.id.desc())
-        .offset((page - 1) * limit)
-        .limit(limit)
-        .all()
-    )
-
+    rows = query.order_by(TorqueAIDispatch.last_changed_at.desc(), TorqueAIDispatch.id.desc()).offset((page - 1) * limit).limit(limit).all()
     return {
         "status": "success",
         "provider": "torqueai",
@@ -156,14 +145,7 @@ def list_durable_torqueai_dispatches(
         "request": {
             "from": date_from.isoformat() if date_from is not None else None,
             "to": date_to.isoformat() if date_to is not None else None,
-            "status": status_value,
-            "customer": customer_value,
-            "dispatcher": dispatcher_value,
-            "driver": driver_value,
-            "truck": truck_value,
-            "carrier": carrier_value,
-            "trailer": trailer_value,
-            "currency": currency_value,
+            **filters,
             "page": page,
             "limit": limit,
         },
@@ -179,10 +161,7 @@ def list_durable_torqueai_dispatches(
     }
 
 
-def _torqueai_health_presentation(
-    latest_run: TorqueAIDispatchSyncRun | None,
-    sync_state: TorqueAIDispatchSyncState | None,
-) -> tuple[str, str]:
+def _torqueai_health_presentation(latest_run: TorqueAIDispatchSyncRun | None, sync_state: TorqueAIDispatchSyncState | None) -> tuple[str, str]:
     if latest_run is None:
         return "not_started", "No TorqueAI ingestion run has been recorded yet."
     if latest_run.status == "claimed":
@@ -232,7 +211,56 @@ def _serialize_dispatch(row: TorqueAIDispatch) -> dict[str, Any]:
         "loaded_miles": float(row.loaded_miles) if row.loaded_miles is not None else None,
         "currency": operational.currency if operational is not None else None,
         "total_charge": float(operational.total_charge) if operational is not None and operational.total_charge is not None else None,
+        "billing": _serialize_billing(operational),
         "stop_count": operational.stop_count if operational is not None else None,
+        "stops": [_serialize_stop(stop) for stop in row.operational_stops],
         "first_observed_at": row.first_observed_at.isoformat(),
         "last_changed_at": row.last_changed_at.isoformat(),
+    }
+
+
+def _serialize_billing(row: TorqueAIDispatchOperational | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return {
+        "currency": row.billing_currency,
+        "rate": float(row.billing_rate) if row.billing_rate is not None else None,
+        "subtotal": float(row.billing_subtotal) if row.billing_subtotal is not None else None,
+        "tax_amount": float(row.billing_tax_amount) if row.billing_tax_amount is not None else None,
+        "total": float(row.billing_total) if row.billing_total is not None else None,
+    }
+
+
+def _serialize_stop(stop: TorqueAIDispatchStop) -> dict[str, Any]:
+    return {
+        "index": stop.stop_index,
+        "sequence": float(stop.sequence) if stop.sequence is not None else None,
+        "stop_no": stop.stop_no,
+        "job": stop.job,
+        "name": stop.name,
+        "address": stop.address,
+        "city": stop.city,
+        "province": stop.province,
+        "country": stop.country,
+        "zip_code": stop.zip_code,
+        "latitude": float(stop.latitude) if stop.latitude is not None else None,
+        "longitude": float(stop.longitude) if stop.longitude is not None else None,
+        "commodity": stop.commodity,
+        "notes": stop.notes,
+        "driver_name": stop.driver_name,
+        "co_driver_name": stop.co_driver_name,
+        "carrier_name": stop.carrier_name,
+        "truck_number": stop.truck_number,
+        "trailer_number": stop.trailer_number,
+        "scheduled": {
+            "is_window": stop.scheduled_is_window,
+            "pickup_date": stop.scheduled_pickup_date_text,
+            "pickup_date2": stop.scheduled_pickup_date2_text,
+            "pickup_time": stop.scheduled_pickup_time_text,
+            "pickup_time2": stop.scheduled_pickup_time2_text,
+        },
+        "temperature": stop.temperature_text,
+        "temperature_unit": stop.temperature_unit,
+        "weight": float(stop.weight) if stop.weight is not None else None,
+        "weight_unit": stop.weight_unit,
     }
