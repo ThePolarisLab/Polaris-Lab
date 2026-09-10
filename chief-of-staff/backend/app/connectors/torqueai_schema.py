@@ -1,11 +1,17 @@
 """Privacy-safe JSON schema observation helpers for TorqueAI certification.
 
-The observer reports key paths and JSON types only. It never returns provider values.
+The schema observer reports key paths and JSON types only. The narrow stop-job
+observer returns only bounded categorical ``stops[].job`` values and never the
+provider records they came from.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+
+_SAFE_JOB_VALUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _/-]{0,31}$")
 
 
 def json_type_name(value: Any) -> str:
@@ -67,3 +73,42 @@ def dispatch_schema_paths(records: tuple[dict[str, Any], ...]) -> dict[str, str]
             elif previous != type_name:
                 merged[path] = "mixed"
     return dict(sorted(merged.items()))
+
+
+def dispatch_stop_job_values(
+    records: tuple[dict[str, Any], ...],
+    *,
+    max_distinct_values: int = 20,
+) -> tuple[str, ...]:
+    """Return only safe, distinct categorical ``stops[].job`` strings.
+
+    This deliberately does not return stop sequence, location, load identity,
+    customer, appointment, notes, or any surrounding record context. Values
+    that look like free text rather than a short category token fail closed.
+    """
+    if not isinstance(max_distinct_values, int) or isinstance(max_distinct_values, bool) or max_distinct_values < 1:
+        raise ValueError("invalid stop job certification bound")
+
+    observed: set[str] = set()
+    for record in records:
+        stops = record.get("stops")
+        if not isinstance(stops, list):
+            continue
+        for stop in stops:
+            if not isinstance(stop, dict):
+                continue
+            raw_job = stop.get("job")
+            if raw_job is None:
+                continue
+            if not isinstance(raw_job, str):
+                raise ValueError("stop job value is not a string")
+            job = raw_job.strip()
+            if not job:
+                continue
+            if not _SAFE_JOB_VALUE_RE.fullmatch(job):
+                raise ValueError("stop job value is not a safe categorical token")
+            observed.add(job)
+            if len(observed) > max_distinct_values:
+                raise ValueError("too many distinct stop job values")
+
+    return tuple(sorted(observed, key=lambda value: (value.casefold(), value)))
