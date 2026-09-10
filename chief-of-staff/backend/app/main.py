@@ -24,6 +24,7 @@ from app.api.internal_ace import router as internal_ace_router
 from app.api.internal_fuel import router as internal_fuel_router
 from app.api.internal_motive import router as internal_motive_router
 from app.api.internal_torqueai import router as internal_torqueai_router
+from app.api.internal_torqueai_schema import router as internal_torqueai_schema_router
 from app.api.memory import router as memory_router
 from app.api.memory_search import router as memory_search_router
 from app.api.missions import router as missions_router
@@ -105,6 +106,7 @@ app.include_router(internal_ace_router)
 app.include_router(internal_fuel_router)
 app.include_router(internal_motive_router)
 app.include_router(internal_torqueai_router)
+app.include_router(internal_torqueai_schema_router)
 
 
 @app.get("/")
