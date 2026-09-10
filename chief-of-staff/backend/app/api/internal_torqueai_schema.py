@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from datetime import date
+import os
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
-from app.connectors.torqueai import TorqueAIConnector, TorqueAIConnectorError
+from app.connectors.torqueai import (
+    TORQUEAI_ORGANIZATION_SLUG_ENV,
+    TorqueAIConnector,
+    TorqueAIConnectorError,
+)
 from app.connectors.torqueai_schema import dispatch_schema_paths
 from app.security.job_auth import JobAuthenticationError, verify_job_signature
 
@@ -37,8 +42,10 @@ async def certify_torqueai_schema_machine(
     if body:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="TorqueAI schema certification body must be empty")
 
+    organization_slug = str(os.getenv(TORQUEAI_ORGANIZATION_SLUG_ENV) or "").strip()
+
     try:
-        connector = TorqueAIConnector()
+        connector = TorqueAIConnector(organization_slug=organization_slug)
         page = connector.fetch_dispatches(
             date_from=certification_date,
             date_to=certification_date,
