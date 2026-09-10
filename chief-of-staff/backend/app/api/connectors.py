@@ -146,11 +146,11 @@ def ingest_torqueai_dispatch_window(
         raise _torqueai_ingestion_http_error(exc) from exc
 
 
-@router.get("/{name}", response_model=list[ConnectorHealth])
+@router.get("/{name}", response_model=ConnectorHealth)
 def get_connector(
     name: str,
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
-):
+) -> ConnectorHealth:
     try:
         connector = connector_registry.get(name)
     except KeyError as exc:
