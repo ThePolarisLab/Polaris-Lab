@@ -17,6 +17,7 @@ from app.connectors.quickbooks_credentials import QuickBooksCredentialStore
 from app.connectors.registry import connector_registry
 from app.connectors.torqueai import TorqueAIConnector, TorqueAIConnectorError, TorqueAIDispatchPage
 from app.connectors.torqueai_ingestion import TorqueAIDispatchIngestionError, ingest_torqueai_dispatches
+from app.connectors.torqueai_schema import dispatch_schema_paths, json_type_name
 from app.database.database import SessionLocal
 from app.organizations.models import Organization
 from app.security.dependencies import require_permission
@@ -171,7 +172,7 @@ def sync_connector(
 
 def _torqueai_certification_metadata(page: TorqueAIDispatchPage) -> dict[str, Any]:
     sample = page.data[0] if page.data else None
-    field_types = ({str(key): _json_type_name(value) for key, value in sorted(sample.items())} if sample is not None else {})
+    field_types = ({str(key): json_type_name(value) for key, value in sorted(sample.items())} if sample is not None else {})
     return {
         "status": "certified_response_observed",
         "provider": "torqueai",
@@ -184,27 +185,13 @@ def _torqueai_certification_metadata(page: TorqueAIDispatchPage) -> dict[str, An
         "rows_returned": len(page.data),
         "pagination_required": page.page * page.items_per_page < page.total_count,
         "sample_record_field_types": field_types,
+        "observed_schema_paths": dispatch_schema_paths(page.data),
+        "schema_values_returned": False,
         "response_contract_valid": True,
         "tenant_scope_validated": True,
         "raw_dispatches_returned": False,
         "secrets_exposed": False,
     }
-
-
-def _json_type_name(value: Any) -> str:
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, str):
-        return "string"
-    if isinstance(value, (int, float)):
-        return "number"
-    if isinstance(value, list):
-        return "array"
-    if isinstance(value, dict):
-        return "object"
-    return "unknown"
 
 
 def _torqueai_certification_http_error(exc: TorqueAIConnectorError) -> HTTPException:
