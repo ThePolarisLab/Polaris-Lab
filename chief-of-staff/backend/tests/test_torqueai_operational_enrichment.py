@@ -126,7 +126,7 @@ def test_invalid_certified_operational_types_fail_before_dispatch_persistence(ov
     connector = FakeConnector([dispatch(**override)])
     session = SessionLocal()
     try:
-        with pytest.raises(TorqueAIDispatchIngestionError, match="provider_contract_error"):
+        with pytest.raises(TorqueAIDispatchIngestionError) as exc_info:
             ingest_torqueai_dispatches(
                 session,
                 organization_id=organization["id"],
@@ -135,6 +135,7 @@ def test_invalid_certified_operational_types_fail_before_dispatch_persistence(ov
                 date_to=DAY,
                 connector=connector,
             )
+        assert exc_info.value.code == "provider_contract_error"
         assert session.query(TorqueAIDispatch).filter_by(organization_id=organization["id"]).count() == 0
         assert session.query(TorqueAIDispatchOperational).filter_by(organization_id=organization["id"]).count() == 0
     finally:
