@@ -27,6 +27,7 @@ class TorqueAIDispatch(Base):
             name="uq_torqueai_dispatch_org_provider_identity",
         ),
         CheckConstraint("loaded_miles IS NULL OR loaded_miles >= 0", name="ck_torqueai_dispatch_loaded_miles_nonnegative"),
+        CheckConstraint("stop_count IS NULL OR stop_count >= 0", name="ck_torqueai_dispatch_stop_count_nonnegative"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -49,6 +50,9 @@ class TorqueAIDispatch(Base):
     truck_number: Mapped[str | None] = mapped_column(String(120), nullable=True)
     trailer_number: Mapped[str | None] = mapped_column(String(120), nullable=True)
     loaded_miles: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    total_charge: Mapped[Decimal | None] = mapped_column(Numeric(16, 4), nullable=True)
+    stop_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     first_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
