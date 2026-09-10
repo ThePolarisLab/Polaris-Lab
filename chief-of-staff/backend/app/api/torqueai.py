@@ -10,7 +10,12 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database.database import SessionLocal
-from app.models.torqueai import TorqueAIDispatch, TorqueAIDispatchSyncRun, TorqueAIDispatchSyncState
+from app.models.torqueai import (
+    TorqueAIDispatch,
+    TorqueAIDispatchOperational,
+    TorqueAIDispatchSyncRun,
+    TorqueAIDispatchSyncState,
+)
 from app.security.dependencies import require_permission
 from app.security.models import AuthenticatedPrincipal, Permission
 
@@ -84,6 +89,11 @@ def list_durable_torqueai_dispatches(
     dispatch_status: str | None = Query(None, alias="status", max_length=120),
     customer: str | None = Query(None, max_length=255),
     dispatcher: str | None = Query(None, max_length=255),
+    driver: str | None = Query(None, max_length=255),
+    truck: str | None = Query(None, max_length=120),
+    carrier: str | None = Query(None, max_length=255),
+    trailer: str | None = Query(None, max_length=120),
+    currency: str | None = Query(None, max_length=12),
     page: int = Query(1, ge=1),
     limit: int = Query(TORQUEAI_READ_DEFAULT_LIMIT, ge=1, le=TORQUEAI_READ_MAX_LIMIT),
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
@@ -94,10 +104,17 @@ def list_durable_torqueai_dispatches(
     status_value = _normalized_filter(dispatch_status, "status")
     customer_value = _normalized_filter(customer, "customer")
     dispatcher_value = _normalized_filter(dispatcher, "dispatcher")
+    driver_value = _normalized_filter(driver, "driver")
+    truck_value = _normalized_filter(truck, "truck")
+    carrier_value = _normalized_filter(carrier, "carrier")
+    trailer_value = _normalized_filter(trailer, "trailer")
+    currency_value = _normalized_filter(currency, "currency")
 
-    query = session.query(TorqueAIDispatch).filter(
-        TorqueAIDispatch.organization_id == principal.organization_id
-    )
+    query = session.query(TorqueAIDispatch).outerjoin(
+        TorqueAIDispatchOperational,
+        (TorqueAIDispatchOperational.dispatch_id == TorqueAIDispatch.id)
+        & (TorqueAIDispatchOperational.organization_id == principal.organization_id),
+    ).filter(TorqueAIDispatch.organization_id == principal.organization_id)
 
     if date_from is not None and date_to is not None:
         start_text = date_from.isoformat()
@@ -113,6 +130,16 @@ def list_durable_torqueai_dispatches(
         query = query.filter(func.lower(TorqueAIDispatch.customer_name) == customer_value.lower())
     if dispatcher_value is not None:
         query = query.filter(func.lower(TorqueAIDispatch.dispatcher_name) == dispatcher_value.lower())
+    if driver_value is not None:
+        query = query.filter(func.lower(TorqueAIDispatch.driver_name) == driver_value.lower())
+    if truck_value is not None:
+        query = query.filter(func.lower(TorqueAIDispatch.truck_number) == truck_value.lower())
+    if carrier_value is not None:
+        query = query.filter(func.lower(TorqueAIDispatch.carrier_name) == carrier_value.lower())
+    if trailer_value is not None:
+        query = query.filter(func.lower(TorqueAIDispatch.trailer_number) == trailer_value.lower())
+    if currency_value is not None:
+        query = query.filter(func.lower(TorqueAIDispatchOperational.currency) == currency_value.lower())
 
     total_count = query.count()
     rows = (
@@ -132,6 +159,11 @@ def list_durable_torqueai_dispatches(
             "status": status_value,
             "customer": customer_value,
             "dispatcher": dispatcher_value,
+            "driver": driver_value,
+            "truck": truck_value,
+            "carrier": carrier_value,
+            "trailer": trailer_value,
+            "currency": currency_value,
             "page": page,
             "limit": limit,
         },
@@ -183,6 +215,7 @@ def _normalized_filter(value: str | None, name: str) -> str | None:
 
 
 def _serialize_dispatch(row: TorqueAIDispatch) -> dict[str, Any]:
+    operational = row.operational_enrichment
     return {
         "load_number": row.provider_load_number,
         "order_number": row.provider_order_number,
@@ -197,6 +230,9 @@ def _serialize_dispatch(row: TorqueAIDispatch) -> dict[str, Any]:
         "truck_number": row.truck_number,
         "trailer_number": row.trailer_number,
         "loaded_miles": float(row.loaded_miles) if row.loaded_miles is not None else None,
+        "currency": operational.currency if operational is not None else None,
+        "total_charge": float(operational.total_charge) if operational is not None and operational.total_charge is not None else None,
+        "stop_count": operational.stop_count if operational is not None else None,
         "first_observed_at": row.first_observed_at.isoformat(),
         "last_changed_at": row.last_changed_at.isoformat(),
     }
