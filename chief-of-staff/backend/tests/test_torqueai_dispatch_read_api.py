@@ -94,7 +94,7 @@ def test_durable_read_is_tenant_scoped_metadata_safe_and_never_calls_provider(mo
     assert "organization_id" not in response.text
     assert "billing" not in response.text
     assert "totalCharge" not in response.text
-    assert "stops" not in response.text
+    assert all(item["stops"] == [] for item in payload["data"])
     assert provider_calls == 0
 
     session = SessionLocal()

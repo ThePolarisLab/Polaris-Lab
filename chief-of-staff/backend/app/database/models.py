@@ -6,23 +6,13 @@ from app.auth.models import (  # noqa: F401
     ProductionLoginAttempt,
     ProductionPasswordCredential,
 )
-from app.connectors.outlook_credentials import (  # noqa: F401
-    OutlookOAuthCredential,
-    OutlookOAuthState,
-)
-from app.connectors.quickbooks_credentials import (  # noqa: F401
-    QuickBooksOAuthCredential,
-    QuickBooksOAuthState,
-)
+from app.connectors.outlook_credentials import OutlookOAuthCredential, OutlookOAuthState  # noqa: F401
+from app.connectors.quickbooks_credentials import QuickBooksOAuthCredential, QuickBooksOAuthState  # noqa: F401
 from app.identity.models import Identity, OrganizationMembership  # noqa: F401
 from app.missions.models import Mission, MissionTask, Workflow  # noqa: F401
 from app.models.ace import AceFeedRun, AceImportRun, AceInBondEvent, AceInBondMovement  # noqa: F401
 from app.models.company import Company  # noqa: F401
-from app.models.financial_snapshot import (  # noqa: F401
-    FinancialAccount,
-    FinancialSnapshot,
-    FinancialSyncHistory,
-)
+from app.models.financial_snapshot import FinancialAccount, FinancialSnapshot, FinancialSyncHistory  # noqa: F401
 from app.models.fuel import FuelPriceEvidence, FuelPriceImportRun  # noqa: F401
 from app.models.fuel_invoice import FuelInvoiceImportRun, FuelInvoiceLineEvidence  # noqa: F401
 from app.models.fuel_review import FuelDiscrepancyReviewEvent  # noqa: F401
@@ -51,6 +41,8 @@ from app.models.relationship import KnowledgeRelationship  # noqa: F401
 from app.models.team_note import TeamNote  # noqa: F401
 from app.models.torqueai import (  # noqa: F401
     TorqueAIDispatch,
+    TorqueAIDispatchOperational,
+    TorqueAIDispatchStop,
     TorqueAIDispatchSyncRun,
     TorqueAIDispatchSyncState,
 )
@@ -60,5 +52,4 @@ from app.organizations.models import Organization  # noqa: F401
 
 def register_models() -> None:
     """Import side effects above register every model with Base.metadata."""
-
     return None
