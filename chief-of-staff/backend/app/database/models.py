@@ -51,6 +51,7 @@ from app.models.relationship import KnowledgeRelationship  # noqa: F401
 from app.models.team_note import TeamNote  # noqa: F401
 from app.models.torqueai import (  # noqa: F401
     TorqueAIDispatch,
+    TorqueAIDispatchOperational,
     TorqueAIDispatchSyncRun,
     TorqueAIDispatchSyncState,
 )

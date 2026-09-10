@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.connectors.torqueai import TORQUEAI_ORGANIZATION_SLUG_ENV
-from app.connectors.torqueai_ingestion import (
+from app.connectors.torqueai_operational_ingestion import (
     TORQUEAI_INGEST_PAGE_SIZE,
     TorqueAIDispatchIngestionError,
     ingest_torqueai_dispatches,
