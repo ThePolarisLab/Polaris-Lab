@@ -211,23 +211,10 @@ def _serialize_dispatch(row: TorqueAIDispatch) -> dict[str, Any]:
         "loaded_miles": float(row.loaded_miles) if row.loaded_miles is not None else None,
         "currency": operational.currency if operational is not None else None,
         "total_charge": float(operational.total_charge) if operational is not None and operational.total_charge is not None else None,
-        "billing": _serialize_billing(operational),
         "stop_count": operational.stop_count if operational is not None else None,
         "stops": [_serialize_stop(stop) for stop in row.operational_stops],
         "first_observed_at": row.first_observed_at.isoformat(),
         "last_changed_at": row.last_changed_at.isoformat(),
-    }
-
-
-def _serialize_billing(row: TorqueAIDispatchOperational | None) -> dict[str, Any] | None:
-    if row is None:
-        return None
-    return {
-        "currency": row.billing_currency,
-        "rate": float(row.billing_rate) if row.billing_rate is not None else None,
-        "subtotal": float(row.billing_subtotal) if row.billing_subtotal is not None else None,
-        "tax_amount": float(row.billing_tax_amount) if row.billing_tax_amount is not None else None,
-        "total": float(row.billing_total) if row.billing_total is not None else None,
     }
 
 
