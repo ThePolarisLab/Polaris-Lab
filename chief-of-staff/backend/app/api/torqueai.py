@@ -18,6 +18,10 @@ router = APIRouter(prefix="/api/v1/torqueai", tags=["torqueai"])
 TORQUEAI_READ_DEFAULT_LIMIT = 50
 TORQUEAI_READ_MAX_LIMIT = 100
 TORQUEAI_READ_MAX_RANGE_DAYS = 31
+TORQUEAI_CERTIFIED_STOP_ROLE_JOBS = {
+    "pickup": "Pick Up",
+    "delivery": "Drop Off",
+}
 
 
 def _db() -> Session:
@@ -71,6 +75,8 @@ def list_durable_torqueai_dispatches(
     trailer: str | None = Query(None, max_length=120),
     currency: str | None = Query(None, max_length=12),
     stop_job: str | None = Query(None, max_length=120),
+    stop_role: str | None = Query(None, max_length=20),
+    stop_date: date | None = Query(None),
     stop_city: str | None = Query(None, max_length=255),
     stop_province: str | None = Query(None, max_length=120),
     stop_country: str | None = Query(None, max_length=120),
@@ -81,6 +87,11 @@ def list_durable_torqueai_dispatches(
 ) -> dict[str, Any]:
     """Return normalized durable dispatches and certified stops without provider access."""
     _validate_date_window(date_from, date_to)
+    normalized_stop_role = _normalized_stop_role(stop_role)
+    normalized_stop_job = _normalized_filter(stop_job, "stop_job")
+    if normalized_stop_role is not None and normalized_stop_job is not None:
+        raise HTTPException(status_code=422, detail="TorqueAI durable read accepts stop_role or stop_job, not both")
+
     filters = {
         "status": _normalized_filter(dispatch_status, "status"),
         "customer": _normalized_filter(customer, "customer"),
@@ -90,7 +101,9 @@ def list_durable_torqueai_dispatches(
         "carrier": _normalized_filter(carrier, "carrier"),
         "trailer": _normalized_filter(trailer, "trailer"),
         "currency": _normalized_filter(currency, "currency"),
-        "stop_job": _normalized_filter(stop_job, "stop_job"),
+        "stop_job": normalized_stop_job,
+        "stop_role": normalized_stop_role,
+        "stop_date": stop_date.isoformat() if stop_date is not None else None,
         "stop_city": _normalized_filter(stop_city, "stop_city"),
         "stop_province": _normalized_filter(stop_province, "stop_province"),
         "stop_country": _normalized_filter(stop_country, "stop_country"),
@@ -133,6 +146,13 @@ def list_durable_torqueai_dispatches(
         if filters[name] is not None:
             has_stop_filter = True
             stop_criteria.append(func.lower(column) == filters[name].lower())
+    if filters["stop_role"] is not None:
+        has_stop_filter = True
+        certified_job = TORQUEAI_CERTIFIED_STOP_ROLE_JOBS[filters["stop_role"]]
+        stop_criteria.append(func.lower(TorqueAIDispatchStop.job) == certified_job.lower())
+    if filters["stop_date"] is not None:
+        has_stop_filter = True
+        stop_criteria.append(TorqueAIDispatchStop.scheduled_pickup_date_text == filters["stop_date"])
     if has_stop_filter:
         query = query.filter(TorqueAIDispatch.operational_stops.any(and_(*stop_criteria)))
 
@@ -191,6 +211,17 @@ def _normalized_filter(value: str | None, name: str) -> str | None:
     if not normalized:
         raise HTTPException(status_code=422, detail=f"TorqueAI durable read {name} filter must not be blank")
     return normalized
+
+
+def _normalized_stop_role(value: str | None) -> str | None:
+    normalized = _normalized_filter(value, "stop_role")
+    if normalized is None:
+        return None
+    role = normalized.lower()
+    if role not in TORQUEAI_CERTIFIED_STOP_ROLE_JOBS:
+        allowed = ", ".join(sorted(TORQUEAI_CERTIFIED_STOP_ROLE_JOBS))
+        raise HTTPException(status_code=422, detail=f"TorqueAI durable read stop_role must be one of: {allowed}")
+    return role
 
 
 def _serialize_dispatch(row: TorqueAIDispatch) -> dict[str, Any]:
