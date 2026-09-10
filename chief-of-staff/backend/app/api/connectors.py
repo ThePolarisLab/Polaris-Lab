@@ -16,7 +16,7 @@ from app.connectors.quickbooks import QuickBooksConnector
 from app.connectors.quickbooks_credentials import QuickBooksCredentialStore
 from app.connectors.registry import connector_registry
 from app.connectors.torqueai import TorqueAIConnector, TorqueAIConnectorError, TorqueAIDispatchPage
-from app.connectors.torqueai_ingestion import TorqueAIDispatchIngestionError, ingest_torqueai_dispatches
+from app.connectors.torqueai_operational_ingestion import TorqueAIDispatchIngestionError, ingest_torqueai_dispatches
 from app.connectors.torqueai_schema import dispatch_schema_paths, json_type_name
 from app.database.database import SessionLocal
 from app.organizations.models import Organization
@@ -146,11 +146,11 @@ def ingest_torqueai_dispatch_window(
         raise _torqueai_ingestion_http_error(exc) from exc
 
 
-@router.get("/{name}", response_model=ConnectorHealth)
+@router.get("/{name}", response_model=list[ConnectorHealth])
 def get_connector(
     name: str,
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
-) -> ConnectorHealth:
+):
     try:
         connector = connector_registry.get(name)
     except KeyError as exc:
