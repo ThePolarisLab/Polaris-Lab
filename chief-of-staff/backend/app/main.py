@@ -41,6 +41,7 @@ from app.api.relationships import router as relationships_router
 from app.api.system import router as system_router
 from app.api.team_notes import router as team_notes_router
 from app.api.torqueai import router as torqueai_router
+from app.api.torqueai_schema_certification import router as torqueai_schema_certification_router
 from app.api.truck import router as truck_router
 from app.api.work_context import router as work_context_router
 from app.connectors.github import GitHubConnector
@@ -86,6 +87,7 @@ app.include_router(system_router)
 app.include_router(connector_freshness_router)
 app.include_router(connectors_router)
 app.include_router(torqueai_router)
+app.include_router(torqueai_schema_certification_router)
 app.include_router(motive_router)
 app.include_router(motive_seven_day_reconciliation_validation_router)
 app.include_router(motive_vehicle_utilization_kpi_router)
