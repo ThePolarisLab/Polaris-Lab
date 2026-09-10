@@ -43,10 +43,10 @@ jobs:
             python -c 'import hashlib,hmac,os; body=hashlib.sha256(b"").hexdigest(); canonical="\n".join([os.environ["CANONICAL_METHOD"], os.environ["CANONICAL_PATH"], os.environ["CANONICAL_TIMESTAMP"], body]); print(hmac.new(os.environ["POLARIS_TORQUEAI_SYNC_TRIGGER_SECRET"].encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest())'
           )"
 
-          http_status="$(
+          curl_meta="$(
             curl --silent --show-error \
-              --output response.json \
-              --write-out "%{http_code}" \
+              --output response.body \
+              --write-out "%{http_code}|%{content_type}|%{redirect_url}" \
               --connect-timeout 30 \
               --max-time 300 \
               --request POST \
@@ -55,15 +55,49 @@ jobs:
               "${trigger_url}"
           )"
 
-          HTTP_STATUS="${http_status}" python - <<'PY'
+          HTTP_STATUS="${curl_meta%%|*}"
+          remainder="${curl_meta#*|}"
+          CONTENT_TYPE="${remainder%%|*}"
+          REDIRECT_URL="${remainder#*|}"
+          export HTTP_STATUS CONTENT_TYPE REDIRECT_URL
+
+          python - <<'PY'
           import json
           import os
+          from urllib.parse import urlsplit
 
-          with open("response.json", "r", encoding="utf-8") as handle:
-              raw = json.load(handle)
-          payload = raw.get("detail") if isinstance(raw, dict) and isinstance(raw.get("detail"), dict) else raw
-          if not isinstance(payload, dict):
-              payload = {}
+          http_status = int(os.environ.get("HTTP_STATUS") or "0")
+          content_type = os.environ.get("CONTENT_TYPE") or ""
+          redirect_url = os.environ.get("REDIRECT_URL") or ""
+
+          try:
+              with open("response.body", "r", encoding="utf-8", errors="replace") as handle:
+                  response_text = handle.read()
+          except OSError:
+              response_text = ""
+
+          print(f"TorqueAI schema-certification HTTP: {http_status}")
+          print(f"Response content type: {content_type or 'none'}")
+          print(f"Response body state: {'empty' if not response_text.strip() else 'present'}")
+
+          if redirect_url:
+              parsed = urlsplit(redirect_url)
+              safe_redirect = f"{parsed.scheme}://{parsed.netloc}{parsed.path}" if parsed.scheme and parsed.netloc else parsed.path
+              print(f"Redirect target: {safe_redirect or 'present'}")
+
+          payload = {}
+          if response_text.strip():
+              try:
+                  raw = json.loads(response_text)
+              except (ValueError, TypeError):
+                  print("Response JSON state: non-json")
+              else:
+                  print("Response JSON state: valid")
+                  payload = raw.get("detail") if isinstance(raw, dict) and isinstance(raw.get("detail"), dict) else raw
+                  if not isinstance(payload, dict):
+                      payload = {}
+          else:
+              print("Response JSON state: empty")
 
           allowed = {
               "status",
@@ -80,12 +114,13 @@ jobs:
               "provider_http_status",
           }
           sanitized = {key: value for key, value in payload.items() if key in allowed}
-          print(f"TorqueAI schema-certification HTTP: {os.environ['HTTP_STATUS']}")
-          print(json.dumps(sanitized, indent=2, sort_keys=True))
+          if sanitized:
+              print(json.dumps(sanitized, indent=2, sort_keys=True))
 
-          http_status = int(os.environ["HTTP_STATUS"])
           if not 200 <= http_status < 300:
               raise SystemExit(f"schema certification failed with HTTP {http_status}")
+          if not response_text.strip():
+              raise SystemExit("schema certification returned an empty success response")
           if payload.get("schema_values_returned") is not False:
               raise SystemExit("schema certification safety contract failed")
           if payload.get("raw_dispatches_returned") is not False:
