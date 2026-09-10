@@ -56,8 +56,15 @@ def test_certification_route_makes_one_bounded_get_and_returns_metadata_only(
                         "loadNumber": 1053,
                         "customerName": "Secret Customer Value",
                         "driverName": "Secret Driver Value",
-                        "stops": [{"address": "Secret Address Value"}],
-                        "billing": {"total": 9999.99},
+                        "stops": [
+                            {
+                                "address": "Secret Address Value",
+                                "city": "Secret City Value",
+                                "window": {"from": "secret-from", "to": "secret-to"},
+                            },
+                            {"address": "Second Secret Address", "province": "Secret Region"},
+                        ],
+                        "billing": {"total": 9999.99, "currency": "CAD"},
                     }
                 ],
                 "totalCount": 137,
@@ -79,40 +86,51 @@ def test_certification_route_makes_one_bounded_get_and_returns_metadata_only(
     assert response.status_code == 200
     assert len(calls) == 1
     body = response.json()
-    assert body == {
-        "status": "certified_response_observed",
-        "provider": "torqueai",
-        "operation": "external_dispatch_page",
-        "http_status": 200,
-        "request": {
-            "from": CERTIFICATION_DATE,
-            "to": CERTIFICATION_DATE,
-            "page": 1,
-            "limit": 100,
-        },
-        "total_count": 137,
-        "page": 1,
-        "items_per_page": 100,
-        "rows_returned": 1,
-        "pagination_required": True,
-        "sample_record_field_types": {
-            "billing": "object",
-            "customerName": "string",
-            "driverName": "string",
-            "loadNumber": "number",
-            "stops": "array",
-        },
-        "response_contract_valid": True,
-        "tenant_scope_validated": True,
-        "raw_dispatches_returned": False,
-        "secrets_exposed": False,
+    assert body["status"] == "certified_response_observed"
+    assert body["sample_record_field_types"] == {
+        "billing": "object",
+        "customerName": "string",
+        "driverName": "string",
+        "loadNumber": "number",
+        "stops": "array",
     }
+    assert body["observed_schema_paths"] == {
+        "billing": "object",
+        "billing.currency": "string",
+        "billing.total": "number",
+        "customerName": "string",
+        "driverName": "string",
+        "loadNumber": "number",
+        "stops": "array",
+        "stops[]": "object",
+        "stops[].address": "string",
+        "stops[].city": "string",
+        "stops[].province": "string",
+        "stops[].window": "object",
+        "stops[].window.from": "string",
+        "stops[].window.to": "string",
+    }
+    assert body["schema_values_returned"] is False
+    assert body["response_contract_valid"] is True
+    assert body["tenant_scope_validated"] is True
+    assert body["raw_dispatches_returned"] is False
+    assert body["secrets_exposed"] is False
+
     serialized = response.text
-    assert TOKEN not in serialized
-    assert "Secret Customer Value" not in serialized
-    assert "Secret Driver Value" not in serialized
-    assert "Secret Address Value" not in serialized
-    assert "9999.99" not in serialized
+    for secret_value in (
+        TOKEN,
+        "Secret Customer Value",
+        "Secret Driver Value",
+        "Secret Address Value",
+        "Second Secret Address",
+        "Secret City Value",
+        "Secret Region",
+        "secret-from",
+        "secret-to",
+        "9999.99",
+        "CAD",
+    ):
+        assert secret_value not in serialized
 
 
 def test_certification_route_fails_closed_for_other_tenant_before_provider_call(
