@@ -4,10 +4,12 @@ from collections import Counter
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation, localcontext
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.fuel import FuelPriceEvidence, FuelPriceImportRun
 from app.models.fuel_invoice import FuelInvoiceImportRun, FuelInvoiceLineEvidence
+from app.models.fuel_review import FuelDiscrepancyReviewEvent
 
 
 POLICY_VERSION = "supplier-price-preview-v3"
@@ -174,6 +176,40 @@ def _line_result(line, quotes, runs):
                 resolution="Provide the missing supplier rate list or approved manual rate evidence; no rate is invented.")
 
 
+def _review_state_map(session: Session, organization_id: str, invoice_run_id: int) -> dict[int, dict]:
+    latest = (
+        session.query(
+            FuelDiscrepancyReviewEvent.invoice_line_id.label("invoice_line_id"),
+            func.max(FuelDiscrepancyReviewEvent.id).label("event_id"),
+        )
+        .filter(
+            FuelDiscrepancyReviewEvent.organization_id == organization_id,
+            FuelDiscrepancyReviewEvent.invoice_run_id == invoice_run_id,
+        )
+        .group_by(FuelDiscrepancyReviewEvent.invoice_line_id)
+        .subquery()
+    )
+    events = (
+        session.query(FuelDiscrepancyReviewEvent)
+        .join(latest, FuelDiscrepancyReviewEvent.id == latest.c.event_id)
+        .all()
+    )
+    return {
+        event.invoice_line_id: {
+            "disposition": "approved_no_action" if event.action == "approved_no_action" else "not_reviewed",
+            "approved": event.action == "approved_no_action",
+            "last_action": event.action,
+            "review_event_id": event.id,
+            "approval_mode": event.approval_mode,
+            "reason": event.reason,
+            "reviewer_identity_id": event.reviewer_identity_id,
+            "reviewer_role": event.reviewer_role,
+            "reviewed_at": event.created_at.isoformat(),
+        }
+        for event in events
+    }
+
+
 def preview_invoice_prices(session: Session, organization_id: str, invoice_run_id: int):
     """Compare one completed tenant-owned invoice to bounded persisted quotes."""
     with session.no_autoflush:
@@ -231,12 +267,33 @@ def preview_invoice_prices(session: Session, organization_id: str, invoice_run_i
                 or q.effective_start != run.effective_start or q.effective_end != run.effective_end):
                 raise PricePreviewError("quote_evidence_inconsistent")
         results = [_line_result(line, quotes, by_id) for line in lines]
+        review_states = _review_state_map(session, organization_id, invoice.id)
+        review_summary = Counter()
+        for result in results:
+            if result["status"] in {"price_difference", "fallback_difference"}:
+                review = review_states.get(result["invoice_line_id"], {
+                    "disposition": "not_reviewed",
+                    "approved": False,
+                    "last_action": None,
+                    "review_event_id": None,
+                    "approval_mode": None,
+                    "reason": None,
+                    "reviewer_identity_id": None,
+                    "reviewer_role": None,
+                    "reviewed_at": None,
+                })
+                result["review"] = review
+                review_summary[review["disposition"]] += 1
         return {
             "policy_version": POLICY_VERSION, "read_only": True,
+            "evidence_read_only": True,
+            "review_actions_supported": True,
             "invoice_run_id": invoice.id, "invoice_number": invoice.invoice_number,
             "invoice_source_sha256": invoice.source_sha256, "invoice_source_filename": invoice.source_filename,
             "currency": invoice.currency, "line_count": len(results),
-            "summary": dict(Counter(r["status"] for r in results)), "lines": results,
-            "scope": "supplier price only; not accounting adjustments or Motive reconciliation",
+            "summary": dict(Counter(r["status"] for r in results)),
+            "review_summary": dict(review_summary),
+            "lines": results,
+            "scope": "supplier price comparison plus separate review disposition; not accounting adjustments or Motive reconciliation",
             "missing_sheet_definition": "No completed matching rate sheet is stored; mailbox receipt has not been checked.",
         }

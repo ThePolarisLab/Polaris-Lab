@@ -66,9 +66,13 @@ export function buildFuelReview(preview) {
     .map((line) => ({
       ...line,
       review_priority: isObservedPrecisionCandidate(line) ? "precision_candidate" : "investigate",
+      review_disposition: line.review?.disposition || "not_reviewed",
+      is_approved_no_action: line.review?.disposition === "approved_no_action",
     }))
     .sort(byAbsoluteImpactDescending);
 
+  const openPriceDifferences = priceDifferences.filter((line) => !line.is_approved_no_action);
+  const approvedDifferences = priceDifferences.filter((line) => line.is_approved_no_action);
   const defPending = lines.filter(
     (line) => line.category === "DEF" && line.quantity_verification_status === "pending_receipt_and_motive",
   );
@@ -77,11 +81,15 @@ export function buildFuelReview(preview) {
 
   return {
     priceDifferences,
-    investigate: priceDifferences.filter((line) => line.review_priority === "investigate"),
-    precisionCandidates: priceDifferences.filter((line) => line.review_priority === "precision_candidate"),
+    openPriceDifferences,
+    approvedDifferences,
+    investigate: openPriceDifferences.filter((line) => line.review_priority === "investigate"),
+    precisionCandidates: openPriceDifferences.filter((line) => line.review_priority === "precision_candidate"),
     defPending,
     unresolved,
     matches,
     netAnalyticalImpact: sumDecimalStrings(priceDifferences.map((line) => line.analytical_impact)),
+    openAnalyticalImpact: sumDecimalStrings(openPriceDifferences.map((line) => line.analytical_impact)),
+    approvedAnalyticalImpact: sumDecimalStrings(approvedDifferences.map((line) => line.analytical_impact)),
   };
 }
