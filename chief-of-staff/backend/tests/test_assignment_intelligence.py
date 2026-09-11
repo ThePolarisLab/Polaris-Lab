@@ -162,16 +162,48 @@ def test_assignment_candidates_rank_trucks_and_hos_separately(monkeypatch) -> No
     assert payload["truck_candidates"][0]["truck_number"] == "M-NEAR"
     assert payload["truck_candidates"][0]["rank"] == 1
     assert payload["truck_candidates"][0]["distance_to_pickup_km"] < payload["truck_candidates"][1]["distance_to_pickup_km"]
+    assert payload["truck_candidates"][0]["location_confidence"] == "high"
+    assert payload["truck_candidates"][0]["location_stale"] is False
     assert payload["driver_candidates"][0]["driver_name"] == "Driver Near"
+    assert payload["driver_candidates"][0]["observed_driving_duration"] == 1000
+    assert payload["driver_candidates"][0]["duration_unit_certified"] is False
     assert payload["driver_candidates"][0]["driving_duration_seconds"] == 1000
     assert payload["decision_guardrails"] == {
         "truck_driver_pairing_inferred": False,
         "hos_is_legal_remaining_hours": False,
+        "hos_duration_unit_certified": False,
+        "legacy_hos_seconds_labels_unit_unverified": True,
+        "location_staleness_threshold_minutes": 120.0,
+        "stale_truck_locations_present": False,
+        "top_truck_location_stale": False,
+        "top_truck_requires_location_verification": False,
         "dispatcher_approval_required": True,
         "autonomous_assignment_performed": False,
     }
     assert payload["provider_calls"]["torqueai_live"] is False
     assert payload["secrets_exposed"] is False
+
+
+def test_assignment_candidates_flag_stale_top_truck(monkeypatch) -> None:
+    organization, _identity, headers = seed_principal("owner")
+    _seed_assignment_data(organization, load_number="9151")
+    monkeypatch.setattr(assignment_intelligence, "MotiveConnector", FakeMotiveConnector)
+    monkeypatch.setattr(assignment_intelligence, "_freshness_minutes", lambda _value: 480.0)
+
+    response = TestClient(app).get(
+        "/api/v1/assignment-intelligence/candidates?load_number=9151&hos_date=2026-09-10",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["truck_candidates"][0]["truck_number"] == "M-NEAR"
+    assert payload["truck_candidates"][0]["location_confidence"] == "low"
+    assert payload["truck_candidates"][0]["location_stale"] is True
+    assert payload["truck_candidates"][0]["location_verification_required"] is True
+    assert payload["decision_guardrails"]["stale_truck_locations_present"] is True
+    assert payload["decision_guardrails"]["top_truck_location_stale"] is True
+    assert payload["decision_guardrails"]["top_truck_requires_location_verification"] is True
 
 
 def test_assignment_candidates_are_tenant_scoped(monkeypatch) -> None:
