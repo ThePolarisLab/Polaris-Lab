@@ -58,7 +58,9 @@ def assignment_candidates(
     if pickup.latitude is None or pickup.longitude is None:
         raise HTTPException(status_code=422, detail="Pickup stop is missing certified coordinates")
 
-    target_hos_date = hos_date or _parse_date(pickup.scheduled_pickup_date_text) or datetime.now(timezone.utc).date()
+    today = datetime.now(timezone.utc).date()
+    target_hos_date = hos_date or today
+    location_date = today
     motive = MotiveConnector(organization_id=principal.organization_id)
 
     trucks = _rank_trucks(
@@ -66,7 +68,7 @@ def assignment_candidates(
         organization_id=principal.organization_id,
         pickup_lat=float(pickup.latitude),
         pickup_lon=float(pickup.longitude),
-        certification_date=target_hos_date,
+        location_date=location_date,
         connector=motive,
     )
     drivers = _rank_drivers(
@@ -98,6 +100,10 @@ def assignment_candidates(
                 "scheduled_time": pickup.scheduled_pickup_time_text,
             },
         },
+        "signal_dates": {
+            "motive_latest_location": location_date.isoformat(),
+            "motive_hos": target_hos_date.isoformat(),
+        },
         "truck_candidates": trucks,
         "driver_candidates": drivers,
         "decision_guardrails": {
@@ -128,7 +134,7 @@ def _rank_trucks(
     organization_id: str,
     pickup_lat: float,
     pickup_lon: float,
-    certification_date: date,
+    location_date: date,
     connector: MotiveConnector,
 ) -> list[dict[str, Any]]:
     vehicles = (
@@ -144,7 +150,7 @@ def _rank_trucks(
         try:
             payload = connector._request_json(  # noqa: SLF001 - hardened provider auth/retry path.
                 endpoint,
-                params={"date": certification_date.isoformat()},
+                params={"date": location_date.isoformat()},
                 operation="assignment_intelligence_latest_vehicle_location",
             )
         except MotiveConnectorError:
@@ -260,13 +266,6 @@ def _provider_driver_name(driver: dict[str, Any]) -> str | None:
     parts = [str(driver.get(key) or "").strip() for key in ("first_name", "last_name")]
     name = " ".join(part for part in parts if part)
     return name or None
-
-
-def _parse_date(value: str | None) -> date | None:
-    try:
-        return date.fromisoformat(value) if value else None
-    except ValueError:
-        return None
 
 
 def _number(value: Any) -> float | None:
