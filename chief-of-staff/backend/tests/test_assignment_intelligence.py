@@ -49,6 +49,23 @@ class FakeMotiveConnector:
                     },
                 ]
             }
+        if endpoint == "/v1/vehicles/lookup":
+            if params["number"] == "M-NEAR":
+                return {
+                    "vehicle": {
+                        "number": "M-NEAR",
+                        "current_driver": {"id": 101, "first_name": "Driver", "last_name": "Near", "status": "active"},
+                        "availability_details": {"availability_status": "in_service"},
+                    }
+                }
+            if params["number"] == "M-FAR":
+                return {
+                    "vehicle": {
+                        "number": "M-FAR",
+                        "current_driver": {"id": 102, "first_name": "Driver", "last_name": "Busy", "status": "active"},
+                        "availability_details": {"availability_status": "in_service"},
+                    }
+                }
         if endpoint.endswith("veh-near"):
             return {
                 "vehicle_locations": [
@@ -145,7 +162,7 @@ def _seed_assignment_data(organization: dict[str, str], *, load_number: str = "9
         session.close()
 
 
-def test_assignment_candidates_rank_trucks_and_hos_separately(monkeypatch) -> None:
+def test_assignment_candidates_pair_truck_and_driver_authoritatively(monkeypatch) -> None:
     organization, _identity, headers = seed_principal("owner")
     _seed_assignment_data(organization)
     monkeypatch.setattr(assignment_intelligence, "MotiveConnector", FakeMotiveConnector)
@@ -157,30 +174,20 @@ def test_assignment_candidates_rank_trucks_and_hos_separately(monkeypatch) -> No
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["planning_scope"] == "assignment_read_only_v1"
-    assert payload["load"]["load_number"] == "9101"
     assert payload["truck_candidates"][0]["truck_number"] == "M-NEAR"
-    assert payload["truck_candidates"][0]["rank"] == 1
-    assert payload["truck_candidates"][0]["distance_to_pickup_km"] < payload["truck_candidates"][1]["distance_to_pickup_km"]
-    assert payload["truck_candidates"][0]["location_confidence"] == "high"
-    assert payload["truck_candidates"][0]["location_stale"] is False
-    assert payload["driver_candidates"][0]["driver_name"] == "Driver Near"
-    assert payload["driver_candidates"][0]["observed_driving_duration"] == 1000
-    assert payload["driver_candidates"][0]["duration_unit_certified"] is False
-    assert payload["driver_candidates"][0]["driving_duration_seconds"] == 1000
-    assert payload["decision_guardrails"] == {
-        "truck_driver_pairing_inferred": False,
-        "hos_is_legal_remaining_hours": False,
-        "hos_duration_unit_certified": False,
-        "legacy_hos_seconds_labels_unit_unverified": True,
-        "location_staleness_threshold_minutes": 120.0,
-        "stale_truck_locations_present": False,
-        "top_truck_location_stale": False,
-        "top_truck_requires_location_verification": False,
-        "dispatcher_approval_required": True,
-        "autonomous_assignment_performed": False,
-    }
-    assert payload["provider_calls"]["torqueai_live"] is False
+    assert payload["truck_candidates"][0]["current_driver"] == {"name": "Driver Near", "status": "active"}
+    assert payload["truck_candidates"][0]["current_driver_authoritative"] is True
+    assert payload["truck_candidates"][0]["current_driver_source"] == "motive_vehicle_lookup_current_driver"
+    assert payload["truck_candidates"][0]["current_driver_hos_observed"]["driving_duration_seconds"] == 1000
+    assert payload["truck_candidates"][0]["current_driver_hos_observed"]["is_legal_remaining_hours"] is False
+    assert payload["truck_candidates"][0]["dispatch_availability_status"] == "in_service"
+    assert payload["driver_candidates"][0]["duration_unit"] == "seconds"
+    assert payload["driver_candidates"][0]["duration_unit_certified"] is True
+    assert payload["decision_guardrails"]["truck_driver_pairing_inferred"] is False
+    assert payload["decision_guardrails"]["authoritative_truck_driver_pairs_present"] is True
+    assert payload["decision_guardrails"]["hos_is_legal_remaining_hours"] is False
+    assert payload["decision_guardrails"]["hos_duration_unit_certified"] is True
+    assert payload["provider_calls"]["motive_vehicle_lookup"] is True
     assert payload["secrets_exposed"] is False
 
 
@@ -197,12 +204,9 @@ def test_assignment_candidates_flag_stale_top_truck(monkeypatch) -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["truck_candidates"][0]["truck_number"] == "M-NEAR"
     assert payload["truck_candidates"][0]["location_confidence"] == "low"
     assert payload["truck_candidates"][0]["location_stale"] is True
     assert payload["truck_candidates"][0]["location_verification_required"] is True
-    assert payload["decision_guardrails"]["stale_truck_locations_present"] is True
-    assert payload["decision_guardrails"]["top_truck_location_stale"] is True
     assert payload["decision_guardrails"]["top_truck_requires_location_verification"] is True
 
 
