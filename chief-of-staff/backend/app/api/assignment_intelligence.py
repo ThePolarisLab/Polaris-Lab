@@ -22,6 +22,7 @@ MAX_TRUCK_CANDIDATES = 20
 MAX_DRIVER_CANDIDATES = 100
 HIGH_CONFIDENCE_LOCATION_MAX_AGE_MINUTES = 30.0
 STALE_LOCATION_MAX_AGE_MINUTES = 120.0
+PAIRING_SOURCE = "motive_vehicle_lookup_current_driver"
 
 
 def _db() -> Session:
@@ -36,12 +37,11 @@ def assignment_candidates(
     principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
     session: Session = Depends(_db),
 ) -> dict[str, Any]:
-    """Rank truck and driver signals separately for dispatcher review.
+    """Return dispatcher decision support without assigning equipment or drivers.
 
-    Truck/driver pairing is intentionally not inferred because Motive's certified
-    latest-location sample did not prove an authoritative current pairing field.
-    Driver HOS durations are relative workload signals, not legal remaining-hours
-    calculations.
+    Motive vehicle lookup is treated as the authoritative source for the vehicle's
+    current_driver relationship when that object is present. HOS records remain
+    observed duty-duration signals; Polaris does not calculate legal remaining HOS.
     """
     dispatch = (
         session.query(TorqueAIDispatch)
@@ -62,26 +62,29 @@ def assignment_candidates(
 
     today = datetime.now(timezone.utc).date()
     target_hos_date = hos_date or today
-    location_date = today
     motive = MotiveConnector(organization_id=principal.organization_id)
 
-    trucks = _rank_trucks(
-        session,
-        organization_id=principal.organization_id,
-        pickup_lat=float(pickup.latitude),
-        pickup_lon=float(pickup.longitude),
-        location_date=location_date,
-        connector=motive,
-    )
     drivers = _rank_drivers(
         session,
         organization_id=principal.organization_id,
         hos_date=target_hos_date,
         connector=motive,
     )
+    trucks = _rank_trucks(
+        session,
+        organization_id=principal.organization_id,
+        pickup_lat=float(pickup.latitude),
+        pickup_lon=float(pickup.longitude),
+        location_date=today,
+        connector=motive,
+    )
+    _attach_paired_driver_hos(trucks, drivers)
+    _strip_internal_ids(trucks, drivers)
+
     top_truck = trucks[0] if trucks else None
     top_truck_location_stale = bool(top_truck and top_truck.get("location_stale"))
     stale_truck_locations_present = any(bool(candidate.get("location_stale")) for candidate in trucks)
+    authoritative_pairs_present = any(bool(candidate.get("current_driver_authoritative")) for candidate in trucks)
 
     return {
         "status": "success",
@@ -106,16 +109,19 @@ def assignment_candidates(
             },
         },
         "signal_dates": {
-            "motive_latest_location": location_date.isoformat(),
+            "motive_latest_location": today.isoformat(),
             "motive_hos": target_hos_date.isoformat(),
         },
         "truck_candidates": trucks,
         "driver_candidates": drivers,
         "decision_guardrails": {
             "truck_driver_pairing_inferred": False,
+            "truck_driver_pairing_authoritative_source": PAIRING_SOURCE,
+            "authoritative_truck_driver_pairs_present": authoritative_pairs_present,
             "hos_is_legal_remaining_hours": False,
-            "hos_duration_unit_certified": False,
-            "legacy_hos_seconds_labels_unit_unverified": True,
+            "hos_duration_unit": "seconds",
+            "hos_duration_unit_certified": True,
+            "legacy_hos_seconds_labels_unit_unverified": False,
             "location_staleness_threshold_minutes": STALE_LOCATION_MAX_AGE_MINUTES,
             "stale_truck_locations_present": stale_truck_locations_present,
             "top_truck_location_stale": top_truck_location_stale,
@@ -125,6 +131,7 @@ def assignment_candidates(
         },
         "provider_calls": {
             "motive_latest_location": True,
+            "motive_vehicle_lookup": True,
             "motive_hos": True,
             "torqueai_live": False,
         },
@@ -157,40 +164,54 @@ def _rank_trucks(
     )
     candidates: list[dict[str, Any]] = []
     for vehicle in vehicles:
-        endpoint = f"/v1/vehicle_locations/{vehicle.provider_vehicle_id}"
         try:
-            payload = connector._request_json(  # noqa: SLF001 - hardened provider auth/retry path.
-                endpoint,
+            location_payload = connector._request_json(  # noqa: SLF001 - hardened provider auth/retry path.
+                f"/v1/vehicle_locations/{vehicle.provider_vehicle_id}",
                 params={"date": location_date.isoformat()},
                 operation="assignment_intelligence_latest_vehicle_location",
             )
         except MotiveConnectorError:
             continue
-        location = _extract_latest_location(payload)
+        location = _extract_latest_location(location_payload)
         if location is None:
             continue
         lat = _number(location.get("lat"))
         lon = _number(location.get("lon"))
         if lat is None or lon is None:
             continue
+
+        vehicle_lookup = _vehicle_lookup(connector, vehicle.unit_number)
+        current_driver = vehicle_lookup.get("current_driver") if isinstance(vehicle_lookup, dict) else None
+        availability = vehicle_lookup.get("availability_details") if isinstance(vehicle_lookup, dict) else None
+        authoritative_driver = current_driver if isinstance(current_driver, dict) else None
+        provider_driver_id = authoritative_driver.get("id") if authoritative_driver else None
+
         distance_km = _haversine_km(pickup_lat, pickup_lon, lat, lon)
         located_at = location.get("located_at") if isinstance(location.get("located_at"), str) else None
         freshness_minutes = _freshness_minutes(located_at)
-        location_confidence = _location_confidence(freshness_minutes)
         location_stale = freshness_minutes is None or freshness_minutes > STALE_LOCATION_MAX_AGE_MINUTES
         status_penalty = 0 if (vehicle.status or "").strip().lower() in {"active", "in service", "in_service"} else 1
         freshness_penalty = freshness_minutes if freshness_minutes is not None else 1000000.0
+
         candidates.append(
             {
                 "truck_number": vehicle.unit_number,
                 "vehicle_status": vehicle.status,
                 "distance_to_pickup_km": round(distance_km, 1),
                 "location_freshness_minutes": round(freshness_minutes, 1) if freshness_minutes is not None else None,
-                "location_confidence": location_confidence,
+                "location_confidence": _location_confidence(freshness_minutes),
                 "location_stale": location_stale,
                 "location_verification_required": location_stale,
                 "speed": _number(location.get("speed")),
                 "fuel_primary_remaining_percentage": _number(location.get("fuel_primary_remaining_percentage")),
+                "current_driver": {
+                    "name": _provider_driver_name(authoritative_driver) if authoritative_driver else None,
+                    "status": authoritative_driver.get("status") if authoritative_driver else None,
+                },
+                "current_driver_authoritative": authoritative_driver is not None,
+                "current_driver_source": PAIRING_SOURCE if authoritative_driver is not None else None,
+                "dispatch_availability_status": availability.get("availability_status") if isinstance(availability, dict) else None,
+                "_current_driver_provider_id": str(provider_driver_id) if provider_driver_id is not None else None,
                 "ranking_basis": ["pickup_distance", "location_freshness", "vehicle_status"],
                 "_sort": (status_penalty, distance_km, freshness_penalty, vehicle.unit_number or ""),
             }
@@ -200,6 +221,21 @@ def _rank_trucks(
         candidate.pop("_sort", None)
         candidate["rank"] = rank
     return candidates
+
+
+def _vehicle_lookup(connector: MotiveConnector, unit_number: str | None) -> dict[str, Any]:
+    if not unit_number:
+        return {}
+    try:
+        payload = connector._request_json(  # noqa: SLF001 - hardened provider auth/retry path.
+            "/v1/vehicles/lookup",
+            params={"number": unit_number},
+            operation="assignment_intelligence_vehicle_lookup",
+        )
+    except MotiveConnectorError:
+        return {}
+    vehicle = payload.get("vehicle") if isinstance(payload, dict) else None
+    return vehicle if isinstance(vehicle, dict) else {}
 
 
 def _rank_drivers(
@@ -239,7 +275,8 @@ def _rank_drivers(
         if not isinstance(provider_driver, dict):
             continue
         provider_id = provider_driver.get("id")
-        driver_record = known.get(str(provider_id)) if provider_id is not None else None
+        provider_id_text = str(provider_id) if provider_id is not None else None
+        driver_record = known.get(provider_id_text) if provider_id_text is not None else None
         name = driver_record.name if driver_record is not None else _provider_driver_name(provider_driver)
         status = driver_record.status if driver_record is not None else provider_driver.get("status")
         driving = _integer(hos.get("driving_duration"))
@@ -258,12 +295,14 @@ def _rank_drivers(
                 "observed_off_duty_duration": off_duty,
                 "observed_sleeper_duration": sleeper,
                 "observed_waiting_duration": waiting,
-                "duration_unit_certified": False,
+                "duration_unit": "seconds",
+                "duration_unit_certified": True,
                 "driving_duration_seconds": driving,
                 "on_duty_duration_seconds": on_duty,
                 "off_duty_duration_seconds": off_duty,
                 "sleeper_duration_seconds": sleeper,
                 "waiting_duration_seconds": waiting,
+                "_provider_driver_id": provider_id_text,
                 "ranking_basis": ["active_status", "lower_observed_driving_duration", "lower_observed_on_duty_duration"],
                 "_sort": (active_penalty, driving if driving is not None else 10**12, on_duty if on_duty is not None else 10**12, name or ""),
             }
@@ -273,6 +312,37 @@ def _rank_drivers(
         candidate.pop("_sort", None)
         candidate["rank"] = rank
     return candidates
+
+
+def _attach_paired_driver_hos(trucks: list[dict[str, Any]], drivers: list[dict[str, Any]]) -> None:
+    by_provider_id = {
+        candidate.get("_provider_driver_id"): candidate
+        for candidate in drivers
+        if candidate.get("_provider_driver_id")
+    }
+    for truck in trucks:
+        provider_id = truck.get("_current_driver_provider_id")
+        driver = by_provider_id.get(provider_id)
+        truck["current_driver_hos_observed"] = (
+            {
+                "hos_date": driver.get("hos_date"),
+                "driving_duration_seconds": driver.get("driving_duration_seconds"),
+                "on_duty_duration_seconds": driver.get("on_duty_duration_seconds"),
+                "off_duty_duration_seconds": driver.get("off_duty_duration_seconds"),
+                "sleeper_duration_seconds": driver.get("sleeper_duration_seconds"),
+                "waiting_duration_seconds": driver.get("waiting_duration_seconds"),
+                "is_legal_remaining_hours": False,
+            }
+            if driver is not None
+            else None
+        )
+
+
+def _strip_internal_ids(trucks: list[dict[str, Any]], drivers: list[dict[str, Any]]) -> None:
+    for truck in trucks:
+        truck.pop("_current_driver_provider_id", None)
+    for driver in drivers:
+        driver.pop("_provider_driver_id", None)
 
 
 def _extract_latest_location(payload: Any) -> dict[str, Any] | None:
@@ -287,7 +357,9 @@ def _extract_latest_location(payload: Any) -> dict[str, Any] | None:
     return None
 
 
-def _provider_driver_name(driver: dict[str, Any]) -> str | None:
+def _provider_driver_name(driver: dict[str, Any] | None) -> str | None:
+    if not isinstance(driver, dict):
+        return None
     parts = [str(driver.get(key) or "").strip() for key in ("first_name", "last_name")]
     name = " ".join(part for part in parts if part)
     return name or None
