@@ -3,14 +3,14 @@
 This gate observes only schema/type structure for two read-only resources needed
 by future truck/driver assignment intelligence:
 - driver Hours of Service (HOS)
-- one stored vehicle's location history sample
+- bounded stored-vehicle location history samples
 
 No raw provider values are returned to callers.
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -23,6 +23,8 @@ HOS_ENDPOINT = "/v1/hours_of_service"
 VEHICLE_LOCATION_ENDPOINT_TEMPLATE = "/v3/vehicle_locations/{vehicle_id}"
 MAX_SCHEMA_DEPTH = 6
 MAX_ARRAY_ITEMS_TO_OBSERVE = 5
+MAX_LOCATION_VEHICLES_TO_SAMPLE = 5
+LOCATION_LOOKBACK_DAYS = 7
 
 
 def certify_assignment_signal_schema(
@@ -47,31 +49,12 @@ def certify_assignment_signal_schema(
         )
     )
 
-    stored_vehicle = (
-        session.query(MotiveVehicleRecord)
-        .filter(MotiveVehicleRecord.organization_id == organization.id)
-        .order_by(MotiveVehicleRecord.id.asc())
-        .first()
+    location = _certify_vehicle_location_schema(
+        session,
+        organization_id=organization.id,
+        certification_date=certification_date,
+        client=client,
     )
-    if stored_vehicle is None:
-        location = {
-            "available": False,
-            "error_code": "no_stored_vehicle",
-            "provider_http_status": None,
-            "observed_schema_paths": {},
-        }
-    else:
-        endpoint = VEHICLE_LOCATION_ENDPOINT_TEMPLATE.format(vehicle_id=stored_vehicle.provider_vehicle_id)
-        location = _certify_resource(
-            lambda: client._request_json(  # noqa: SLF001 - same hardened read path; provider id is never returned.
-                endpoint,
-                params={
-                    "start_date": certification_date.isoformat(),
-                    "end_date": certification_date.isoformat(),
-                },
-                operation="assignment_signal_vehicle_location_certification",
-            )
-        )
 
     return {
         "status": "certification_completed",
@@ -89,6 +72,91 @@ def certify_assignment_signal_schema(
         "coordinates_returned": False,
         "secrets_exposed": False,
     }
+
+
+def _certify_vehicle_location_schema(
+    session: Session,
+    *,
+    organization_id: str,
+    certification_date: date,
+    client: MotiveConnector,
+) -> dict[str, Any]:
+    stored_vehicles = (
+        session.query(MotiveVehicleRecord)
+        .filter(MotiveVehicleRecord.organization_id == organization_id)
+        .order_by(MotiveVehicleRecord.id.asc())
+        .limit(MAX_LOCATION_VEHICLES_TO_SAMPLE)
+        .all()
+    )
+    if not stored_vehicles:
+        return {
+            "available": False,
+            "error_code": "no_stored_vehicle",
+            "provider_http_status": None,
+            "observed_schema_paths": {},
+            "vehicles_examined": 0,
+            "lookback_days": LOCATION_LOOKBACK_DAYS,
+            "non_empty_sample_found": False,
+        }
+
+    start_date = certification_date - timedelta(days=LOCATION_LOOKBACK_DAYS - 1)
+    last_error: dict[str, Any] | None = None
+    vehicles_examined = 0
+    successful_reads = 0
+    for stored_vehicle in stored_vehicles:
+        vehicles_examined += 1
+        endpoint = VEHICLE_LOCATION_ENDPOINT_TEMPLATE.format(vehicle_id=stored_vehicle.provider_vehicle_id)
+        resource = _certify_resource(
+            lambda endpoint=endpoint: client._request_json(  # noqa: SLF001 - hardened read path; provider id never returned.
+                endpoint,
+                params={
+                    "start_date": start_date.isoformat(),
+                    "end_date": certification_date.isoformat(),
+                },
+                operation="assignment_signal_vehicle_location_certification",
+            )
+        )
+        if not resource["available"]:
+            last_error = resource
+            continue
+        successful_reads += 1
+        if _vehicle_location_payload_is_non_empty(resource):
+            return {
+                **resource,
+                "vehicles_examined": vehicles_examined,
+                "lookback_days": LOCATION_LOOKBACK_DAYS,
+                "non_empty_sample_found": True,
+            }
+
+    if successful_reads == 0 and last_error is not None:
+        return {
+            **last_error,
+            "vehicles_examined": vehicles_examined,
+            "lookback_days": LOCATION_LOOKBACK_DAYS,
+            "non_empty_sample_found": False,
+        }
+
+    return {
+        "available": True,
+        "error_code": None,
+        "provider_http_status": 200,
+        "observed_schema_paths": {
+            "$": ["object"],
+            "$.vehicle_locations": ["array"],
+            "$.vehicle_locations[]": ["empty"],
+        },
+        "vehicles_examined": vehicles_examined,
+        "lookback_days": LOCATION_LOOKBACK_DAYS,
+        "non_empty_sample_found": False,
+    }
+
+
+def _vehicle_location_payload_is_non_empty(resource: dict[str, Any]) -> bool:
+    observed = resource.get("observed_schema_paths")
+    if not isinstance(observed, dict):
+        return False
+    item_types = observed.get("$.vehicle_locations[]")
+    return isinstance(item_types, list) and any(item_type != "empty" for item_type in item_types)
 
 
 def _certify_resource(fetcher) -> dict[str, Any]:
