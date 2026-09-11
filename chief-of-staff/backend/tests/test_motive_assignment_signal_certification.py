@@ -77,6 +77,28 @@ class EmptyThenLocationConnector(FakeConnector):
         raise AssertionError(f"unexpected extra provider call: {endpoint}")
 
 
+class V1FallbackConnector(FakeConnector):
+    def _request_json(self, endpoint: str, *, params: dict, operation: str):
+        self.calls.append((endpoint, params, operation))
+        if endpoint == "/v1/hours_of_service":
+            return {"hours_of_services": [], "pagination": {"total": 0}}
+        if endpoint.startswith("/v3/vehicle_locations/"):
+            return {"vehicle_locations": []}
+        if endpoint == "/v1/vehicle_locations/provider-vehicle-1":
+            return {}
+        if endpoint == "/v1/vehicle_locations/provider-vehicle-2":
+            return {
+                "vehicle_location": {
+                    "located_at": "2026-09-10T12:00:00Z",
+                    "lat": 49.89,
+                    "lon": -97.13,
+                    "speed": 72,
+                    "bearing": 180,
+                }
+            }
+        raise AssertionError(f"unexpected extra provider call: {endpoint}")
+
+
 def _signed_headers(*, body: bytes = b"") -> dict[str, str]:
     timestamp = str(int(time.time()))
     return {
@@ -132,6 +154,8 @@ def test_schema_certification_returns_structure_only(monkeypatch: pytest.MonkeyP
     assert location["non_empty_sample_found"] is True
     assert location["vehicles_examined"] == 1
     assert location["lookback_days"] == 7
+    assert location["source_endpoint_version"] == "v3_history"
+    assert location["v1_fallback_examined"] == 0
     assert "$.hours_of_services[].hours_of_service.driving_duration" in hos["observed_schema_paths"]
     assert "$.vehicle_locations[].lat" in location["observed_schema_paths"]
     serialized = repr(result)
@@ -162,12 +186,46 @@ def test_location_certification_scans_bounded_vehicles_until_non_empty(monkeypat
     assert location["non_empty_sample_found"] is True
     assert location["vehicles_examined"] == 2
     assert location["lookback_days"] == 7
+    assert location["source_endpoint_version"] == "v3_history"
+    assert location["v1_fallback_examined"] == 0
     assert "$.vehicle_locations[].located_at" in location["observed_schema_paths"]
     assert "$.vehicle_locations[].lat" in location["observed_schema_paths"]
     assert len(connector.calls) == 3
     assert connector.calls[1][0].endswith("provider-vehicle-1")
     assert connector.calls[2][0].endswith("provider-vehicle-2")
     assert all("provider-vehicle-3" not in call[0] for call in connector.calls)
+    serialized = repr(result)
+    for forbidden in ("provider-vehicle-1", "provider-vehicle-2", "UNIT-1", "UNIT-2", "49.89", "-97.13"):
+        assert forbidden not in serialized
+
+
+def test_location_certification_falls_back_to_v1_latest_without_leaking_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    organization, _identity, _headers = seed_principal("owner")
+    monkeypatch.setenv(ORG_ENV, organization["slug"])
+    session = SessionLocal()
+    try:
+        _add_vehicle(session, organization, "provider-vehicle-1", "UNIT-1")
+        _add_vehicle(session, organization, "provider-vehicle-2", "UNIT-2")
+        _add_vehicle(session, organization, "provider-vehicle-3", "UNIT-3")
+        session.commit()
+        connector = V1FallbackConnector()
+        result = certify_assignment_signal_schema(session, certification_date=DAY, connector=connector)
+    finally:
+        session.close()
+
+    location = result["resources"]["vehicle_location"]
+    assert location["available"] is True
+    assert location["non_empty_sample_found"] is True
+    assert location["source_endpoint_version"] == "v1_latest"
+    assert location["vehicles_examined"] == 3
+    assert location["v1_fallback_examined"] == 2
+    assert "$.vehicle_location.located_at" in location["observed_schema_paths"]
+    assert "$.vehicle_location.lat" in location["observed_schema_paths"]
+    assert "$.vehicle_location.lon" in location["observed_schema_paths"]
+    v1_calls = [call for call in connector.calls if call[0].startswith("/v1/vehicle_locations/")]
+    assert len(v1_calls) == 2
+    assert all(call[1] == {"date": "2026-09-10"} for call in v1_calls)
+    assert all("provider-vehicle-3" not in call[0] for call in v1_calls)
     serialized = repr(result)
     for forbidden in ("provider-vehicle-1", "provider-vehicle-2", "UNIT-1", "UNIT-2", "49.89", "-97.13"):
         assert forbidden not in serialized
@@ -190,6 +248,8 @@ def test_machine_endpoint_is_hmac_bodyless_and_privacy_bounded(monkeypatch: pyte
                 "vehicles_examined": 5,
                 "lookback_days": 7,
                 "non_empty_sample_found": False,
+                "source_endpoint_version": "none",
+                "v1_fallback_examined": 5,
             },
         },
         "schema_values_returned": False,
@@ -228,4 +288,5 @@ def test_workflow_is_manual_only_and_does_not_receive_provider_key() -> None:
     assert "MOTIVE_API_KEY" not in workflow
     assert "/v1/hours_of_service" not in workflow
     assert "/v3/vehicle_locations" not in workflow
+    assert "/v1/vehicle_locations" not in workflow
     assert 'payload.get(key) is not False' in workflow
