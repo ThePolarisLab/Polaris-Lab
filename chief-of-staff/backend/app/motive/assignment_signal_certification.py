@@ -102,6 +102,7 @@ def _certify_vehicle_location_schema(
     start_date = certification_date - timedelta(days=LOCATION_LOOKBACK_DAYS - 1)
     last_error: dict[str, Any] | None = None
     vehicles_examined = 0
+    successful_reads = 0
     for stored_vehicle in stored_vehicles:
         vehicles_examined += 1
         endpoint = VEHICLE_LOCATION_ENDPOINT_TEMPLATE.format(vehicle_id=stored_vehicle.provider_vehicle_id)
@@ -118,6 +119,7 @@ def _certify_vehicle_location_schema(
         if not resource["available"]:
             last_error = resource
             continue
+        successful_reads += 1
         if _vehicle_location_payload_is_non_empty(resource):
             return {
                 **resource,
@@ -126,7 +128,7 @@ def _certify_vehicle_location_schema(
                 "non_empty_sample_found": True,
             }
 
-    if last_error is not None and vehicles_examined == len(stored_vehicles):
+    if successful_reads == 0 and last_error is not None:
         return {
             **last_error,
             "vehicles_examined": vehicles_examined,
