@@ -20,6 +20,8 @@ router = APIRouter(prefix="/api/v1/assignment-intelligence", tags=["assignment-i
 PICKUP_JOB = "Pick Up"
 MAX_TRUCK_CANDIDATES = 20
 MAX_DRIVER_CANDIDATES = 100
+HIGH_CONFIDENCE_LOCATION_MAX_AGE_MINUTES = 30.0
+STALE_LOCATION_MAX_AGE_MINUTES = 120.0
 
 
 def _db() -> Session:
@@ -77,6 +79,9 @@ def assignment_candidates(
         hos_date=target_hos_date,
         connector=motive,
     )
+    top_truck = trucks[0] if trucks else None
+    top_truck_location_stale = bool(top_truck and top_truck.get("location_stale"))
+    stale_truck_locations_present = any(bool(candidate.get("location_stale")) for candidate in trucks)
 
     return {
         "status": "success",
@@ -109,6 +114,12 @@ def assignment_candidates(
         "decision_guardrails": {
             "truck_driver_pairing_inferred": False,
             "hos_is_legal_remaining_hours": False,
+            "hos_duration_unit_certified": False,
+            "legacy_hos_seconds_labels_unit_unverified": True,
+            "location_staleness_threshold_minutes": STALE_LOCATION_MAX_AGE_MINUTES,
+            "stale_truck_locations_present": stale_truck_locations_present,
+            "top_truck_location_stale": top_truck_location_stale,
+            "top_truck_requires_location_verification": top_truck_location_stale,
             "dispatcher_approval_required": True,
             "autonomous_assignment_performed": False,
         },
@@ -165,6 +176,8 @@ def _rank_trucks(
         distance_km = _haversine_km(pickup_lat, pickup_lon, lat, lon)
         located_at = location.get("located_at") if isinstance(location.get("located_at"), str) else None
         freshness_minutes = _freshness_minutes(located_at)
+        location_confidence = _location_confidence(freshness_minutes)
+        location_stale = freshness_minutes is None or freshness_minutes > STALE_LOCATION_MAX_AGE_MINUTES
         status_penalty = 0 if (vehicle.status or "").strip().lower() in {"active", "in service", "in_service"} else 1
         freshness_penalty = freshness_minutes if freshness_minutes is not None else 1000000.0
         candidates.append(
@@ -173,6 +186,9 @@ def _rank_trucks(
                 "vehicle_status": vehicle.status,
                 "distance_to_pickup_km": round(distance_km, 1),
                 "location_freshness_minutes": round(freshness_minutes, 1) if freshness_minutes is not None else None,
+                "location_confidence": location_confidence,
+                "location_stale": location_stale,
+                "location_verification_required": location_stale,
                 "speed": _number(location.get("speed")),
                 "fuel_primary_remaining_percentage": _number(location.get("fuel_primary_remaining_percentage")),
                 "ranking_basis": ["pickup_distance", "location_freshness", "vehicle_status"],
@@ -228,17 +244,26 @@ def _rank_drivers(
         status = driver_record.status if driver_record is not None else provider_driver.get("status")
         driving = _integer(hos.get("driving_duration"))
         on_duty = _integer(hos.get("on_duty_duration"))
+        off_duty = _integer(hos.get("off_duty_duration"))
+        sleeper = _integer(hos.get("sleeper_duration"))
+        waiting = _integer(hos.get("waiting_duration"))
         active_penalty = 0 if str(status or "").strip().lower() == "active" else 1
         candidates.append(
             {
                 "driver_name": name,
                 "driver_status": status,
                 "hos_date": hos.get("date"),
+                "observed_driving_duration": driving,
+                "observed_on_duty_duration": on_duty,
+                "observed_off_duty_duration": off_duty,
+                "observed_sleeper_duration": sleeper,
+                "observed_waiting_duration": waiting,
+                "duration_unit_certified": False,
                 "driving_duration_seconds": driving,
                 "on_duty_duration_seconds": on_duty,
-                "off_duty_duration_seconds": _integer(hos.get("off_duty_duration")),
-                "sleeper_duration_seconds": _integer(hos.get("sleeper_duration")),
-                "waiting_duration_seconds": _integer(hos.get("waiting_duration")),
+                "off_duty_duration_seconds": off_duty,
+                "sleeper_duration_seconds": sleeper,
+                "waiting_duration_seconds": waiting,
                 "ranking_basis": ["active_status", "lower_observed_driving_duration", "lower_observed_on_duty_duration"],
                 "_sort": (active_penalty, driving if driving is not None else 10**12, on_duty if on_duty is not None else 10**12, name or ""),
             }
@@ -290,6 +315,16 @@ def _freshness_minutes(value: str | None) -> float | None:
     if observed.tzinfo is None:
         observed = observed.replace(tzinfo=timezone.utc)
     return max(0.0, (datetime.now(timezone.utc) - observed.astimezone(timezone.utc)).total_seconds() / 60.0)
+
+
+def _location_confidence(freshness_minutes: float | None) -> str:
+    if freshness_minutes is None:
+        return "unknown"
+    if freshness_minutes <= HIGH_CONFIDENCE_LOCATION_MAX_AGE_MINUTES:
+        return "high"
+    if freshness_minutes <= STALE_LOCATION_MAX_AGE_MINUTES:
+        return "medium"
+    return "low"
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
