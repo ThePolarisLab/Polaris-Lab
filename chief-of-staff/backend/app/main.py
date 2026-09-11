@@ -9,6 +9,7 @@ from app.security.models import Permission
 
 # API Routers
 from app.api.ace import router as ace_router
+from app.api.assignment_intelligence import router as assignment_intelligence_router
 from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.api.code_understanding import router as code_understanding_router
@@ -90,6 +91,7 @@ app.include_router(connector_freshness_router)
 app.include_router(connectors_router)
 app.include_router(torqueai_router)
 app.include_router(torqueai_planning_router)
+app.include_router(assignment_intelligence_router)
 app.include_router(torqueai_schema_certification_router)
 app.include_router(motive_router)
 app.include_router(motive_seven_day_reconciliation_validation_router)
