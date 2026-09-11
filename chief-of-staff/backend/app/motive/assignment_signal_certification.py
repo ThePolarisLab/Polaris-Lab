@@ -1,9 +1,10 @@
 """Privacy-safe production certification for Motive assignment signals.
 
-This gate observes only schema/type structure for two read-only resources needed
-by future truck/driver assignment intelligence:
+This gate observes only schema/type structure for read-only resources needed by
+future truck/driver assignment intelligence:
 - driver Hours of Service (HOS)
-- bounded stored-vehicle location history samples
+- bounded v3 vehicle-location history samples
+- bounded v1 latest-location fallback samples when v3 is empty
 
 No raw provider values are returned to callers.
 """
@@ -20,7 +21,8 @@ from app.models.motive import MotiveVehicleRecord
 from app.motive.vehicle_utilization_scheduler import resolve_scheduled_organization
 
 HOS_ENDPOINT = "/v1/hours_of_service"
-VEHICLE_LOCATION_ENDPOINT_TEMPLATE = "/v3/vehicle_locations/{vehicle_id}"
+VEHICLE_LOCATION_V3_ENDPOINT_TEMPLATE = "/v3/vehicle_locations/{vehicle_id}"
+VEHICLE_LOCATION_V1_ENDPOINT_TEMPLATE = "/v1/vehicle_locations/{vehicle_id}"
 MAX_SCHEMA_DEPTH = 6
 MAX_ARRAY_ITEMS_TO_OBSERVE = 5
 MAX_LOCATION_VEHICLES_TO_SAMPLE = 5
@@ -97,15 +99,18 @@ def _certify_vehicle_location_schema(
             "vehicles_examined": 0,
             "lookback_days": LOCATION_LOOKBACK_DAYS,
             "non_empty_sample_found": False,
+            "source_endpoint_version": "none",
+            "v1_fallback_examined": 0,
         }
 
     start_date = certification_date - timedelta(days=LOCATION_LOOKBACK_DAYS - 1)
     last_error: dict[str, Any] | None = None
     vehicles_examined = 0
     successful_reads = 0
+
     for stored_vehicle in stored_vehicles:
         vehicles_examined += 1
-        endpoint = VEHICLE_LOCATION_ENDPOINT_TEMPLATE.format(vehicle_id=stored_vehicle.provider_vehicle_id)
+        endpoint = VEHICLE_LOCATION_V3_ENDPOINT_TEMPLATE.format(vehicle_id=stored_vehicle.provider_vehicle_id)
         resource = _certify_resource(
             lambda endpoint=endpoint: client._request_json(  # noqa: SLF001 - hardened read path; provider id never returned.
                 endpoint,
@@ -113,28 +118,61 @@ def _certify_vehicle_location_schema(
                     "start_date": start_date.isoformat(),
                     "end_date": certification_date.isoformat(),
                 },
-                operation="assignment_signal_vehicle_location_certification",
+                operation="assignment_signal_vehicle_location_v3_certification",
             )
         )
         if not resource["available"]:
             last_error = resource
             continue
         successful_reads += 1
-        if _vehicle_location_payload_is_non_empty(resource):
+        if _v3_vehicle_location_payload_is_non_empty(resource):
             return {
                 **resource,
                 "vehicles_examined": vehicles_examined,
                 "lookback_days": LOCATION_LOOKBACK_DAYS,
                 "non_empty_sample_found": True,
+                "source_endpoint_version": "v3_history",
+                "v1_fallback_examined": 0,
             }
 
-    if successful_reads == 0 and last_error is not None:
-        return {
-            **last_error,
-            "vehicles_examined": vehicles_examined,
-            "lookback_days": LOCATION_LOOKBACK_DAYS,
-            "non_empty_sample_found": False,
-        }
+    v1_examined = 0
+    v1_successful_reads = 0
+    v1_last_error: dict[str, Any] | None = None
+    for stored_vehicle in stored_vehicles:
+        v1_examined += 1
+        endpoint = VEHICLE_LOCATION_V1_ENDPOINT_TEMPLATE.format(vehicle_id=stored_vehicle.provider_vehicle_id)
+        resource = _certify_resource(
+            lambda endpoint=endpoint: client._request_json(  # noqa: SLF001 - hardened read path; provider id never returned.
+                endpoint,
+                params={"date": certification_date.isoformat()},
+                operation="assignment_signal_vehicle_location_v1_certification",
+            )
+        )
+        if not resource["available"]:
+            v1_last_error = resource
+            continue
+        v1_successful_reads += 1
+        if _schema_has_observed_leaf(resource):
+            return {
+                **resource,
+                "vehicles_examined": vehicles_examined,
+                "lookback_days": LOCATION_LOOKBACK_DAYS,
+                "non_empty_sample_found": True,
+                "source_endpoint_version": "v1_latest",
+                "v1_fallback_examined": v1_examined,
+            }
+
+    if successful_reads == 0 and v1_successful_reads == 0:
+        error = v1_last_error or last_error
+        if error is not None:
+            return {
+                **error,
+                "vehicles_examined": vehicles_examined,
+                "lookback_days": LOCATION_LOOKBACK_DAYS,
+                "non_empty_sample_found": False,
+                "source_endpoint_version": "none",
+                "v1_fallback_examined": v1_examined,
+            }
 
     return {
         "available": True,
@@ -148,15 +186,28 @@ def _certify_vehicle_location_schema(
         "vehicles_examined": vehicles_examined,
         "lookback_days": LOCATION_LOOKBACK_DAYS,
         "non_empty_sample_found": False,
+        "source_endpoint_version": "none",
+        "v1_fallback_examined": v1_examined,
     }
 
 
-def _vehicle_location_payload_is_non_empty(resource: dict[str, Any]) -> bool:
+def _v3_vehicle_location_payload_is_non_empty(resource: dict[str, Any]) -> bool:
     observed = resource.get("observed_schema_paths")
     if not isinstance(observed, dict):
         return False
     item_types = observed.get("$.vehicle_locations[]")
     return isinstance(item_types, list) and any(item_type != "empty" for item_type in item_types)
+
+
+def _schema_has_observed_leaf(resource: dict[str, Any]) -> bool:
+    observed = resource.get("observed_schema_paths")
+    if not isinstance(observed, dict):
+        return False
+    primitive_types = {"string", "integer", "number", "boolean", "null"}
+    return any(
+        path != "$" and isinstance(types, list) and primitive_types.intersection(types)
+        for path, types in observed.items()
+    )
 
 
 def _certify_resource(fetcher) -> dict[str, Any]:
