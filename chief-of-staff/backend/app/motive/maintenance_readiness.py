@@ -190,20 +190,27 @@ def _inspection_detail(report: dict[str, Any], *, part: dict[str, Any] | None) -
     return detail
 
 
-def _inspection_group_key(detail: dict[str, Any]) -> tuple[str, str, str]:
-    return (
+def _inspection_group_key(detail: dict[str, Any]) -> tuple[str, ...]:
+    identity = (
         _norm(detail.get("part_category")),
         _norm(detail.get("part_type")),
         _norm(detail.get("part_name")),
     )
+    if any(identity):
+        return identity
+    return (
+        "__unidentified__",
+        str(detail.get("report_date") or ""),
+        str(detail.get("report_time") or ""),
+    )
 
 
 def _build_recurring_inspection_groups(
-    grouped: dict[tuple[str, str, str], list[dict[str, Any]]]
+    grouped: dict[tuple[str, ...], list[dict[str, Any]]]
 ) -> list[dict[str, Any]]:
     groups: list[dict[str, Any]] = []
-    for observations in grouped.values():
-        if not observations:
+    for group_key, observations in grouped.items():
+        if not observations or (group_key and group_key[0] == "__unidentified__"):
             continue
         ordered = sorted(observations, key=_inspection_observation_sort_key)
         first = ordered[0]
