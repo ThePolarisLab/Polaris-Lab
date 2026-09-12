@@ -303,11 +303,21 @@ def _build_resolution_inspection_groups(
             continue
 
         latest = ordered[-1]
-        first_open = next((entry for entry in compact if entry["status"] == "open"), None)
-        resolved_index = next(
-            (index for index, entry in enumerate(compact) if entry["status"] in EXPLICIT_RESOLVED_STATUSES and first_open is not None),
+        first_open_index = next(
+            (index for index, entry in enumerate(compact) if entry["status"] == "open"),
             None,
         )
+        first_open = compact[first_open_index] if first_open_index is not None else None
+        resolved_index = None
+        if first_open_index is not None:
+            resolved_index = next(
+                (
+                    index
+                    for index, entry in enumerate(compact[first_open_index + 1 :], start=first_open_index + 1)
+                    if entry["status"] in EXPLICIT_RESOLVED_STATUSES
+                ),
+                None,
+            )
         resolved_entry = compact[resolved_index] if resolved_index is not None else None
         reopened_entry = None
         if resolved_index is not None:
