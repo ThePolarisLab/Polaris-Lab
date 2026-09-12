@@ -11,6 +11,8 @@ PAGE_SIZE = 100
 MAX_PAGES = 20
 MAX_WINDOW_ROWS = PAGE_SIZE * MAX_PAGES
 MAX_DETAILS_PER_TRUCK = 10
+RESOLUTION_STATUSES = {"open", "repaired", "no_repair_needed", "good"}
+EXPLICIT_RESOLVED_STATUSES = {"repaired", "no_repair_needed"}
 
 
 def maintenance_readiness_for_trucks(
@@ -45,6 +47,7 @@ def maintenance_readiness_for_trucks(
             "open_fault_details": [],
             "inspection_issue_details": [],
             "_inspection_group_observations": {},
+            "_inspection_resolution_observations": {},
         }
         for key, display in wanted.items()
     }
@@ -74,13 +77,21 @@ def maintenance_readiness_for_trucks(
 
             parts = report.get("inspected_parts") if isinstance(report.get("inspected_parts"), list) else []
             for part in parts:
-                if not isinstance(part, dict) or _norm(part.get("status")) != "open":
+                if not isinstance(part, dict):
+                    continue
+                detail = _inspection_detail(report, part=part)
+                group_key = _inspection_group_key(detail)
+                part_status = _norm(part.get("status"))
+
+                if group_key and group_key[0] != "__unidentified__" and part_status in RESOLUTION_STATUSES:
+                    resolution_groups = item["_inspection_resolution_observations"]
+                    resolution_groups.setdefault(group_key, []).append(detail)
+
+                if part_status != "open":
                     continue
                 item["open_inspection_part_count"] += 1
-                detail = _inspection_detail(report, part=part)
                 if len(item["inspection_issue_details"]) < MAX_DETAILS_PER_TRUCK:
                     item["inspection_issue_details"].append(detail)
-                group_key = _inspection_group_key(detail)
                 groups = item["_inspection_group_observations"]
                 groups.setdefault(group_key, []).append(detail)
 
@@ -88,6 +99,7 @@ def maintenance_readiness_for_trucks(
     for key in wanted:
         item = data[key]
         recurring_groups = _build_recurring_inspection_groups(item.pop("_inspection_group_observations"))
+        resolution_groups = _build_resolution_inspection_groups(item.pop("_inspection_resolution_observations"))
         blockers: list[str] = []
         reasons: list[str] = []
         if item["rejected_inspection_count"]:
@@ -111,6 +123,13 @@ def maintenance_readiness_for_trucks(
                 **item,
                 "recurring_inspection_issue_groups": recurring_groups,
                 "recurring_inspection_issue_count": sum(1 for group in recurring_groups if group["recurring"]),
+                "inspection_resolution_groups": resolution_groups,
+                "explicitly_resolved_inspection_issue_count": sum(
+                    1 for group in resolution_groups if group["resolution_state"] == "resolved"
+                ),
+                "reopened_inspection_issue_count": sum(
+                    1 for group in resolution_groups if group["resolution_state"] == "reopened"
+                ),
                 "classification": classification,
                 "hard_blockers": blockers,
                 "verification_reasons": reasons,
@@ -122,6 +141,10 @@ def maintenance_readiness_for_trucks(
                 ),
                 "recurrence_changes_readiness": False,
                 "recurrence_basis": "same_structured_part_identity_within_provider_window",
+                "resolution_changes_readiness": False,
+                "resolution_basis": "explicit_structured_part_status_transition_within_provider_window",
+                "disappearance_means_resolved": False,
+                "durable_maintenance_history_enabled": False,
                 "safety_classification_certified": False,
                 "defect_free_text_returned": False,
                 "advisory_only": True,
@@ -247,6 +270,98 @@ def _build_recurring_inspection_groups(
         key=lambda group: (
             not bool(group.get("recurring")),
             -int(group.get("source_record_count") or 0),
+            str(group.get("part_category") or ""),
+            str(group.get("part_type") or ""),
+        ),
+    )
+
+
+def _build_resolution_inspection_groups(
+    grouped: dict[tuple[str, ...], list[dict[str, Any]]]
+) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    for group_key, observations in grouped.items():
+        if not observations or (group_key and group_key[0] == "__unidentified__"):
+            continue
+        ordered = sorted(observations, key=_inspection_observation_sort_key)
+        compact: list[dict[str, Any]] = []
+        for observation in ordered:
+            status = _norm(observation.get("part_status"))
+            if status not in RESOLUTION_STATUSES:
+                continue
+            entry = {
+                "report_date": observation.get("report_date"),
+                "report_time": observation.get("report_time"),
+                "status": status,
+                "odometer": observation.get("odometer"),
+            }
+            if not compact or compact[-1]["status"] != status:
+                compact.append(entry)
+            else:
+                compact[-1] = entry
+        if not compact:
+            continue
+
+        latest = ordered[-1]
+        first_open_index = next(
+            (index for index, entry in enumerate(compact) if entry["status"] == "open"),
+            None,
+        )
+        first_open = compact[first_open_index] if first_open_index is not None else None
+        resolved_index = None
+        if first_open_index is not None:
+            resolved_index = next(
+                (
+                    index
+                    for index, entry in enumerate(compact[first_open_index + 1 :], start=first_open_index + 1)
+                    if entry["status"] in EXPLICIT_RESOLVED_STATUSES
+                ),
+                None,
+            )
+        resolved_entry = compact[resolved_index] if resolved_index is not None else None
+        reopened_entry = None
+        if resolved_index is not None:
+            reopened_entry = next(
+                (entry for entry in compact[resolved_index + 1 :] if entry["status"] == "open"),
+                None,
+            )
+
+        latest_status = _norm(latest.get("part_status"))
+        if reopened_entry is not None and latest_status == "open":
+            state = "reopened"
+        elif resolved_entry is not None and latest_status in EXPLICIT_RESOLVED_STATUSES:
+            state = "resolved"
+        elif latest_status == "open":
+            state = "open"
+        else:
+            state = "observed_non_open"
+
+        groups.append(
+            {
+                "part_name": latest.get("part_name"),
+                "part_category": latest.get("part_category"),
+                "part_type": latest.get("part_type"),
+                "resolution_state": state,
+                "latest_structured_status": latest_status or None,
+                "first_open_date": first_open.get("report_date") if first_open else None,
+                "explicit_resolution_status": resolved_entry.get("status") if resolved_entry else None,
+                "explicit_resolution_date": resolved_entry.get("report_date") if resolved_entry else None,
+                "reopened_date": reopened_entry.get("report_date") if reopened_entry else None,
+                "latest_seen_date": latest.get("report_date"),
+                "latest_odometer": latest.get("odometer"),
+                "status_transitions": compact,
+                "resolution_confirmed": state == "resolved",
+                "reopened_confirmed": state == "reopened",
+                "good_status_proves_repair": False,
+                "disappearance_means_resolved": False,
+                "window_bounded": True,
+            }
+        )
+    return sorted(
+        groups,
+        key=lambda group: (
+            group.get("resolution_state") != "reopened",
+            group.get("resolution_state") != "open",
             str(group.get("part_category") or ""),
             str(group.get("part_type") or ""),
         ),
