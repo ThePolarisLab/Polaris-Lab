@@ -44,6 +44,7 @@ def maintenance_readiness_for_trucks(
             "open_inspection_part_count": 0,
             "open_fault_details": [],
             "inspection_issue_details": [],
+            "_inspection_group_observations": {},
         }
         for key, display in wanted.items()
     }
@@ -76,12 +77,17 @@ def maintenance_readiness_for_trucks(
                 if not isinstance(part, dict) or _norm(part.get("status")) != "open":
                     continue
                 item["open_inspection_part_count"] += 1
+                detail = _inspection_detail(report, part=part)
                 if len(item["inspection_issue_details"]) < MAX_DETAILS_PER_TRUCK:
-                    item["inspection_issue_details"].append(_inspection_detail(report, part=part))
+                    item["inspection_issue_details"].append(detail)
+                group_key = _inspection_group_key(detail)
+                groups = item["_inspection_group_observations"]
+                groups.setdefault(group_key, []).append(detail)
 
     results = []
     for key in wanted:
         item = data[key]
+        recurring_groups = _build_recurring_inspection_groups(item.pop("_inspection_group_observations"))
         blockers: list[str] = []
         reasons: list[str] = []
         if item["rejected_inspection_count"]:
@@ -103,6 +109,8 @@ def maintenance_readiness_for_trucks(
         results.append(
             {
                 **item,
+                "recurring_inspection_issue_groups": recurring_groups,
+                "recurring_inspection_issue_count": sum(1 for group in recurring_groups if group["recurring"]),
                 "classification": classification,
                 "hard_blockers": blockers,
                 "verification_reasons": reasons,
@@ -112,6 +120,8 @@ def maintenance_readiness_for_trucks(
                     item["rejected_inspection_count"] + item["open_inspection_part_count"]
                     > len(item["inspection_issue_details"])
                 ),
+                "recurrence_changes_readiness": False,
+                "recurrence_basis": "same_structured_part_identity_within_provider_window",
                 "safety_classification_certified": False,
                 "defect_free_text_returned": False,
                 "advisory_only": True,
@@ -178,6 +188,76 @@ def _inspection_detail(report: dict[str, Any], *, part: dict[str, Any] | None) -
             }
         )
     return detail
+
+
+def _inspection_group_key(detail: dict[str, Any]) -> tuple[str, ...]:
+    identity = (
+        _norm(detail.get("part_category")),
+        _norm(detail.get("part_type")),
+        _norm(detail.get("part_name")),
+    )
+    if any(identity):
+        return identity
+    return (
+        "__unidentified__",
+        str(detail.get("report_date") or ""),
+        str(detail.get("report_time") or ""),
+    )
+
+
+def _build_recurring_inspection_groups(
+    grouped: dict[tuple[str, ...], list[dict[str, Any]]]
+) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    for group_key, observations in grouped.items():
+        if not observations or (group_key and group_key[0] == "__unidentified__"):
+            continue
+        ordered = sorted(observations, key=_inspection_observation_sort_key)
+        first = ordered[0]
+        latest = ordered[-1]
+        report_dates = sorted(
+            {
+                value
+                for observation in observations
+                if isinstance((value := observation.get("report_date")), str) and value
+            }
+        )
+        groups.append(
+            {
+                "part_name": latest.get("part_name"),
+                "part_category": latest.get("part_category"),
+                "part_type": latest.get("part_type"),
+                "source_record_count": len(observations),
+                "distinct_report_days": len(report_dates),
+                "recurring": len(observations) >= 2,
+                "first_seen_date": first.get("report_date"),
+                "latest_seen_date": latest.get("report_date"),
+                "latest_report_time": latest.get("report_time"),
+                "latest_odometer": latest.get("odometer"),
+                "latest_part_status": latest.get("part_status"),
+                "latest_report_status": latest.get("report_status"),
+                "latest_inspection_type": latest.get("inspection_type"),
+                "consecutive_days_confirmed": False,
+                "repair_resolution_confirmed": False,
+                "safety_related_confirmed": False,
+            }
+        )
+    return sorted(
+        groups,
+        key=lambda group: (
+            not bool(group.get("recurring")),
+            -int(group.get("source_record_count") or 0),
+            str(group.get("part_category") or ""),
+            str(group.get("part_type") or ""),
+        ),
+    )
+
+
+def _inspection_observation_sort_key(detail: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(detail.get("report_date") or ""),
+        str(detail.get("report_time") or ""),
+    )
 
 
 def _safe_scalar(value: Any) -> str | int | float | bool | None:
