@@ -25,6 +25,7 @@ def persist_maintenance_memory(
     events_added = 0
     reopen_events_added = 0
     resolved_events_added = 0
+    pending_fingerprints: set[str] = set()
 
     for classification in maintenance.get("classifications", []):
         if not isinstance(classification, dict):
@@ -76,7 +77,7 @@ def persist_maintenance_memory(
                     report_time=row.get("report_time"),
                     odometer=row.get("odometer"),
                 )
-                if _event_exists(session, organization_id, fingerprint):
+                if fingerprint in pending_fingerprints or _event_exists(session, organization_id, fingerprint):
                     continue
 
                 _add_event(
@@ -91,6 +92,7 @@ def persist_maintenance_memory(
                     odometer=odometer,
                     fingerprint=fingerprint,
                 )
+                pending_fingerprints.add(fingerprint)
                 events_added += 1
                 issue_changed = True
 
@@ -113,7 +115,10 @@ def persist_maintenance_memory(
                             report_time=row.get("report_time"),
                             odometer=row.get("odometer"),
                         )
-                        if not _event_exists(session, organization_id, reopen_fingerprint):
+                        if (
+                            reopen_fingerprint not in pending_fingerprints
+                            and not _event_exists(session, organization_id, reopen_fingerprint)
+                        ):
                             _add_event(
                                 session=session,
                                 issue=issue,
@@ -126,6 +131,7 @@ def persist_maintenance_memory(
                                 odometer=odometer,
                                 fingerprint=reopen_fingerprint,
                             )
+                            pending_fingerprints.add(reopen_fingerprint)
                             events_added += 1
                             reopen_events_added += 1
                     elif issue.lifecycle_state != "reopened":
