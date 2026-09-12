@@ -284,6 +284,18 @@ def _build_resolution_inspection_groups(
         if not observations or (group_key and group_key[0] == "__unidentified__"):
             continue
         ordered = sorted(observations, key=_inspection_observation_sort_key)
+        issue_observations = [
+            observation
+            for observation in ordered
+            if _norm(observation.get("part_status")) in {"open", *EXPLICIT_RESOLVED_STATUSES}
+        ]
+        if not issue_observations:
+            continue
+
+        first_open = next(
+            (observation for observation in ordered if _norm(observation.get("part_status")) == "open"),
+            None,
+        )
         compact: list[dict[str, Any]] = []
         for observation in ordered:
             status = _norm(observation.get("part_status"))
@@ -302,12 +314,10 @@ def _build_resolution_inspection_groups(
         if not compact:
             continue
 
-        latest = ordered[-1]
         first_open_index = next(
             (index for index, entry in enumerate(compact) if entry["status"] == "open"),
             None,
         )
-        first_open = compact[first_open_index] if first_open_index is not None else None
         resolved_index = None
         if first_open_index is not None:
             resolved_index = next(
@@ -326,6 +336,7 @@ def _build_resolution_inspection_groups(
                 None,
             )
 
+        latest = ordered[-1]
         latest_status = _norm(latest.get("part_status"))
         if reopened_entry is not None and latest_status == "open":
             state = "reopened"
