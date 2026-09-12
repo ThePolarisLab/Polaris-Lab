@@ -35,26 +35,43 @@ def persist_maintenance_memory(
 
         observations = _issue_observations(classification)
         for identity, rows in observations.items():
-            issue = _get_or_create_issue(
+            issue = _find_issue(
                 session=session,
                 organization_id=organization_id,
-                organization_slug=organization_slug,
                 truck_number=truck_number,
                 identity=identity,
-                source_window_days=int(classification.get("provider_window_days") or maintenance.get("provider_window_days") or 7),
             )
+            has_open_observation = any(_norm(row.get("status")) == "open" for row in rows)
+            if issue is None and not has_open_observation:
+                # Do not invent historical issues from resolution-only observations.
+                continue
+            if issue is None:
+                issue = _create_issue(
+                    session=session,
+                    organization_id=organization_id,
+                    organization_slug=organization_slug,
+                    truck_number=truck_number,
+                    identity=identity,
+                    source_window_days=int(
+                        classification.get("provider_window_days") or maintenance.get("provider_window_days") or 7
+                    ),
+                )
+
             issue_changed = False
             for row in sorted(rows, key=_observation_sort_key):
-                status = _norm(row.get("status"))
-                if status not in {"open", *EXPLICIT_RESOLVED_STATUSES}:
+                structured_status = _norm(row.get("status"))
+                if structured_status not in {"open", *EXPLICIT_RESOLVED_STATUSES}:
                     continue
-                event_type = "observed_open" if status == "open" else "explicit_resolution"
+                event_type = "observed_open" if structured_status == "open" else "explicit_resolution"
+                report_date = _parse_date(row.get("report_date"))
+                report_time = _parse_datetime(row.get("report_time"))
+                odometer = _safe_int(row.get("odometer"))
                 fingerprint = _fingerprint(
                     organization_id=organization_id,
                     truck_number=truck_number,
                     identity_key=issue.identity_key,
                     event_type=event_type,
-                    status=status,
+                    status=structured_status,
                     report_date=row.get("report_date"),
                     report_time=row.get("report_time"),
                     odometer=row.get("odometer"),
@@ -62,28 +79,22 @@ def persist_maintenance_memory(
                 if _event_exists(session, organization_id, fingerprint):
                     continue
 
-                report_date = _parse_date(row.get("report_date"))
-                report_time = _parse_datetime(row.get("report_time"))
-                odometer = _safe_int(row.get("odometer"))
-                session.add(
-                    MotiveMaintenanceIssueEvent(
-                        organization_id=organization_id,
-                        issue=issue,
-                        truck_number=truck_number,
-                        identity_key=issue.identity_key,
-                        event_type=event_type,
-                        structured_status=status,
-                        report_date=report_date,
-                        report_time=report_time,
-                        odometer=odometer,
-                        source_fingerprint=fingerprint,
-                        provider_write_performed=False,
-                    )
+                _add_event(
+                    session=session,
+                    issue=issue,
+                    organization_id=organization_id,
+                    truck_number=truck_number,
+                    event_type=event_type,
+                    structured_status=structured_status,
+                    report_date=report_date,
+                    report_time=report_time,
+                    odometer=odometer,
+                    fingerprint=fingerprint,
                 )
                 events_added += 1
                 issue_changed = True
 
-                if status == "open":
+                if structured_status == "open":
                     was_resolved = issue.lifecycle_state == "resolved"
                     if issue.first_open_date is None or (report_date and report_date < issue.first_open_date):
                         issue.first_open_date = report_date
@@ -92,15 +103,39 @@ def persist_maintenance_memory(
                         issue.lifecycle_state = "reopened"
                         issue.last_reopened_date = report_date
                         issue.reopen_count += 1
-                        reopen_events_added += 1
-                    elif issue.lifecycle_state not in {"reopened"}:
+                        reopen_fingerprint = _fingerprint(
+                            organization_id=organization_id,
+                            truck_number=truck_number,
+                            identity_key=issue.identity_key,
+                            event_type="reopened",
+                            status=structured_status,
+                            report_date=row.get("report_date"),
+                            report_time=row.get("report_time"),
+                            odometer=row.get("odometer"),
+                        )
+                        if not _event_exists(session, organization_id, reopen_fingerprint):
+                            _add_event(
+                                session=session,
+                                issue=issue,
+                                organization_id=organization_id,
+                                truck_number=truck_number,
+                                event_type="reopened",
+                                structured_status=structured_status,
+                                report_date=report_date,
+                                report_time=report_time,
+                                odometer=odometer,
+                                fingerprint=reopen_fingerprint,
+                            )
+                            events_added += 1
+                            reopen_events_added += 1
+                    elif issue.lifecycle_state != "reopened":
                         issue.lifecycle_state = "open"
                     _update_last_seen(issue, report_date, report_time, odometer)
-                elif status in EXPLICIT_RESOLVED_STATUSES and issue.first_open_date is not None:
-                    # Explicit structured resolution only. Absence/disappearance never reaches this branch.
+                elif structured_status in EXPLICIT_RESOLVED_STATUSES and issue.first_open_date is not None:
+                    # Only an explicit structured resolution can resolve durable memory.
                     if report_date is None or issue.first_open_date <= report_date:
                         issue.lifecycle_state = "resolved"
-                        issue.explicit_resolution_status = status
+                        issue.explicit_resolution_status = structured_status
                         issue.explicit_resolution_date = report_date
                         _update_last_seen(issue, report_date, report_time, odometer)
                         resolved_events_added += 1
@@ -163,12 +198,12 @@ def _issue_observations(classification: dict[str, Any]) -> dict[tuple[str, str, 
         for transition in group.get("status_transitions", []):
             if not isinstance(transition, dict):
                 continue
-            status = _norm(transition.get("status"))
-            if status not in {"open", *EXPLICIT_RESOLVED_STATUSES}:
+            status_value = _norm(transition.get("status"))
+            if status_value not in {"open", *EXPLICIT_RESOLVED_STATUSES}:
                 continue
             grouped.setdefault(identity, []).append(
                 {
-                    "status": status,
+                    "status": status_value,
                     "report_date": transition.get("report_date"),
                     "report_time": transition.get("report_time"),
                     "odometer": transition.get("odometer"),
@@ -187,7 +222,19 @@ def _identity(value: dict[str, Any]) -> tuple[str, str, str] | None:
     return category, part_type, name
 
 
-def _get_or_create_issue(
+def _find_issue(
+    *, session: Session, organization_id: str, truck_number: str, identity: tuple[str, str, str]
+) -> MotiveMaintenanceIssueMemory | None:
+    return session.scalar(
+        select(MotiveMaintenanceIssueMemory).where(
+            MotiveMaintenanceIssueMemory.organization_id == organization_id,
+            MotiveMaintenanceIssueMemory.truck_number == truck_number,
+            MotiveMaintenanceIssueMemory.identity_key == _identity_key(identity),
+        )
+    )
+
+
+def _create_issue(
     *,
     session: Session,
     organization_id: str,
@@ -197,21 +244,11 @@ def _get_or_create_issue(
     source_window_days: int,
 ) -> MotiveMaintenanceIssueMemory:
     category, part_type, name = identity
-    identity_key = _identity_key(identity)
-    issue = session.scalar(
-        select(MotiveMaintenanceIssueMemory).where(
-            MotiveMaintenanceIssueMemory.organization_id == organization_id,
-            MotiveMaintenanceIssueMemory.truck_number == truck_number,
-            MotiveMaintenanceIssueMemory.identity_key == identity_key,
-        )
-    )
-    if issue is not None:
-        return issue
     issue = MotiveMaintenanceIssueMemory(
         organization_id=organization_id,
         organization_slug=organization_slug,
         truck_number=truck_number,
-        identity_key=identity_key,
+        identity_key=_identity_key(identity),
         part_category=category or None,
         part_type=part_type or None,
         part_name=name or None,
@@ -222,6 +259,36 @@ def _get_or_create_issue(
     session.add(issue)
     session.flush()
     return issue
+
+
+def _add_event(
+    *,
+    session: Session,
+    issue: MotiveMaintenanceIssueMemory,
+    organization_id: str,
+    truck_number: str,
+    event_type: str,
+    structured_status: str,
+    report_date: date | None,
+    report_time: datetime | None,
+    odometer: int | None,
+    fingerprint: str,
+) -> None:
+    session.add(
+        MotiveMaintenanceIssueEvent(
+            organization_id=organization_id,
+            issue=issue,
+            truck_number=truck_number,
+            identity_key=issue.identity_key,
+            event_type=event_type,
+            structured_status=structured_status,
+            report_date=report_date,
+            report_time=report_time,
+            odometer=odometer,
+            source_fingerprint=fingerprint,
+            provider_write_performed=False,
+        )
+    )
 
 
 def _event_exists(session: Session, organization_id: str, fingerprint: str) -> bool:
