@@ -10,7 +10,8 @@ from app.organizations.models import Organization
 def _session() -> Session:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
-    factory = sessionmaker(bind=engine)
+    # Match production SessionLocal semantics. The durable writer must not rely on query autoflush.
+    factory = sessionmaker(bind=engine, autoflush=False)
     db = factory()
     db.add(Organization(id="org-1", slug="mor", display_name="MOR Logistics"))
     db.add(Organization(id="org-2", slug="other", display_name="Other"))
