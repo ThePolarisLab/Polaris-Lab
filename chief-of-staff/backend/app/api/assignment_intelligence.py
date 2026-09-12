@@ -23,6 +23,13 @@ MAX_DRIVER_CANDIDATES = 100
 HIGH_CONFIDENCE_LOCATION_MAX_AGE_MINUTES = 30.0
 STALE_LOCATION_MAX_AGE_MINUTES = 120.0
 PAIRING_SOURCE = "motive_vehicle_lookup_current_driver"
+READINESS_READY = "ready"
+READINESS_VERIFY = "verify"
+READINESS_NOT_SUITABLE = "not_suitable"
+ACTIVE_VEHICLE_STATUSES = {"active", "in service", "in_service"}
+INACTIVE_VEHICLE_STATUSES = {"inactive", "deactivated", "out of service", "out_of_service"}
+ACTIVE_DRIVER_STATUSES = {"active"}
+INACTIVE_DRIVER_STATUSES = {"inactive", "deactivated"}
 
 
 def _db() -> Session:
@@ -42,6 +49,7 @@ def assignment_candidates(
     Motive vehicle lookup is treated as the authoritative source for the vehicle's
     current_driver relationship when that object is present. HOS records remain
     observed duty-duration signals; Polaris does not calculate legal remaining HOS.
+    Dispatch readiness is advisory and does not replace dispatcher judgment.
     """
     dispatch = (
         session.query(TorqueAIDispatch)
@@ -79,12 +87,26 @@ def assignment_candidates(
         connector=motive,
     )
     _attach_paired_driver_hos(trucks, drivers)
+    _attach_dispatch_readiness(trucks)
     _strip_internal_ids(trucks, drivers)
 
     top_truck = trucks[0] if trucks else None
     top_truck_location_stale = bool(top_truck and top_truck.get("location_stale"))
     stale_truck_locations_present = any(bool(candidate.get("location_stale")) for candidate in trucks)
     authoritative_pairs_present = any(bool(candidate.get("current_driver_authoritative")) for candidate in trucks)
+    readiness_counts = {
+        classification: sum(
+            1
+            for candidate in trucks
+            if (candidate.get("dispatch_readiness") or {}).get("classification") == classification
+        )
+        for classification in (READINESS_READY, READINESS_VERIFY, READINESS_NOT_SUITABLE)
+    }
+    top_truck_readiness = (
+        (top_truck.get("dispatch_readiness") or {}).get("classification")
+        if top_truck is not None
+        else None
+    )
 
     return {
         "status": "success",
@@ -114,6 +136,12 @@ def assignment_candidates(
         },
         "truck_candidates": trucks,
         "driver_candidates": drivers,
+        "readiness_summary": {
+            "ready": readiness_counts[READINESS_READY],
+            "verify": readiness_counts[READINESS_VERIFY],
+            "not_suitable": readiness_counts[READINESS_NOT_SUITABLE],
+            "top_ranked_truck_readiness": top_truck_readiness,
+        },
         "decision_guardrails": {
             "truck_driver_pairing_inferred": False,
             "truck_driver_pairing_authoritative_source": PAIRING_SOURCE,
@@ -126,6 +154,10 @@ def assignment_candidates(
             "stale_truck_locations_present": stale_truck_locations_present,
             "top_truck_location_stale": top_truck_location_stale,
             "top_truck_requires_location_verification": top_truck_location_stale,
+            "dispatch_readiness_is_advisory": True,
+            "dispatch_readiness_uses_legal_remaining_hos": False,
+            "dispatch_readiness_distance_threshold_applied": False,
+            "distance_remains_relative_ranking_signal": True,
             "dispatcher_approval_required": True,
             "autonomous_assignment_performed": False,
         },
@@ -190,7 +222,7 @@ def _rank_trucks(
         located_at = location.get("located_at") if isinstance(location.get("located_at"), str) else None
         freshness_minutes = _freshness_minutes(located_at)
         location_stale = freshness_minutes is None or freshness_minutes > STALE_LOCATION_MAX_AGE_MINUTES
-        status_penalty = 0 if (vehicle.status or "").strip().lower() in {"active", "in service", "in_service"} else 1
+        status_penalty = 0 if (vehicle.status or "").strip().lower() in ACTIVE_VEHICLE_STATUSES else 1
         freshness_penalty = freshness_minutes if freshness_minutes is not None else 1000000.0
 
         candidates.append(
@@ -338,6 +370,62 @@ def _attach_paired_driver_hos(trucks: list[dict[str, Any]], drivers: list[dict[s
         )
 
 
+def _attach_dispatch_readiness(trucks: list[dict[str, Any]]) -> None:
+    for truck in trucks:
+        truck["dispatch_readiness"] = _classify_dispatch_readiness(truck)
+
+
+def _classify_dispatch_readiness(candidate: dict[str, Any]) -> dict[str, Any]:
+    hard_blockers: list[str] = []
+    verification_reasons: list[str] = []
+
+    vehicle_status = _normalized_status(candidate.get("vehicle_status"))
+    availability_status = _normalized_status(candidate.get("dispatch_availability_status"))
+    current_driver = candidate.get("current_driver") if isinstance(candidate.get("current_driver"), dict) else {}
+    driver_status = _normalized_status(current_driver.get("status"))
+
+    if availability_status in {"out_of_service", "out of service"}:
+        hard_blockers.append("motive_dispatch_availability_out_of_service")
+    if vehicle_status in INACTIVE_VEHICLE_STATUSES:
+        hard_blockers.append("vehicle_status_not_active")
+    elif vehicle_status not in ACTIVE_VEHICLE_STATUSES:
+        verification_reasons.append("vehicle_status_requires_verification")
+
+    if candidate.get("current_driver_authoritative"):
+        if driver_status in INACTIVE_DRIVER_STATUSES:
+            hard_blockers.append("authoritative_current_driver_not_active")
+        elif driver_status not in ACTIVE_DRIVER_STATUSES:
+            verification_reasons.append("authoritative_current_driver_status_requires_verification")
+    else:
+        verification_reasons.append("authoritative_current_driver_missing")
+
+    if candidate.get("location_stale"):
+        verification_reasons.append("location_stale_or_missing")
+    if availability_status != "in_service" and not hard_blockers:
+        verification_reasons.append("motive_dispatch_availability_not_confirmed_in_service")
+    if candidate.get("current_driver_hos_observed") is None:
+        verification_reasons.append("paired_driver_hos_observation_missing")
+
+    if hard_blockers:
+        classification = READINESS_NOT_SUITABLE
+    elif verification_reasons:
+        classification = READINESS_VERIFY
+    else:
+        classification = READINESS_READY
+
+    return {
+        "classification": classification,
+        "verification_required": classification != READINESS_READY,
+        "hard_blockers": hard_blockers,
+        "verification_reasons": verification_reasons,
+        "distance_to_pickup_km": candidate.get("distance_to_pickup_km"),
+        "distance_threshold_applied": False,
+        "distance_requires_dispatch_judgment": True,
+        "legal_remaining_hos_confirmed": False,
+        "dispatcher_approval_required": True,
+    }
+
+
 def _strip_internal_ids(trucks: list[dict[str, Any]], drivers: list[dict[str, Any]]) -> None:
     for truck in trucks:
         truck.pop("_current_driver_provider_id", None)
@@ -363,6 +451,10 @@ def _provider_driver_name(driver: dict[str, Any] | None) -> str | None:
     parts = [str(driver.get(key) or "").strip() for key in ("first_name", "last_name")]
     name = " ".join(part for part in parts if part)
     return name or None
+
+
+def _normalized_status(value: Any) -> str:
+    return str(value or "").strip().lower()
 
 
 def _number(value: Any) -> float | None:
