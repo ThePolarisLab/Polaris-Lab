@@ -9,7 +9,7 @@ from app.security.models import Permission
 
 # API Routers
 from app.api.ace import router as ace_router
-from app.api.assignment_intelligence import router as assignment_intelligence_router
+from app.api.assignment_guardrails import router as assignment_intelligence_router
 from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.api.code_understanding import router as code_understanding_router
