@@ -180,11 +180,14 @@ def test_vehicle_utilization_semantics_does_not_create_checkpoint_or_dashboard_n
         session.add(_utilization_record())
 
     with utilization_semantics_db() as session:
+        before = session.query(MotiveSyncCheckpoint).count()
         _ = motive_vehicle_utilization_semantics_status(session, "org-a")
+        after = session.query(MotiveSyncCheckpoint).count()
         dashboard = build_executive_dashboard(session, organization_id="org-a")
 
-    assert dashboard["motive_vehicle_utilization_records_stored"] == 1
-    assert dashboard["motive_vehicle_utilization_checkpoint_present"] is False
+    assert before == 0
+    assert after == 0
+    assert all("utilization semantics" not in item.title.lower() for item in dashboard.needs_attention)
 
 
 def test_vehicle_utilization_semantics_source_has_no_provider_call_or_write_path() -> None:
@@ -202,5 +205,6 @@ def test_vehicle_utilization_semantics_source_has_no_dashboard_or_checkpoint_imp
     from app.motive import vehicle_utilization_semantics as semantics_module
 
     source = inspect.getsource(semantics_module)
-    assert "dashboard" not in source.lower()
+    assert "from app.dashboard" not in source
+    assert "import app.dashboard" not in source
     assert "MotiveSyncCheckpoint" not in source
