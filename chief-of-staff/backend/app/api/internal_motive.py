@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.database.database import SessionLocal
 from app.motive.assignment_signal_certification import certify_assignment_signal_schema
+from app.motive.maintenance_signal_certification import certify_maintenance_signal_schema
 from app.motive.vehicle_utilization_scheduler import (
     MotiveVehicleUtilizationSchedulerError,
     run_scheduled_vehicle_utilization,
@@ -103,6 +104,32 @@ async def certify_motive_assignment_signals(
     )
     try:
         return certify_assignment_signal_schema(db, certification_date=certification_date)
+    except MotiveVehicleUtilizationSchedulerError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "failed", "error_code": exc.code, "secrets_exposed": False},
+        ) from exc
+
+
+@router.post("/maintenance-signal-certification")
+async def certify_motive_maintenance_signals(
+    request: Request,
+    certification_date: date = Query(..., alias="date"),
+    x_polaris_job_timestamp: str | None = Header(default=None, alias="X-Polaris-Job-Timestamp"),
+    x_polaris_job_signature: str | None = Header(default=None, alias="X-Polaris-Job-Signature"),
+    db: Session = Depends(get_db),
+):
+    """Observe only schema/type structure for fault-code and inspection resources."""
+    body = await request.body()
+    _verify_empty_machine_request(
+        request=request,
+        body=body,
+        timestamp_header=x_polaris_job_timestamp,
+        signature_header=x_polaris_job_signature,
+        body_error_detail="Motive maintenance-signal certification request body must be empty",
+    )
+    try:
+        return certify_maintenance_signal_schema(db, certification_date=certification_date)
     except MotiveVehicleUtilizationSchedulerError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
