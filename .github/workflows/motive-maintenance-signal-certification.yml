@@ -1,0 +1,101 @@
+name: Motive Maintenance Signal Certification
+
+on:
+  workflow_dispatch:
+    inputs:
+      certification_date:
+        description: "Date to inspect (YYYY-MM-DD)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  certify:
+    name: Certify Motive fault-code and inspection schemas
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      POLARIS_PRODUCTION_API_URL: ${{ secrets.POLARIS_PRODUCTION_API_URL }}
+      POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET: ${{ secrets.POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET }}
+      CERTIFICATION_DATE: ${{ inputs.certification_date }}
+    steps:
+      - name: Call signed production maintenance-signal certification endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${POLARIS_PRODUCTION_API_URL}" ] || [ -z "${POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET}" ]; then
+            echo "Production API URL or Motive trigger secret is not configured."
+            exit 1
+          fi
+
+          timestamp="$(date +%s)"
+          path="/api/v1/internal/motive/maintenance-signal-certification"
+          base_url="${POLARIS_PRODUCTION_API_URL%/}"
+          trigger_url="${base_url}${path}?date=${CERTIFICATION_DATE}"
+          signature="$(
+            CANONICAL_METHOD="POST" \
+            CANONICAL_PATH="${path}" \
+            CANONICAL_TIMESTAMP="${timestamp}" \
+            POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET="${POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET}" \
+            python -c 'import hashlib,hmac,os; body=hashlib.sha256(b"").hexdigest(); canonical="\n".join([os.environ["CANONICAL_METHOD"], os.environ["CANONICAL_PATH"], os.environ["CANONICAL_TIMESTAMP"], body]); print(hmac.new(os.environ["POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET"].encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest())'
+          )"
+
+          http_status="$(curl --silent --show-error \
+            --output response.body \
+            --write-out "%{http_code}" \
+            --connect-timeout 30 \
+            --max-time 300 \
+            --request POST \
+            --header "X-Polaris-Job-Timestamp: ${timestamp}" \
+            --header "X-Polaris-Job-Signature: ${signature}" \
+            "${trigger_url}")"
+          export HTTP_STATUS="${http_status}"
+
+          python - <<'PY'
+          import json
+          import os
+
+          status = int(os.environ.get("HTTP_STATUS") or "0")
+          with open("response.body", "r", encoding="utf-8", errors="replace") as handle:
+              text = handle.read()
+
+          print(f"Motive maintenance-signal certification HTTP: {status}")
+          if not text.strip():
+              raise SystemExit("certification response was empty")
+          try:
+              raw = json.loads(text)
+          except ValueError as exc:
+              raise SystemExit("certification response was not JSON") from exc
+
+          payload = raw.get("detail") if isinstance(raw, dict) and isinstance(raw.get("detail"), dict) else raw
+          if not isinstance(payload, dict):
+              raise SystemExit("certification response was not an object")
+
+          allowed_top = {
+              "status", "provider", "operation", "certification_date", "lookback_days", "resources",
+              "schema_values_returned", "raw_provider_payloads_returned",
+              "vehicle_identity_values_returned", "fault_code_values_returned",
+              "inspection_defect_values_returned", "inspection_notes_returned",
+              "signature_urls_returned", "secrets_exposed", "maintenance_readiness_changed",
+              "dispatch_readiness_changed", "error_code"
+          }
+          sanitized = {key: value for key, value in payload.items() if key in allowed_top}
+          print(json.dumps(sanitized, indent=2, sort_keys=True))
+
+          if not 200 <= status < 300:
+              raise SystemExit(f"certification failed with HTTP {status}")
+          for key in (
+              "schema_values_returned", "raw_provider_payloads_returned",
+              "vehicle_identity_values_returned", "fault_code_values_returned",
+              "inspection_defect_values_returned", "inspection_notes_returned",
+              "signature_urls_returned", "secrets_exposed", "maintenance_readiness_changed",
+              "dispatch_readiness_changed",
+          ):
+              if payload.get(key) is not False:
+                  raise SystemExit(f"privacy/safety contract failed: {key}")
+          resources = payload.get("resources")
+          if not isinstance(resources, dict) or set(resources) != {"fault_codes", "inspection_reports"}:
+              raise SystemExit("resource contract failed")
+          PY
