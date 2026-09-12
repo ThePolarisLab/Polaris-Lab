@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.logging import configure_application_logging
+from app.chatgpt_mcp.server import install_mcp
 from app.database.schema_guard import health_database_status, prepare_database_for_runtime
 from app.security.dependencies import require_permission
 from app.security.models import Permission
@@ -124,3 +125,7 @@ def health(response: Response):
         return {"status": "degraded"}
 
     return {"status": "ok"}
+
+
+# Feature flag defaults off; mount after the existing routes are registered.
+install_mcp(app)

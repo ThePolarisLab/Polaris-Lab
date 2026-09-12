@@ -12,6 +12,7 @@ class Permission(str, Enum):
     IDENTITY_READ = "identity.read"
     IDENTITY_WRITE = "identity.write"
     CONNECTOR_READ = "connector.read"
+    PICKUP_READ = "operations.pickups.read"
     CONNECTOR_WRITE = "connector.write"
     FINANCIAL_READ = "financial.read"
     FINANCIAL_WRITE = "financial.write"
@@ -46,6 +47,7 @@ WRITE_PERMISSIONS = frozenset(
 
 
 ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
+    "polaris_chatgpt_readonly": frozenset({Permission.PICKUP_READ}),
     "platform_admin": frozenset(Permission),
     "owner": READ_PERMISSIONS | WRITE_PERMISSIONS,
     "admin": READ_PERMISSIONS | WRITE_PERMISSIONS,
