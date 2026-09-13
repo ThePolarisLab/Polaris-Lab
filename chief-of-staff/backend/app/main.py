@@ -31,6 +31,7 @@ from app.api.memory import router as memory_router
 from app.api.memory_search import router as memory_search_router
 from app.api.missions import router as missions_router
 from app.api.motive import router as motive_router
+from app.api.motive_fault_lifecycle import router as motive_fault_lifecycle_router
 from app.api.motive_maintenance_memory import router as motive_maintenance_memory_router
 from app.api.motive_seven_day_reconciliation_validation import router as motive_seven_day_reconciliation_validation_router
 from app.api.motive_vehicle_utilization_kpi import router as motive_vehicle_utilization_kpi_router
@@ -96,6 +97,7 @@ app.include_router(torqueai_planning_router)
 app.include_router(assignment_intelligence_router)
 app.include_router(torqueai_schema_certification_router)
 app.include_router(motive_router)
+app.include_router(motive_fault_lifecycle_router)
 app.include_router(motive_maintenance_memory_router)
 app.include_router(motive_seven_day_reconciliation_validation_router)
 app.include_router(motive_vehicle_utilization_kpi_router)
