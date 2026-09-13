@@ -265,7 +265,7 @@ def _durable_issue_summary(truck_number: str, issue: dict[str, Any]) -> str:
     if state in {"open", "reopened"}:
         descriptor = "reopened" if state == "reopened" else "unresolved recurring" if recurring else "unresolved"
         summary = (
-            f"{truck_number} — {descriptor} {label} issue. First observed {first_open}; "
+            f"{truck_number} - {descriptor} {label} issue. First observed {first_open}; "
             f"last seen {last_seen}; {observation_count} open observation"
             f"{'s' if observation_count != 1 else ''}."
         )
@@ -284,11 +284,11 @@ def _durable_issue_summary(truck_number: str, issue: dict[str, Any]) -> str:
         resolution_status = issue.get("explicit_resolution_status") or "resolved"
         resolution_date = issue.get("explicit_resolution_date") or "unknown date"
         return (
-            f"{truck_number} — resolved {label} issue. First observed {first_open}; "
+            f"{truck_number} - resolved {label} issue. First observed {first_open}; "
             f"last seen {last_seen}; explicit resolution status {resolution_status} recorded on {resolution_date}."
         )
 
-    return f"{truck_number} — {label} maintenance history present with lifecycle state {state or 'unknown'}."
+    return f"{truck_number} - {label} maintenance history present with lifecycle state {state or 'unknown'}."
 
 
 def classify_pickup_temporal_status(value: Any, *, reference_date: date) -> dict[str, Any]:
