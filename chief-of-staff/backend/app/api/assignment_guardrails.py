@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.api.assignment_intelligence import _db, assignment_candidates as base_assignment_candidates
 from app.connectors.motive import MotiveConnector
+from app.motive.maintenance_memory import list_maintenance_memory
 from app.motive.maintenance_readiness import LOOKBACK_DAYS, maintenance_readiness_for_trucks
 from app.security.dependencies import require_permission
 from app.security.models import AuthenticatedPrincipal, Permission
@@ -45,7 +46,18 @@ def assignment_candidates_with_guardrails(
         as_of_date=reference_date,
         connector=MotiveConnector(organization_id=principal.organization_id),
     )
-    return apply_maintenance_guardrails(response, maintenance)
+    response = apply_maintenance_guardrails(response, maintenance)
+
+    durable_by_truck = {
+        truck.casefold(): list_maintenance_memory(
+            session=session,
+            organization_id=principal.organization_id,
+            truck_number=truck,
+            limit=50,
+        )
+        for truck in trucks
+    }
+    return apply_durable_maintenance_context(response, durable_by_truck)
 
 
 def apply_assignment_guardrails(response: dict[str, Any], *, reference_date: date) -> dict[str, Any]:
@@ -164,6 +176,119 @@ def apply_maintenance_guardrails(response: dict[str, Any], maintenance: dict[str
     if isinstance(provider_calls, dict):
         provider_calls.update({"motive_fault_codes": True, "motive_inspection_reports": True})
     return response
+
+
+def apply_durable_maintenance_context(
+    response: dict[str, Any], durable_by_truck: dict[str, list[dict[str, Any]]]
+) -> dict[str, Any]:
+    """Attach tenant-owned durable maintenance memory without changing readiness or rank."""
+    candidates_with_history = 0
+    unresolved_issue_count = 0
+    resolved_issue_count = 0
+
+    for candidate in response.get("truck_candidates", []):
+        if not isinstance(candidate, dict):
+            continue
+        truck_number = str(candidate.get("truck_number") or "").strip()
+        issues = durable_by_truck.get(truck_number.casefold(), [])
+        enriched: list[dict[str, Any]] = []
+        unresolved_for_truck = 0
+        resolved_for_truck = 0
+
+        for issue in issues:
+            if not isinstance(issue, dict):
+                continue
+            lifecycle_state = str(issue.get("lifecycle_state") or "").strip().casefold()
+            is_unresolved = lifecycle_state in {"open", "reopened"}
+            is_resolved = lifecycle_state == "resolved"
+            if is_unresolved:
+                unresolved_for_truck += 1
+            elif is_resolved:
+                resolved_for_truck += 1
+            enriched.append(
+                {
+                    **issue,
+                    "recurring": int(issue.get("open_observation_count") or 0) >= 2,
+                    "unresolved": is_unresolved,
+                    "dispatcher_summary": _durable_issue_summary(truck_number, issue),
+                }
+            )
+
+        if enriched:
+            candidates_with_history += 1
+        unresolved_issue_count += unresolved_for_truck
+        resolved_issue_count += resolved_for_truck
+        candidate["durable_maintenance_context"] = {
+            "issues": enriched,
+            "issue_count": len(enriched),
+            "unresolved_issue_count": unresolved_for_truck,
+            "resolved_issue_count": resolved_for_truck,
+            "advisory_only": True,
+            "changes_dispatch_readiness": False,
+            "changes_ranking": False,
+            "source": "polaris_durable_maintenance_memory",
+            "provider_call_performed": False,
+        }
+
+    response["durable_maintenance_memory_summary"] = {
+        "candidates_with_history": candidates_with_history,
+        "unresolved_issue_count": unresolved_issue_count,
+        "resolved_issue_count": resolved_issue_count,
+        "advisory_only": True,
+        "changes_dispatch_readiness": False,
+        "changes_ranking": False,
+        "provider_call_performed": False,
+    }
+    guardrails = response.setdefault("decision_guardrails", {})
+    if isinstance(guardrails, dict):
+        guardrails.update(
+            {
+                "durable_maintenance_memory_considered": True,
+                "durable_maintenance_memory_is_advisory": True,
+                "durable_maintenance_memory_changes_readiness": False,
+                "durable_maintenance_memory_changes_ranking": False,
+            }
+        )
+    return response
+
+
+def _durable_issue_summary(truck_number: str, issue: dict[str, Any]) -> str:
+    category = str(issue.get("part_category") or issue.get("part_name") or "maintenance").strip()
+    part_type = str(issue.get("part_type") or "").strip()
+    label = f"{category} / {part_type}" if part_type else category
+    state = str(issue.get("lifecycle_state") or "unknown").strip().casefold()
+    first_open = issue.get("first_open_date") or "unknown date"
+    last_seen = issue.get("last_seen_date") or "unknown date"
+    observation_count = int(issue.get("open_observation_count") or 0)
+    recurring = observation_count >= 2
+
+    if state in {"open", "reopened"}:
+        descriptor = "reopened" if state == "reopened" else "unresolved recurring" if recurring else "unresolved"
+        summary = (
+            f"{truck_number} — {descriptor} {label} issue. First observed {first_open}; "
+            f"last seen {last_seen}; {observation_count} open observation"
+            f"{'s' if observation_count != 1 else ''}."
+        )
+        resolution_status = issue.get("explicit_resolution_status")
+        resolution_date = issue.get("explicit_resolution_date")
+        if state == "reopened" and resolution_status:
+            summary += f" Previous explicit resolution status {resolution_status} recorded"
+            if resolution_date:
+                summary += f" on {resolution_date}"
+            summary += "; issue later reopened."
+        elif not resolution_status:
+            summary += " No explicit repair/resolution recorded."
+        return summary
+
+    if state == "resolved":
+        resolution_status = issue.get("explicit_resolution_status") or "resolved"
+        resolution_date = issue.get("explicit_resolution_date") or "unknown date"
+        return (
+            f"{truck_number} — resolved {label} issue. First observed {first_open}; "
+            f"last seen {last_seen}; explicit resolution status {resolution_status} recorded on {resolution_date}."
+        )
+
+    return f"{truck_number} — {label} maintenance history present with lifecycle state {state or 'unknown'}."
 
 
 def classify_pickup_temporal_status(value: Any, *, reference_date: date) -> dict[str, Any]:
