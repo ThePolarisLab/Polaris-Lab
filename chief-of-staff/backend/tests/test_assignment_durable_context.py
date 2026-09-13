@@ -58,8 +58,10 @@ def test_durable_context_is_advisory_only():
     assert m2214["dispatch_readiness"] == before_readiness
     assert issue["recurring"] is True
     assert issue["unresolved"] is True
+    assert issue["dispatcher_summary"].startswith("M2214 - unresolved recurring")
     assert "First observed 2026-09-07" in issue["dispatcher_summary"]
     assert "6 open observations" in issue["dispatcher_summary"]
+    assert "—" not in issue["dispatcher_summary"]
     assert result["durable_maintenance_memory_summary"]["unresolved_issue_count"] == 1
     assert result["decision_guardrails"]["durable_maintenance_memory_changes_readiness"] is False
     assert result["decision_guardrails"]["durable_maintenance_memory_changes_ranking"] is False
