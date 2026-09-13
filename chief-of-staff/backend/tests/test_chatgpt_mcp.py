@@ -96,7 +96,7 @@ def test_protocol_initialize_and_registration(setup):
     response = rpc(setup, "tools/list")
     assert response.status_code == 200, response.text
     tools = response.json()["result"]["tools"]
-    assert [t["name"] for t in tools] == ["get_pickups"]
+    assert [t["name"] for t in tools] == ["get_pickups", "get_loaded_trailers"]
     tool = tools[0]
     assert tool["annotations"] == {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
     assert tool["inputSchema"]["additionalProperties"] is False
@@ -212,7 +212,7 @@ def test_no_provider_calls_writes_or_unnecessary_private_fields(setup, monkeypat
     for field in ("dispatcher_name", "total_charge", "address", "zip_code", "fingerprint", "credential", "access_token"):
         assert field not in response.text
     assert response.headers["cache-control"] == "no-store"
-    assert ROLE_PERMISSIONS[security.ROLE] == frozenset({Permission.PICKUP_READ})
+    assert ROLE_PERMISSIONS[security.ROLE] == frozenset({Permission.PICKUP_READ, Permission.LOADED_TRAILER_READ})
 
 
 @pytest.mark.parametrize("sql", ["INSERT INTO identities (id) VALUES ('x')", "UPDATE identities SET status='disabled'", "DELETE FROM identities"])

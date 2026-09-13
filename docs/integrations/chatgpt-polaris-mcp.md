@@ -1,4 +1,4 @@
-# Private Polaris MCP pickup integration
+# Private Polaris MCP operational intelligence
 
 Phase 1 is tool-only, internal, and read-only. ChatGPT calls Polaris `/mcp`,
 which calls `app.services.pickup_planning.query_pickup_plan` directly and reads
@@ -27,8 +27,8 @@ endpoint, custom JSON-RPC implementation, or HTTP loopback to the REST endpoint.
 The low-level SDK tool registration provides explicit schemas and sanitized error
 contracts. Pydantic is updated to 2.12.5 to satisfy SDK 2.x requirements. HTTPX for
 existing connectors stays at its existing version; SDK 2.x uses its own HTTPX2.
-The specific `get_pickups` contract takes precedence over generic search/fetch
-templates; no other tools are registered.
+The private tool surface contains `get_pickups` and `get_loaded_trailers`;
+there are no write tools or generic provider proxy tools.
 
 ## Authentication and tenant isolation
 
@@ -39,8 +39,10 @@ shared bearer token or a Polaris admin token is not the connection mechanism.
 
 Create the Polaris identity `polaris-chatgpt-readonly` with one active MOR
 membership and role `polaris_chatgpt_readonly`. This role has exactly
-`operations.pickups.read`, with no connector, financial, admin, or write
-permissions. Do not give this identity a password, local token, or ordinary
+`operations.pickups.read` and `operations.loaded_trailers.read`, with no connector,
+financial, admin, or write permissions. Each request receives only the intersection
+of those permissions and its signed OAuth token scopes. A pickup-only token
+cannot call the loaded-trailer tool; a loaded-trailer-only token cannot read pickups. Do not give this identity a password, local token, or ordinary
 Polaris login. There are no new login or token-issuing routes.
 
 The dedicated OAuth client and explicitly authorized owner's external `sub`
@@ -78,7 +80,7 @@ requests without Origin (normal server clients) are supported.
 ## Tool contract
 
 Endpoint: **`https://<polaris-backend-host>/mcp`** (exact path `/mcp`, no redirect).
-Only `get_pickups` is registered. Its input schema is generated from
+`get_pickups` input schema is generated from
 `PickupInput`; the semantic schema below omits generated title/description labels:
 
 ```json
@@ -220,12 +222,13 @@ with SessionLocal.begin() as session:
 
 Identity email uniqueness intentionally prevents accidental duplicate runs.
 The role is a deployment-managed role, not exposed through the ordinary
-membership-creation form. No new database columns or migrations are needed.
+membership-creation form. The loaded-trailer extension requires migration
+`202609120002`; identity provisioning itself does not need a migration.
 
 Issuer requirements: HTTPS OAuth/OIDC discovery, authorization code flow,
 PKCE S256 advertised and enforced, predefined client registration,
 `resource` accepted at authorization and token endpoints and reflected in `aud`,
-scope `operations.pickups.read`, and signed JWT access tokens (`typ: at+jwt`,
+scopes `operations.pickups.read` and `operations.loaded_trailers.read`, and signed JWT access tokens (`typ: at+jwt`,
 RS256, `kid`, integer `iat`/`exp`, `iss`, `aud`, `sub`, `client_id`, space-delimited
 `scope`). Token lifetime must not exceed 3600 seconds. Do not use an ID token.
 Restrict client consent/login to the approved owner. If the chosen issuer uses
@@ -258,9 +261,9 @@ and its credentials unchanged.
    current ChatGPT can use its stable callback; otherwise the callback is specific
    to the connection. Configure any client secret directly in the connection UI.
 4. Sign in as the configured approved owner and consent to
-   `operations.pickups.read`. Verify no broader permission is requested. Keep
+   `operations.pickups.read` and `operations.loaded_trailers.read`. Keep
    access private to the authorized MOR workspace/owner.
-5. Inspect the tool list: exactly `get_pickups`, with the four read-only annotations.
+5. Inspect the tool list: `get_pickups` and `get_loaded_trailers`, both read-only.
    Refresh/reconnect the MCP definition after schema changes.
 6. In a conversation with Polaris enabled ask “Check tomorrow's pickup in
    Manitoba.” ChatGPT resolves tomorrow in the user's timezone and calls with
@@ -317,3 +320,178 @@ For manual deployed checks use `npx @modelcontextprotocol/inspector@latest` with
 Streamable HTTP and the same OAuth settings. Test invalid tokens and inputs as
 well as a real authorized call. Verify PostgreSQL read-only transactions in
 staging before production enablement.
+
+
+## Loaded trailer city intelligence
+
+Example question: “How many loaded trailers are in Winnipeg?”
+
+```json
+{"city":"Winnipeg","province":"Manitoba","country":"Canada"}
+```
+
+`get_loaded_trailers` requires `city` (1–255 characters); `province` and `country`
+are optional nullable strings (1–120 characters). Empty/control-character values,
+wrong types, and extra fields are rejected. City matching is exact after trimming
+and case folding. Province aliases include all Canadian postal abbreviations and
+full names (MB/Manitoba, ON/Ontario, etc.); other region strings match literally.
+Country aliases include CA/CAN/Canada and US/USA/United States. Omitting a region
+can match more than one city of the same name; returned regions disambiguate.
+There is no caller-supplied organization, date, URL, radius, or SQL expression.
+
+### Loaded and confirmed definitions
+
+The normalized dispatch status must be exactly **Loaded**, **In Transit**, or
+**Picked Up** (case, spaces, underscores and hyphens normalize). Unknown status,
+Assigned, Dispatched, nonzero loaded miles, or a trailer assignment alone never
+establish loaded state. Terminal/empty status tokens (delivered, complete,
+completed, cancelled/canceled, empty, unassigned, unloaded) exclude the record,
+including compound statuses. This is a conservative application classification,
+not a claim that every provider lifecycle literal has been production-certified.
+
+Confirmation additionally requires all of the following:
+
+- A non-placeholder trailer number and current truck assignment from the latest
+  stored dispatch record for that trailer.
+- That exact dispatch was observed in a successful TorqueAI sync within 120
+  minutes. A recent organization sync does not refresh other retained records.
+- One unambiguous tenant-owned Motive vehicle for the truck, with active/in-service
+  vehicle status and a fresh collected GPS observation matching the requested city.
+  The stored truck number must still match; GPS must not predate the selected
+  dispatch change/assignment evidence.
+- A fresh identity-checked Motive vehicle lookup whose active current-driver name
+  exactly matches the dispatch driver name after trimming and case folding.
+- No conflicting stop equipment, multiple current trailers on the same truck,
+  future change timestamp, or pickup schedule consisting entirely of future dates.
+
+“Confirmed” is **operational confirmation using the current dispatch truck
+assignment**. Motive's authoritative lookup establishes the current *driver*,
+not a physical trailer attachment. TorqueAI exposes only driver names, so the
+cross-provider check is name correlation, not a shared driver-ID join. This tool
+cannot independently prove that the trailer is still coupled or measure cargo.
+Evidence explicitly reports `trailer_location_via_dispatch_truck_assignment`.
+Do not describe the result as sensor-verified trailer attachment or cargo.
+
+The current TorqueAI model has no actual pickup/delivery timestamps or certified
+current-stop marker. Explicit loaded/in-transit status supplies lifecycle evidence;
+scheduled dates are never promoted to pickup completion or physical presence.
+If real lifecycle/attachment evidence is added later, it can strengthen this rule.
+
+### Location hierarchy and uncertainty
+
+1. Durable Motive city/state + `located_at`, resolved through the unique dispatch
+   truck and checked current-driver observation, is `motive_gps`.
+2. An actual TorqueAI current stop would be a fallback only with certified actual
+   presence and observation time. **No such persisted field exists today**, so
+   this version never fabricates `torqueai_current_stop`.
+3. A matching scheduled stop without GPS can only create a possible match with
+   `location_source=dispatch_inference`, null current city/region/time, and
+   `scheduled_stop_only_not_current_location`. It never enters confirmed count.
+
+GPS in another city overrides a matching scheduled stop, even when that GPS is
+stale. Stale GPS in the requested city may appear in `uncertain_trailers`.
+Missing, future-dated, contradictory, or stale evidence prevents confirmation.
+Unknown loaded status likewise remains uncertain when there is a possible city
+match. Uncertain candidates are not an inventory of every trailer with unknown
+location; a city-related observation or scheduled stop is needed to list one.
+Zero confirmed means no qualifying evidence, not proof the physical inventory is
+empty. ChatGPT must distinguish these meanings.
+
+The shared assignment thresholds are reused: high confidence through 30 minutes,
+medium through 120 minutes, stale above 120. Confirmation checks dispatch last
+observation, GPS time, lookup collection time and location collection time;
+confidence uses the oldest of these. Future timestamps are invalid, not age zero.
+`as_of` is query time, not a promise that every source was refreshed at that time.
+
+Dedupe precedes city and status filtering. Sort by latest `last_changed_at`, then
+`first_observed_at`, then database ID for deterministic ties. The latest record
+wins; a newer delivered/empty record suppresses an obsolete loaded one. Conflicting
+truck/status records tied on change time are uncertain, even though a deterministic
+record is selected for display. These
+are durable observation/change times, not invented provider lifecycle times.
+At most 5,000 dispatch/vehicle rows are examined and 500 trailer results returned;
+exceeding either bound produces `RESULT_LIMIT_EXCEEDED`, never a partial count.
+
+### Structured output
+
+The published descriptor contains the complete `inputSchema` and `outputSchema`.
+Successful output has `status=success`, `source=polaris_operational_intelligence`,
+request echo, query `as_of`, `location_staleness_threshold_minutes`, summary
+`confirmed_loaded_trailer_count` / `uncertain_loaded_trailer_count`, `trailers`
+and `uncertain_trailers`. Each trailer includes:
+
+- Trailer, load, load status and truck numbers.
+- Current city/province/country, location source and `location_observed_at`.
+- `dispatch_last_changed_at`, `dispatch_last_observed_at`, `pairing_observed_at`.
+- `loaded_state`, confidence, evidence codes and attention flags.
+
+Driver names are used internally for consistency but omitted from this result.
+No coordinates, addresses, customer names, provider IDs, raw payloads, VINs,
+credentials, billing or free-text stop notes are exposed. Unknown errors are
+sanitized. Returned operational strings are data, never instructions.
+Annotations are readOnly=true, destructive=false, idempotent=true, openWorld=false:
+the tool reads a bounded private dataset with no external actions.
+
+### Durable synchronization and rollout
+
+The user-authorized evidence extension adds `motive_location_observations` and
+nullable `torqueai_dispatches.last_observed_at`. Existing rows receive **no false
+freshness backfill**. Successful TorqueAI ingestion refreshes last observation
+for returned rows even when fingerprints are unchanged, preserving first/changed
+times and existing inserted/updated/unchanged accounting.
+
+The independent signed endpoint is:
+`POST /api/v1/internal/motive/location-observations/run` with an empty body and
+no query parameters. It reuses the Motive job-signature authentication and
+server-side scheduled organization resolution, restricted to `mor-logistics`.
+MCP OAuth tokens cannot invoke it. It is disabled unless
+`POLARIS_MOTIVE_LOCATION_SYNC_ENABLED=true` on the backend.
+
+The sync reads at most 100 known tenant vehicles. Per vehicle it calls the fixed
+GET `/v3/vehicle_locations` filtered to that provider ID and the existing GET
+`/v1/vehicles/lookup`. It validates envelope, returned vehicle ID/number, coordinate
+range and timestamp shape; no arbitrary URLs or fleet IDs are accepted from MCP.
+It persists only minimized city/time/current-driver observations. Lookup failures,
+missing location or schema mismatches never manufacture confirmation. A failed
+refresh marks the signal unavailable; an older overlapping collection cannot
+replace a newer observation. Provider retries remain bounded by the existing
+connector. Run the trigger serially, as the supplied workflow does.
+
+V3 requires Motive Vehicle Gateway support. Country is derived as Canada only
+when the returned state is a recognized Canadian province; unknown countries
+remain null. No external geocoder or guessed city boundaries are used.
+Official contract: [Motive vehicle locations v3](https://developer-docs.gomotive.com/reference/fetch-a-list-of-all-the-vehicles-and-their-locations-v3).
+Production envelope/permissions and name consistency must be checked in staging;
+unavailable or unsupported data yields zero confirmed, not a live MCP fallback.
+
+Rollout after PR approval and merge:
+
+1. Apply `alembic upgrade head` before starting code that reads the new fields.
+2. Keep existing TorqueAI sync and Motive vehicle ingestion operational. Refresh
+   the relevant dispatch window; historical rows outside it remain unconfirmed.
+3. Configure backend `POLARIS_MOTIVE_LOCATION_SYNC_ENABLED=true`, existing
+   `POLARIS_MOTIVE_UTILIZATION_SCHEDULED_ORGANIZATION_SLUG=mor-logistics`, and the
+   existing Motive trigger secret/provider credentials through normal secret
+   management. No provider credential is copied into ChatGPT.
+4. Set repository variable `POLARIS_MOTIVE_LOCATION_SYNC_ENABLED=true` to enable
+   `.github/workflows/motive-location-observations.yml`. It reuses repository
+   variable `POLARIS_PRODUCTION_API_URL` and secret
+   `POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET`, runs every 15 minutes, and
+   supports manual dispatch. GitHub scheduling can be delayed; freshness still
+   fails closed. Backend and repository flags are independently required.
+5. Grant `operations.loaded_trailers.read` to the existing dedicated OAuth client
+   and approved owner. Keep `operations.pickups.read` for pickups. The identity,
+   issuer, audience, endpoint, callback and MCP feature flag remain the same.
+6. Refresh the existing ChatGPT connection's tool metadata and reauthorize for
+   the new scope. A second connection/server is unnecessary. Existing pickup-only
+   grants continue to work but cannot call the new tool.
+7. Verify a known loaded trailer against dispatch status, timestamps and Motive
+   city; also verify stale, contradictory and zero-result examples. Compare
+   confirmed and uncertain counts separately. Do not merge or deploy merely
+   because synthetic contract tests pass.
+
+No production migration, configuration change, provider sync, or ChatGPT linking
+is performed by local tests or by this PR. Disabling the sync flag stops new
+observations; old evidence naturally expires. The MCP flag disables both tools. Destructive schema downgrade is intentionally
+blocked by the existing database gate; recover through the normal forward
+migration/backup process, not by dropping durable evidence.

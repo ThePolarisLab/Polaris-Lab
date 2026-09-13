@@ -202,6 +202,7 @@ def ingest_torqueai_dispatches(
                 row = TorqueAIDispatch(
                     organization_id=organization_id,
                     first_observed_at=observed_at,
+                    last_observed_at=observed_at,
                     last_changed_at=observed_at,
                     **_persisted_values(item),
                 )
@@ -210,6 +211,7 @@ def ingest_torqueai_dispatches(
                 inserted += 1
                 continue
 
+            row.last_observed_at = observed_at
             if row.source_fingerprint == item.source_fingerprint:
                 unchanged += 1
                 continue

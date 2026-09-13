@@ -16,12 +16,15 @@ from app.models.torqueai import TorqueAIDispatch, TorqueAIDispatchStop
 from app.security.dependencies import require_permission
 from app.security.models import AuthenticatedPrincipal, Permission
 
+from app.services.location_evidence import (
+    HIGH_CONFIDENCE_LOCATION_MAX_AGE_MINUTES, STALE_LOCATION_MAX_AGE_MINUTES,
+    location_confidence as _location_confidence,
+)
+
 router = APIRouter(prefix="/api/v1/assignment-intelligence", tags=["assignment-intelligence"])
 PICKUP_JOB = "Pick Up"
 MAX_TRUCK_CANDIDATES = 20
 MAX_DRIVER_CANDIDATES = 100
-HIGH_CONFIDENCE_LOCATION_MAX_AGE_MINUTES = 30.0
-STALE_LOCATION_MAX_AGE_MINUTES = 120.0
 PAIRING_SOURCE = "motive_vehicle_lookup_current_driver"
 READINESS_READY = "ready"
 READINESS_VERIFY = "verify"
@@ -479,16 +482,6 @@ def _freshness_minutes(value: str | None) -> float | None:
     if observed.tzinfo is None:
         observed = observed.replace(tzinfo=timezone.utc)
     return max(0.0, (datetime.now(timezone.utc) - observed.astimezone(timezone.utc)).total_seconds() / 60.0)
-
-
-def _location_confidence(freshness_minutes: float | None) -> str:
-    if freshness_minutes is None:
-        return "unknown"
-    if freshness_minutes <= HIGH_CONFIDENCE_LOCATION_MAX_AGE_MINUTES:
-        return "high"
-    if freshness_minutes <= STALE_LOCATION_MAX_AGE_MINUTES:
-        return "medium"
-    return "low"
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
