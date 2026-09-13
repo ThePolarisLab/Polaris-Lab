@@ -18,7 +18,7 @@ class FakeConnector:
                 {
                     "fault_code": {
                         "id": "fc-1",
-                        "status": "opened",
+                        "status": "open",
                         "code": "97",
                         "fmi": 3,
                         "network_id": "engine",
@@ -48,7 +48,7 @@ class FakeConnector:
                 {
                     "fault_code": {
                         "id": "fc-3",
-                        "status": "opened",
+                        "status": "open",
                         "code": "3226",
                         "fmi": 4,
                         "network_id": "engine",
@@ -71,16 +71,17 @@ def test_fault_lifecycle_certification_is_aggregate_only(monkeypatch):
     )
 
     assert result["records_observed"] == 3
-    assert result["status_counts"] == {"closed": 1, "opened": 2}
-    assert result["opened_records_found"] is True
+    assert result["status_counts"] == {"closed": 1, "open": 2}
+    assert result["open_records_found"] is True
     assert result["closed_records_found"] is True
     assert result["provider_record_id_present_all_records"] is True
     assert result["provider_record_id_unique_within_window"] is True
+    assert result["same_provider_id_observed_across_statuses"] is False
     assert result["identity_field_evidence"]["code"]["values_seen_with_multiple_statuses"] == 1
     assert result["identity_field_evidence"]["vehicle.id"]["values_seen_with_multiple_statuses"] == 1
     assert result["first_last_order_invalid_count"] == 0
     assert result["stable_identity_over_time_certified"] is False
-    assert result["opened_to_closed_transition_certified"] is False
+    assert result["open_to_closed_transition_certified"] is False
     assert result["durable_fault_memory_enabled"] is False
     assert result["provider_writes_performed"] is False
     assert result["database_writes_performed"] is False
