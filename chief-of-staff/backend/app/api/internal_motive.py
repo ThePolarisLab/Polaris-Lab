@@ -3,22 +3,58 @@
 from __future__ import annotations
 
 from datetime import date
+import os
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.database.database import SessionLocal
 from app.motive.assignment_signal_certification import certify_assignment_signal_schema
 from app.motive.fault_lifecycle_certification import certify_fault_lifecycle_evidence
+from app.motive.location_sync import LocationSyncError, sync_locations
 from app.motive.maintenance_signal_certification import certify_maintenance_signal_schema
 from app.motive.vehicle_utilization_scheduler import (
     MotiveVehicleUtilizationSchedulerError,
+    resolve_scheduled_organization,
     run_scheduled_vehicle_utilization,
 )
 from app.security.job_auth import JobAuthenticationError, verify_job_signature
 
 router = APIRouter(prefix="/api/v1/internal/motive", tags=["internal-motive"])
 MOTIVE_CRON_SECRET_ENV_VAR = "POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET"
+
+
+@router.post("/location-observations/run")
+async def run_location_observations(
+    request: Request,
+    x_polaris_job_timestamp: str | None = Header(default=None, alias="X-Polaris-Job-Timestamp"),
+    x_polaris_job_signature: str | None = Header(default=None, alias="X-Polaris-Job-Signature"),
+):
+    _verify_empty_machine_request(
+        request=request,
+        body=await request.body(),
+        timestamp_header=x_polaris_job_timestamp,
+        signature_header=x_polaris_job_signature,
+        body_error_detail="location sync body must be empty",
+    )
+    if request.url.query:
+        raise HTTPException(status_code=400, detail="location sync takes no query parameters")
+    if os.getenv("POLARIS_MOTIVE_LOCATION_SYNC_ENABLED", "false").lower() != "true":
+        raise HTTPException(status_code=503, detail="location sync disabled")
+
+    def run():
+        with SessionLocal() as session:
+            organization = resolve_scheduled_organization(session)
+            # Match the private MCP pilot tenant; caller cannot select one.
+            if organization.slug != "mor-logistics":
+                raise LocationSyncError("invalid_organization")
+            return sync_locations(session, organization_id=organization.id)
+
+    try:
+        return await run_in_threadpool(run)
+    except Exception:
+        raise HTTPException(status_code=503, detail="location sync unavailable") from None
 
 
 def get_db():

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import os
 from urllib.parse import urlsplit
@@ -17,6 +17,8 @@ from app.security.service import AuthenticationError, AuthorizationError, Securi
 
 ROLE = "polaris_chatgpt_readonly"
 SCOPE = Permission.PICKUP_READ.value
+MCP_PERMISSIONS = frozenset({Permission.PICKUP_READ, Permission.LOADED_TRAILER_READ})
+SCOPES = sorted(p.value for p in MCP_PERMISSIONS)
 
 
 @dataclass(frozen=True)
@@ -119,11 +121,12 @@ class MCPTokenProvider:
         except (jwt.PyJWTError, KeyError, ValueError, TypeError):
             raise AuthenticationError("AUTH_REQUIRED") from None
         if (claims["sub"] != self.config.subject or claims["client_id"] != self.config.client_id
-                or not isinstance(claims["scope"], str) or SCOPE not in claims["scope"].split()):
+                or not isinstance(claims["scope"], str) or not set(SCOPES).intersection(claims["scope"].split())):
             raise AuthorizationError("FORBIDDEN")
         # Only this configured external subject/client pair maps to the service
         # identity. Token claims and caller headers can never select a tenant.
-        return AuthenticationResult(provider=self.name, subject=self.config.identity_id)
+        return AuthenticationResult(provider=self.name, subject=self.config.identity_id,
+                                    claims={"scopes": sorted(set(SCOPES).intersection(claims["scope"].split()))})
 
     def authenticate(self, authorization: str | None):
         if not authorization or not authorization.startswith("Bearer "):
@@ -135,7 +138,8 @@ class MCPTokenProvider:
             organization = session.query(Organization).filter_by(
                 id=principal.organization_id, slug="mor-logistics", status="active",
             ).first()
-            if organization is None or principal.role != ROLE or principal.permissions != frozenset({Permission.PICKUP_READ}):
+            if organization is None or principal.role != ROLE or principal.permissions != MCP_PERMISSIONS:
                 raise AuthorizationError("FORBIDDEN")
-            SecurityService.require(principal, Permission.PICKUP_READ)
-            return principal
+            return replace(principal, permissions=frozenset(
+                p for p in MCP_PERMISSIONS if p.value in principal.claims.get("scopes", [])
+            ), claims={})

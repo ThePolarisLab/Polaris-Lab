@@ -1,0 +1,50 @@
+name: Motive Location Observations
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: motive-location-observations
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: vars.POLARIS_MOTIVE_LOCATION_SYNC_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      POLARIS_PRODUCTION_API_URL: ${{ vars.POLARIS_PRODUCTION_API_URL }}
+      TRIGGER_SECRET: ${{ secrets.POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET }}
+    steps:
+      - name: Refresh durable location observations
+        shell: python
+        run: |
+          import hashlib, hmac, json, os, time, urllib.request, urllib.parse
+          base = os.environ.get("POLARIS_PRODUCTION_API_URL", "").rstrip("/")
+          secret = os.environ.get("TRIGGER_SECRET", "")
+          url = urllib.parse.urlsplit(base)
+          if url.scheme != "https" or not url.hostname or url.username or url.password or url.query or url.fragment or not secret:
+              raise SystemExit("Location sync configuration is incomplete or invalid")
+          path = "/api/v1/internal/motive/location-observations/run"
+          timestamp = str(int(time.time()))
+          canonical = "\n".join(["POST", path, timestamp, hashlib.sha256(b"").hexdigest()])
+          signature = hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+          request = urllib.request.Request(base + path, data=b"", method="POST", headers={
+              "X-Polaris-Job-Timestamp": timestamp, "X-Polaris-Job-Signature": signature,
+          })
+          try:
+              with urllib.request.build_opener(NoRedirect).open(request, timeout=780) as response:
+                  payload = json.load(response)
+          except Exception:
+              raise SystemExit("Location sync failed; inspect sanitized backend status") from None
+          if payload.get("status") != "success":
+              raise SystemExit("Location sync degraded; some evidence is unavailable")
+          print("Location sync completed successfully")

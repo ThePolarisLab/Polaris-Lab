@@ -28,6 +28,7 @@ from app.models.motive import (  # noqa: F401
     MotiveVehicleRecord,
     MotiveVehicleUtilizationRecord,
 )
+from app.models.motive_location import MotiveLocationObservation  # noqa: F401
 from app.models.motive_kpi_snapshot import MotiveVehicleUtilizationKpiSnapshot  # noqa: F401
 from app.models.motive_maintenance import MotiveMaintenanceIssueEvent, MotiveMaintenanceIssueMemory  # noqa: F401
 from app.models.outlook import (  # noqa: F401

@@ -45,6 +45,7 @@ class TorqueAIDispatch(Base):
     trailer_number: Mapped[str | None] = mapped_column(String(120), nullable=True)
     loaded_miles: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     source_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    last_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     first_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
