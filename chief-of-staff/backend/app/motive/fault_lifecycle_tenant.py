@@ -31,6 +31,7 @@ def certify_fault_lifecycle_for_organization(
     faults = _children(payload, "fault_codes", "fault_code") if available else []
     status_counts = Counter(_norm(fault.get("status")) or "<blank>" for fault in faults)
     identity_fields = {path: _field_evidence(faults, path) for path in IDENTITY_FIELD_PATHS}
+    same_provider_id_across_statuses = identity_fields["id"]["values_seen_with_multiple_statuses"] > 0
 
     temporal_observed = 0
     temporal_valid = 0
@@ -57,11 +58,12 @@ def certify_fault_lifecycle_for_organization(
         "records_observed": len(faults),
         "status_values_observed": sorted(status_counts),
         "status_counts": dict(sorted(status_counts.items())),
-        "opened_records_found": status_counts.get("opened", 0) > 0,
+        "open_records_found": status_counts.get("open", 0) > 0,
         "closed_records_found": status_counts.get("closed", 0) > 0,
         "identity_field_evidence": identity_fields,
         "provider_record_id_present_all_records": bool(faults) and identity_fields["id"]["non_null_count"] == len(faults),
         "provider_record_id_unique_within_window": bool(faults) and identity_fields["id"]["distinct_count"] == len(faults),
+        "same_provider_id_observed_across_statuses": same_provider_id_across_statuses,
         "cross_status_same_identity_counts": {
             path: evidence["values_seen_with_multiple_statuses"] for path, evidence in identity_fields.items()
         },
@@ -69,7 +71,7 @@ def certify_fault_lifecycle_for_organization(
         "first_last_order_valid_count": temporal_valid,
         "first_last_order_invalid_count": temporal_invalid,
         "stable_identity_over_time_certified": False,
-        "opened_to_closed_transition_certified": False,
+        "open_to_closed_transition_certified": False,
         "durable_fault_memory_enabled": False,
         "provider_writes_performed": False,
         "database_writes_performed": False,
