@@ -45,6 +45,9 @@ jobs:
                   payload = json.load(response)
           except Exception:
               raise SystemExit("Location sync failed; inspect sanitized backend status") from None
+          summary_keys = ("status", "vehicles_requested", "locations_observed", "unavailable", "as_of")
+          summary = {key: payload.get(key) for key in summary_keys}
+          print("Location sync summary: " + json.dumps(summary, sort_keys=True, separators=(",", ":")))
           if payload.get("status") != "success":
               raise SystemExit("Location sync degraded; some evidence is unavailable")
           print("Location sync completed successfully")
