@@ -11,8 +11,10 @@ from app.services.location_evidence import utc
 
 MAX_VEHICLES = 100
 LOCATION_UNAVAILABLE_REASONS = (
-    "location_contract_unavailable", "location_identity_mismatch", "location_unavailable",
-    "location_coordinates_invalid", "location_city_or_timestamp_unavailable",
+    "location_payload_not_object", "location_vehicles_envelope_missing_or_invalid",
+    "location_zero_rows", "location_multiple_rows", "location_identity_mismatch",
+    "location_unavailable", "location_coordinates_invalid",
+    "location_city_or_timestamp_unavailable",
 )
 UNAVAILABLE_REASONS = ("provider_request_failed", *LOCATION_UNAVAILABLE_REASONS, "unexpected_unavailable")
 VEHICLE_STATUS_BUCKETS = ("active", "inactive", "other_or_unknown")
@@ -62,9 +64,15 @@ def _timestamp(value):
 
 def _location(payload, provider_id, unit_number):
     """Require the documented v3 list envelope and exact requested identity."""
-    rows = payload.get("vehicles") if isinstance(payload, dict) else None
-    if not isinstance(rows, list) or len(rows) != 1:
-        raise LocationSyncError("location_contract_unavailable")
+    if not isinstance(payload, dict):
+        raise LocationSyncError("location_payload_not_object")
+    if "vehicles" not in payload or not isinstance(payload.get("vehicles"), list):
+        raise LocationSyncError("location_vehicles_envelope_missing_or_invalid")
+    rows = payload["vehicles"]
+    if not rows:
+        raise LocationSyncError("location_zero_rows")
+    if len(rows) != 1:
+        raise LocationSyncError("location_multiple_rows")
     vehicle = rows[0].get("vehicle") if isinstance(rows[0], dict) else None
     if (not isinstance(vehicle, dict) or str(vehicle.get("id")) != provider_id
             or _text(vehicle.get("number"), 120) != unit_number):
@@ -106,6 +114,9 @@ def sync_locations(session, *, organization_id, connector=None, now=None):
     unavailable_reason_counts = dict.fromkeys(UNAVAILABLE_REASONS, 0)
     requested_by_status = dict.fromkeys(VEHICLE_STATUS_BUCKETS, 0)
     unavailable_by_status = dict.fromkeys(VEHICLE_STATUS_BUCKETS, 0)
+    unavailable_reason_by_status = {
+        reason: dict.fromkeys(VEHICLE_STATUS_BUCKETS, 0) for reason in UNAVAILABLE_REASONS
+    }
     for vehicle in vehicles:
         status_bucket = _vehicle_status_bucket(vehicle.status)
         requested_by_status[status_bucket] += 1
@@ -129,8 +140,10 @@ def sync_locations(session, *, organization_id, connector=None, now=None):
             # No exception/provider text crosses this boundary. Failed refresh
             # replaces the old signal instead of silently leaving it confirmed.
             values["signal_status"] = "unavailable"
-            unavailable_reason_counts[_unavailable_reason(exc)] += 1
+            reason = _unavailable_reason(exc)
+            unavailable_reason_counts[reason] += 1
             unavailable_by_status[status_bucket] += 1
+            unavailable_reason_by_status[reason][status_bucket] += 1
         observations.append((vehicle.id, values))
     try:
         for vehicle_id, values in observations:
@@ -152,4 +165,5 @@ def sync_locations(session, *, organization_id, connector=None, now=None):
             "unavailable": len(vehicles) - available, "as_of": now.isoformat(),
             "unavailable_reason_counts": unavailable_reason_counts,
             "requested_by_status": requested_by_status,
-            "unavailable_by_status": unavailable_by_status}
+            "unavailable_by_status": unavailable_by_status,
+            "unavailable_reason_by_status": unavailable_reason_by_status}
