@@ -45,8 +45,38 @@ jobs:
                   payload = json.load(response)
           except Exception:
               raise SystemExit("Location sync failed; inspect sanitized backend status") from None
-          summary_keys = ("status", "vehicles_requested", "locations_observed", "unavailable", "as_of")
-          summary = {key: payload.get(key) for key in summary_keys}
+          from datetime import datetime
+          if not isinstance(payload, dict):
+              payload = {}
+          reason_keys = (
+              "provider_request_failed", "location_contract_unavailable", "location_identity_mismatch",
+              "location_unavailable", "location_coordinates_invalid",
+              "location_city_or_timestamp_unavailable", "unexpected_unavailable",
+          )
+          status_keys = ("active", "inactive", "other_or_unknown")
+          def safe_count(value):
+              return value if type(value) is int and value >= 0 else None
+          def safe_counts(value, keys):
+              if not isinstance(value, dict):
+                  return {}
+              return {key: value[key] for key in keys if safe_count(value.get(key)) is not None}
+          as_of = None
+          try:
+              observed = datetime.fromisoformat(payload.get("as_of", "").replace("Z", "+00:00"))
+              if observed.tzinfo is not None:
+                  as_of = observed.isoformat()
+          except (TypeError, ValueError, AttributeError):
+              pass
+          summary = {
+              "status": payload.get("status") if payload.get("status") in ("success", "degraded") else "unknown",
+              "vehicles_requested": safe_count(payload.get("vehicles_requested")),
+              "locations_observed": safe_count(payload.get("locations_observed")),
+              "unavailable": safe_count(payload.get("unavailable")),
+              "as_of": as_of,
+              "unavailable_reason_counts": safe_counts(payload.get("unavailable_reason_counts"), reason_keys),
+              "requested_by_status": safe_counts(payload.get("requested_by_status"), status_keys),
+              "unavailable_by_status": safe_counts(payload.get("unavailable_by_status"), status_keys),
+          }
           print("Location sync summary: " + json.dumps(summary, sort_keys=True, separators=(",", ":")))
           if payload.get("status") != "success":
               raise SystemExit("Location sync degraded; some evidence is unavailable")
