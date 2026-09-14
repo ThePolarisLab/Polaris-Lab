@@ -2,6 +2,7 @@ from datetime import date
 from types import SimpleNamespace
 
 from app.motive import fault_lifecycle_certification as mod
+from app.motive import fault_lifecycle_tenant as tenant_mod
 
 
 class FakeConnector:
@@ -90,3 +91,22 @@ def test_fault_lifecycle_certification_is_aggregate_only(monkeypatch):
     assert "M2209" not in rendered
     assert "fc-1" not in rendered
     assert "3226" not in rendered
+
+
+def test_tenant_fault_lifecycle_matches_certified_open_status_semantics(monkeypatch):
+    monkeypatch.setattr(tenant_mod, "MotiveConnector", lambda organization_id: FakeConnector())
+
+    result = tenant_mod.certify_fault_lifecycle_for_organization(
+        organization_id="org-mor", certification_date=date(2026, 9, 13)
+    )
+
+    assert result["status_counts"] == {"closed": 1, "open": 2}
+    assert result["open_records_found"] is True
+    assert result["closed_records_found"] is True
+    assert result["same_provider_id_observed_across_statuses"] is False
+    assert result["open_to_closed_transition_certified"] is False
+    assert "opened_records_found" not in result
+    assert "opened_to_closed_transition_certified" not in result
+    assert result["durable_fault_memory_enabled"] is False
+    assert result["provider_writes_performed"] is False
+    assert result["database_writes_performed"] is False
