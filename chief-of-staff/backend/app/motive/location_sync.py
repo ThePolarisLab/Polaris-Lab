@@ -3,17 +3,45 @@ from datetime import datetime, timezone
 import math
 
 from app.api.assignment_intelligence import _vehicle_lookup, _provider_driver_name
-from app.connectors.motive import MotiveConnector
+from app.connectors.motive import MotiveConnector, MotiveConnectorError
 from app.models.motive import MotiveVehicleRecord
 from app.models.motive_location import MotiveLocationObservation
 from app.services.geography import province_values
 from app.services.location_evidence import utc
 
 MAX_VEHICLES = 100
+LOCATION_UNAVAILABLE_REASONS = (
+    "location_contract_unavailable", "location_identity_mismatch", "location_unavailable",
+    "location_coordinates_invalid", "location_city_or_timestamp_unavailable",
+)
+UNAVAILABLE_REASONS = ("provider_request_failed", *LOCATION_UNAVAILABLE_REASONS, "unexpected_unavailable")
+VEHICLE_STATUS_BUCKETS = ("active", "inactive", "other_or_unknown")
 
 
 class LocationSyncError(ValueError):
     pass
+
+
+def _unavailable_reason(exc):
+    # Never stringify arbitrary exceptions, echo provider codes, or use raw
+    # values as diagnostic keys. Only our exact controlled location errors pass.
+    if isinstance(exc, MotiveConnectorError):
+        return "provider_request_failed"
+    if (isinstance(exc, LocationSyncError) and len(exc.args) == 1
+            and type(exc.args[0]) is str and exc.args[0] in LOCATION_UNAVAILABLE_REASONS):
+        return exc.args[0]
+    return "unexpected_unavailable"
+
+
+def _vehicle_status_bucket(value):
+    if not isinstance(value, str):
+        return "other_or_unknown"
+    status = " ".join(value.strip().casefold().replace("_", " ").replace("-", " ").split())
+    if status in {"active", "in service"}:
+        return "active"
+    if status in {"inactive", "deactivated", "out of service"}:
+        return "inactive"
+    return "other_or_unknown"
 
 
 def _text(value, limit=255):
@@ -75,7 +103,12 @@ def sync_locations(session, *, organization_id, connector=None, now=None):
         raise LocationSyncError("vehicle_bound_exceeded")
     client = connector or (MotiveConnector(organization_id=organization_id) if vehicles else None)
     observations = []
+    unavailable_reason_counts = dict.fromkeys(UNAVAILABLE_REASONS, 0)
+    requested_by_status = dict.fromkeys(VEHICLE_STATUS_BUCKETS, 0)
+    unavailable_by_status = dict.fromkeys(VEHICLE_STATUS_BUCKETS, 0)
     for vehicle in vehicles:
+        status_bucket = _vehicle_status_bucket(vehicle.status)
+        requested_by_status[status_bucket] += 1
         values = dict(truck_number=vehicle.unit_number, city=None, province=None, country=None, location_observed_at=None,
                       current_driver_name=None, pairing_observed_at=None,
                       collected_at=now, signal_status="unavailable")
@@ -92,10 +125,12 @@ def sync_locations(session, *, organization_id, connector=None, now=None):
                     values["current_driver_name"] = _text(_provider_driver_name(driver))
                     values["pairing_observed_at"] = now if values["current_driver_name"] else None
             values["signal_status"] = "observed"
-        except Exception:
+        except Exception as exc:
             # No exception/provider text crosses this boundary. Failed refresh
             # replaces the old signal instead of silently leaving it confirmed.
             values["signal_status"] = "unavailable"
+            unavailable_reason_counts[_unavailable_reason(exc)] += 1
+            unavailable_by_status[status_bucket] += 1
         observations.append((vehicle.id, values))
     try:
         for vehicle_id, values in observations:
@@ -114,4 +149,7 @@ def sync_locations(session, *, organization_id, connector=None, now=None):
     available = sum(values["signal_status"] == "observed" for _, values in observations)
     return {"status": "success" if available == len(vehicles) else "degraded",
             "vehicles_requested": len(vehicles), "locations_observed": available,
-            "unavailable": len(vehicles) - available, "as_of": now.isoformat()}
+            "unavailable": len(vehicles) - available, "as_of": now.isoformat(),
+            "unavailable_reason_counts": unavailable_reason_counts,
+            "requested_by_status": requested_by_status,
+            "unavailable_by_status": unavailable_by_status}
