@@ -63,10 +63,9 @@ def _timestamp(value):
 def _location(payload, provider_id, unit_number):
     """Require the documented v3 list envelope and exact requested identity.
 
-    The existing safe diagnostic bucket ``location_contract_unavailable`` is
-    intentionally narrowed to an empty documented list. Other structural
-    contract failures remain unavailable but are classified by the outer safe
-    diagnostic boundary as ``unexpected_unavailable``.
+    A zero-row v3 response is a controlled structural condition. The caller may
+    make one bounded v2 diagnostic probe, but v2 data is never promoted to
+    confirmed location evidence by this module.
     """
     if not isinstance(payload, dict):
         raise LocationSyncError("location_payload_not_object")
@@ -103,33 +102,97 @@ def _location(payload, provider_id, unit_number):
             "country": country, "location_observed_at": observed_at}
 
 
-def sync_locations(session, *, organization_id, connector=None, now=None):
-    """All known tenant vehicles, bounded and atomic; failures invalidate old evidence.
+def _v2_location_candidate(payload, provider_id, unit_number):
+    """Return whether v2 exposes the same vehicle with current-location data.
 
-    Calls two fixed read endpoints per vehicle. The caller owns tenant resolution
-    and machine authentication. This method commits only minimized observations.
+    This validates only enough structure for a safe aggregate diagnostic. It
+    does not normalize, persist, or certify v2 location data.
+    """
+    if not isinstance(payload, dict):
+        raise LocationSyncError("v2_location_payload_not_object")
+    rows = payload.get("vehicles")
+    if not isinstance(rows, list):
+        raise LocationSyncError("v2_location_vehicles_envelope_missing_or_invalid")
+    matches = [
+        row for row in rows
+        if isinstance(row, dict)
+        and str(row.get("id")) == provider_id
+        and _text(row.get("number"), 120) == unit_number
+    ]
+    if len(matches) > 1:
+        raise LocationSyncError("v2_location_multiple_identity_matches")
+    if not matches:
+        return False
+    return isinstance(matches[0].get("current_location"), dict)
+
+
+def _classify_v3_zero_with_v2_probe(client, vehicle):
+    """Keep v3 zero-row evidence degraded while safely diagnosing v2 coverage."""
+    payload = client._request_json(
+        "/v2/vehicle_locations",
+        params={"vehicle_ids[]": vehicle.provider_vehicle_id, "per_page": 2, "page_no": 1},
+        operation="durable_location_v2_diagnostic",
+    )
+    if _v2_location_candidate(payload, vehicle.provider_vehicle_id, vehicle.unit_number):
+        # V3 is unavailable, but v2 has a bounded candidate. Do not persist it.
+        return "location_contract_unavailable"
+    return "location_unavailable"
+
+
+def sync_locations(session, *, organization_id, connector=None, now=None):
+    """Sync current operational location evidence for provider-active vehicles only.
+
+    Inactive and status-uncertain Motive vehicles remain historical inventory but
+    are skipped for live location calls and have prior operational GPS evidence
+    invalidated. Active v3 zero-row failures receive at most one v2 diagnostic
+    probe; v2 data never becomes confirmed evidence here.
     """
     now = utc(now or datetime.now(timezone.utc))
-    vehicles = session.query(MotiveVehicleRecord).filter_by(organization_id=organization_id).order_by(MotiveVehicleRecord.id).limit(MAX_VEHICLES + 1).all()
+    vehicles = session.query(MotiveVehicleRecord).filter_by(
+        organization_id=organization_id
+    ).order_by(MotiveVehicleRecord.id).limit(MAX_VEHICLES + 1).all()
     if len(vehicles) > MAX_VEHICLES:
         raise LocationSyncError("vehicle_bound_exceeded")
-    client = connector or (MotiveConnector(organization_id=organization_id) if vehicles else None)
+
+    status_buckets = [(vehicle, _vehicle_status_bucket(vehicle.status)) for vehicle in vehicles]
+    active_vehicles = [vehicle for vehicle, bucket in status_buckets if bucket == "active"]
+    client = connector or (MotiveConnector(organization_id=organization_id) if active_vehicles else None)
+
     observations = []
     unavailable_reason_counts = dict.fromkeys(UNAVAILABLE_REASONS, 0)
     requested_by_status = dict.fromkeys(VEHICLE_STATUS_BUCKETS, 0)
     unavailable_by_status = dict.fromkeys(VEHICLE_STATUS_BUCKETS, 0)
-    for vehicle in vehicles:
-        status_bucket = _vehicle_status_bucket(vehicle.status)
+    skipped_by_status = dict.fromkeys(VEHICLE_STATUS_BUCKETS, 0)
+
+    for vehicle, status_bucket in status_buckets:
+        values = dict(
+            truck_number=vehicle.unit_number, city=None, province=None, country=None,
+            location_observed_at=None, current_driver_name=None, pairing_observed_at=None,
+            collected_at=now, signal_status="unavailable",
+        )
+        if status_bucket != "active":
+            skipped_by_status[status_bucket] += 1
+            values["signal_status"] = (
+                "inactive_skipped" if status_bucket == "inactive" else "status_unconfirmed_skipped"
+            )
+            observations.append((vehicle.id, values))
+            continue
+
         requested_by_status[status_bucket] += 1
-        values = dict(truck_number=vehicle.unit_number, city=None, province=None, country=None, location_observed_at=None,
-                      current_driver_name=None, pairing_observed_at=None,
-                      collected_at=now, signal_status="unavailable")
         try:
             payload = client._request_json(
-                "/v3/vehicle_locations", params={"vehicle_ids[]": vehicle.provider_vehicle_id, "per_page": 2, "page_no": 1},
+                "/v3/vehicle_locations",
+                params={"vehicle_ids[]": vehicle.provider_vehicle_id, "per_page": 2, "page_no": 1},
                 operation="durable_location_sync",
             )
-            values.update(_location(payload, vehicle.provider_vehicle_id, vehicle.unit_number))
+            try:
+                values.update(_location(payload, vehicle.provider_vehicle_id, vehicle.unit_number))
+            except LocationSyncError as exc:
+                if exc.args == ("location_contract_unavailable",):
+                    reason = _classify_v3_zero_with_v2_probe(client, vehicle)
+                    raise LocationSyncError(reason) from None
+                raise
+
             lookup = _vehicle_lookup(client, vehicle.unit_number)
             if str(lookup.get("id")) == vehicle.provider_vehicle_id and lookup.get("number") == vehicle.unit_number:
                 driver = lookup.get("current_driver")
@@ -144,9 +207,12 @@ def sync_locations(session, *, organization_id, connector=None, now=None):
             unavailable_reason_counts[_unavailable_reason(exc)] += 1
             unavailable_by_status[status_bucket] += 1
         observations.append((vehicle.id, values))
+
     try:
         for vehicle_id, values in observations:
-            row = session.query(MotiveLocationObservation).filter_by(organization_id=organization_id, vehicle_id=vehicle_id).with_for_update().one_or_none()
+            row = session.query(MotiveLocationObservation).filter_by(
+                organization_id=organization_id, vehicle_id=vehicle_id
+            ).with_for_update().one_or_none()
             if row is not None and utc(row.collected_at) > now:
                 continue  # an overlapping older collection cannot win
             if row is None:
@@ -158,10 +224,22 @@ def sync_locations(session, *, organization_id, connector=None, now=None):
     except Exception:
         session.rollback()
         raise LocationSyncError("location_persistence_failed") from None
+
     available = sum(values["signal_status"] == "observed" for _, values in observations)
-    return {"status": "success" if available == len(vehicles) else "degraded",
-            "vehicles_requested": len(vehicles), "locations_observed": available,
-            "unavailable": len(vehicles) - available, "as_of": now.isoformat(),
-            "unavailable_reason_counts": unavailable_reason_counts,
-            "requested_by_status": requested_by_status,
-            "unavailable_by_status": unavailable_by_status}
+    requested = len(active_vehicles)
+    unavailable = requested - available
+    skipped = len(vehicles) - requested
+    return {
+        "status": "success" if unavailable == 0 else "degraded",
+        "vehicles_known": len(vehicles),
+        "vehicles_requested": requested,
+        "locations_observed": available,
+        "unavailable": unavailable,
+        "vehicles_skipped": skipped,
+        "inactive_skipped": skipped_by_status["inactive"],
+        "as_of": now.isoformat(),
+        "unavailable_reason_counts": unavailable_reason_counts,
+        "requested_by_status": requested_by_status,
+        "unavailable_by_status": unavailable_by_status,
+        "skipped_by_status": skipped_by_status,
+    }
