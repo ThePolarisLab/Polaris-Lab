@@ -15,6 +15,15 @@ LOCATION_UNAVAILABLE_REASONS = (
     "location_coordinates_invalid", "location_city_or_timestamp_unavailable",
 )
 UNAVAILABLE_REASONS = ("provider_request_failed", *LOCATION_UNAVAILABLE_REASONS, "unexpected_unavailable")
+# A provider-active vehicle can legitimately have no current GPS evidence. That
+# remains unavailable evidence for the vehicle, but it is not by itself a sync
+# execution failure. Every other controlled/unexpected reason still degrades
+# system health because it indicates provider, contract, identity, validation,
+# or integrity trouble rather than simple evidence absence.
+NON_BLOCKING_UNAVAILABLE_REASONS = ("location_unavailable",)
+BLOCKING_UNAVAILABLE_REASONS = tuple(
+    reason for reason in UNAVAILABLE_REASONS if reason not in NON_BLOCKING_UNAVAILABLE_REASONS
+)
 VEHICLE_STATUS_BUCKETS = ("active", "inactive", "other_or_unknown")
 
 
@@ -146,6 +155,11 @@ def sync_locations(session, *, organization_id, connector=None, now=None):
     are skipped for live location calls and have prior operational GPS evidence
     invalidated. Active v3 zero-row failures receive at most one v2 diagnostic
     probe; v2 data never becomes confirmed evidence here.
+
+    ``status`` reports sync/system health. ``evidence_status`` reports whether
+    every requested active vehicle has usable current-location evidence. A true
+    per-vehicle absence of current GPS therefore produces success/partial rather
+    than turning the whole scheduled sync red.
     """
     now = utc(now or datetime.now(timezone.utc))
     vehicles = session.query(MotiveVehicleRecord).filter_by(
@@ -229,8 +243,13 @@ def sync_locations(session, *, organization_id, connector=None, now=None):
     requested = len(active_vehicles)
     unavailable = requested - available
     skipped = len(vehicles) - requested
+    blocking_unavailable = sum(
+        unavailable_reason_counts[reason] for reason in BLOCKING_UNAVAILABLE_REASONS
+    )
     return {
-        "status": "success" if unavailable == 0 else "degraded",
+        "status": "success" if blocking_unavailable == 0 else "degraded",
+        "evidence_status": "complete" if unavailable == 0 else "partial",
+        "blocking_unavailable": blocking_unavailable,
         "vehicles_known": len(vehicles),
         "vehicles_requested": requested,
         "locations_observed": available,
