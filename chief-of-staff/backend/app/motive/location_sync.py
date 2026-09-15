@@ -61,10 +61,22 @@ def _timestamp(value):
 
 
 def _location(payload, provider_id, unit_number):
-    """Require the documented v3 list envelope and exact requested identity."""
-    rows = payload.get("vehicles") if isinstance(payload, dict) else None
-    if not isinstance(rows, list) or len(rows) != 1:
+    """Require the documented v3 list envelope and exact requested identity.
+
+    The existing safe diagnostic bucket ``location_contract_unavailable`` is
+    intentionally narrowed to an empty documented list. Other structural
+    contract failures remain unavailable but are classified by the outer safe
+    diagnostic boundary as ``unexpected_unavailable``.
+    """
+    if not isinstance(payload, dict):
+        raise LocationSyncError("location_payload_not_object")
+    rows = payload.get("vehicles")
+    if not isinstance(rows, list):
+        raise LocationSyncError("location_vehicles_envelope_missing_or_invalid")
+    if len(rows) == 0:
         raise LocationSyncError("location_contract_unavailable")
+    if len(rows) != 1:
+        raise LocationSyncError("location_multiple_rows")
     vehicle = rows[0].get("vehicle") if isinstance(rows[0], dict) else None
     if (not isinstance(vehicle, dict) or str(vehicle.get("id")) != provider_id
             or _text(vehicle.get("number"), 120) != unit_number):
