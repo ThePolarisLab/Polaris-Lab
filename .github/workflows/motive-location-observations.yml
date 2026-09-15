@@ -69,13 +69,17 @@ jobs:
               pass
           summary = {
               "status": payload.get("status") if payload.get("status") in ("success", "degraded") else "unknown",
+              "vehicles_known": safe_count(payload.get("vehicles_known")),
               "vehicles_requested": safe_count(payload.get("vehicles_requested")),
               "locations_observed": safe_count(payload.get("locations_observed")),
               "unavailable": safe_count(payload.get("unavailable")),
+              "vehicles_skipped": safe_count(payload.get("vehicles_skipped")),
+              "inactive_skipped": safe_count(payload.get("inactive_skipped")),
               "as_of": as_of,
               "unavailable_reason_counts": safe_counts(payload.get("unavailable_reason_counts"), reason_keys),
               "requested_by_status": safe_counts(payload.get("requested_by_status"), status_keys),
               "unavailable_by_status": safe_counts(payload.get("unavailable_by_status"), status_keys),
+              "skipped_by_status": safe_counts(payload.get("skipped_by_status"), status_keys),
           }
           print("Location sync summary: " + json.dumps(summary, sort_keys=True, separators=(",", ":")))
           if payload.get("status") != "success":
