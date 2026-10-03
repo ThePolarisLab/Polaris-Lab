@@ -106,6 +106,39 @@ def test_protocol_initialize_and_registration(setup):
     assert tool["outputSchema"]["type"] == "object"
 
 
+
+def test_lane_analytics_requires_dedicated_scope_and_is_read_only(setup):
+    add(setup, "201", pickup_date="2026-09-11")
+    add(setup, "202", pickup_date="2026-09-11")
+    from app.models.torqueai import TorqueAIDispatch
+    with setup["factory"].begin() as session:
+        rows = session.query(TorqueAIDispatch).filter_by(organization_id=setup["org"]).order_by(TorqueAIDispatch.provider_load_number).all()
+        rows[0].customer_name = "Canada Packers"
+        rows[1].customer_name = "Other Customer"
+
+    args = {
+        "date_from": "2026-01-01", "date_to": "2026-10-03", "customer": "Canada Packers",
+        "pickup_city": "Winnipeg", "pickup_province": "MB", "pickup_country": "Canada",
+        "delivery_province": "TX", "delivery_country": "USA",
+    }
+    denied = rpc(setup, name="get_lane_analytics", arguments=args)
+    assert denied.status_code == 200
+    assert denied.json()["result"]["structuredContent"]["error"]["code"] == "FORBIDDEN"
+
+    all_scopes = " ".join(security.SCOPES)
+    response = rpc(setup, name="get_lane_analytics", arguments=args, headers={"Authorization": "Bearer " + token(setup, scope=all_scopes)})
+    assert response.status_code == 200
+    result = response.json()["result"]["structuredContent"]
+    assert result["target"]["load_count"] == 1
+    assert result["others"]["load_count"] == 1
+    assert result["target"]["currency_metrics"]["USD"]["weighted_revenue_per_loaded_mile"] == 4.0
+    assert result["currency_conversion_performed"] is False
+    assert result["provider_called"] is False
+    assert result["database_writes_performed"] is False
+    assert result["tenant_scope_validated"] is True
+    assert result["secrets_exposed"] is False
+
+
 def test_pickups_match_same_stop_date_province_and_city(setup):
     add(setup, "101")
     add(setup, "102", pickup_province="Manitoba", pickup_city="Brandon", driver=None, truck=None, trailer=None)
