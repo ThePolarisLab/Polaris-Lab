@@ -181,6 +181,121 @@ def list_durable_torqueai_dispatches(
     }
 
 
+
+@router.get("/analytics/lane")
+def torqueai_lane_analytics(
+    date_from: date = Query(..., alias="from"),
+    date_to: date = Query(..., alias="to"),
+    customer: str | None = Query(None, max_length=255),
+    pickup_city: str | None = Query(None, max_length=255),
+    pickup_province: str | None = Query(None, max_length=120),
+    pickup_country: str | None = Query(None, max_length=120),
+    delivery_city: str | None = Query(None, max_length=255),
+    delivery_province: str | None = Query(None, max_length=120),
+    delivery_country: str | None = Query(None, max_length=120),
+    principal: AuthenticatedPrincipal = Depends(require_permission(Permission.CONNECTOR_READ)),
+    session: Session = Depends(_db),
+) -> dict[str, Any]:
+    """Aggregate durable TorqueAI revenue and loaded-mile evidence for a lane.
+
+    Unlike the paginated dispatch read, this database-only analytics route permits a
+    year-scale window and requires pickup and delivery predicates to match separate
+    certified stop roles on the same dispatch.
+    """
+    if date_from > date_to:
+        raise HTTPException(status_code=422, detail="TorqueAI lane analytics from date must not be after to date")
+    if (date_to - date_from).days + 1 > 366:
+        raise HTTPException(status_code=422, detail="TorqueAI lane analytics range must not exceed 366 days")
+
+    normalized = {
+        "customer": _normalized_filter(customer, "customer"),
+        "pickup_city": _normalized_filter(pickup_city, "pickup_city"),
+        "pickup_province": _normalized_filter(pickup_province, "pickup_province"),
+        "pickup_country": _normalized_filter(pickup_country, "pickup_country"),
+        "delivery_city": _normalized_filter(delivery_city, "delivery_city"),
+        "delivery_province": _normalized_filter(delivery_province, "delivery_province"),
+        "delivery_country": _normalized_filter(delivery_country, "delivery_country"),
+    }
+
+    query = session.query(TorqueAIDispatch).outerjoin(
+        TorqueAIDispatchOperational,
+        (TorqueAIDispatchOperational.dispatch_id == TorqueAIDispatch.id)
+        & (TorqueAIDispatchOperational.organization_id == principal.organization_id),
+    ).filter(
+        TorqueAIDispatch.organization_id == principal.organization_id,
+        TorqueAIDispatch.ship_date_text.is_not(None),
+        TorqueAIDispatch.ship_date_text >= date_from.isoformat(),
+        TorqueAIDispatch.ship_date_text < (date_to + timedelta(days=1)).isoformat(),
+    )
+    if normalized["customer"] is not None:
+        query = query.filter(func.lower(TorqueAIDispatch.customer_name) == normalized["customer"].lower())
+
+    def role_predicate(role: str, prefix: str):
+        criteria = [
+            TorqueAIDispatchStop.organization_id == principal.organization_id,
+            func.lower(TorqueAIDispatchStop.job) == TORQUEAI_CERTIFIED_STOP_ROLE_JOBS[role].lower(),
+        ]
+        for suffix, column in (
+            ("city", TorqueAIDispatchStop.city),
+            ("province", TorqueAIDispatchStop.province),
+            ("country", TorqueAIDispatchStop.country),
+        ):
+            value = normalized[f"{prefix}_{suffix}"]
+            if value is not None:
+                criteria.append(func.lower(column) == value.lower())
+        return and_(*criteria)
+
+    if any(normalized[f"pickup_{part}"] is not None for part in ("city", "province", "country")):
+        query = query.filter(TorqueAIDispatch.operational_stops.any(role_predicate("pickup", "pickup")))
+    if any(normalized[f"delivery_{part}"] is not None for part in ("city", "province", "country")):
+        query = query.filter(TorqueAIDispatch.operational_stops.any(role_predicate("delivery", "delivery")))
+
+    rows = query.all()
+    by_currency: dict[str, dict[str, Any]] = {}
+    missing_miles = 0
+    missing_revenue = 0
+    for row in rows:
+        operational = row.operational_enrichment
+        miles = row.loaded_miles
+        charge = operational.total_charge if operational is not None else None
+        currency = (operational.currency or operational.billing_currency) if operational is not None else None
+        if miles is None:
+            missing_miles += 1
+        if charge is None or currency is None:
+            missing_revenue += 1
+            continue
+        bucket = by_currency.setdefault(currency.upper(), {"load_count": 0, "revenue_load_count": 0, "miles_load_count": 0, "rpm_eligible_load_count": 0, "total_revenue": 0.0, "total_loaded_miles": 0.0, "rpm_revenue": 0.0, "rpm_miles": 0.0})
+        bucket["revenue_load_count"] += 1
+        bucket["total_revenue"] += float(charge)
+        if miles is not None:
+            bucket["miles_load_count"] += 1
+            bucket["total_loaded_miles"] += float(miles)
+            if miles > 0:
+                bucket["rpm_eligible_load_count"] += 1
+                bucket["rpm_revenue"] += float(charge)
+                bucket["rpm_miles"] += float(miles)
+
+    for bucket in by_currency.values():
+        bucket["load_count"] = len(rows)
+        bucket["average_revenue_per_load"] = bucket["total_revenue"] / bucket["revenue_load_count"] if bucket["revenue_load_count"] else None
+        bucket["weighted_revenue_per_loaded_mile"] = bucket["rpm_revenue"] / bucket["rpm_miles"] if bucket["rpm_miles"] else None
+        del bucket["rpm_revenue"]
+        del bucket["rpm_miles"]
+
+    return {
+        "status": "success",
+        "provider": "torqueai",
+        "source": "durable_database",
+        "request": {"from": date_from.isoformat(), "to": date_to.isoformat(), **normalized},
+        "load_count": len(rows),
+        "missing_loaded_miles_count": missing_miles,
+        "missing_revenue_or_currency_count": missing_revenue,
+        "currency_metrics": dict(sorted(by_currency.items())),
+        "provider_called": False,
+        "tenant_scope_validated": True,
+        "secrets_exposed": False,
+    }
+
 def _torqueai_health_presentation(latest_run: TorqueAIDispatchSyncRun | None, sync_state: TorqueAIDispatchSyncState | None) -> tuple[str, str]:
     if latest_run is None:
         return "not_started", "No TorqueAI ingestion run has been recorded yet."
