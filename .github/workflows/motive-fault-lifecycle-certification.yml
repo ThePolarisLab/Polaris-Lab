@@ -1,0 +1,96 @@
+name: Motive Fault Lifecycle Certification
+
+on:
+  workflow_dispatch:
+    inputs:
+      certification_date:
+        description: "Date to inspect (YYYY-MM-DD)"
+        required: true
+        default: "2026-09-13"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  certify:
+    name: Certify Motive fault lifecycle evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      POLARIS_PRODUCTION_API_URL: ${{ secrets.POLARIS_PRODUCTION_API_URL }}
+      POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET: ${{ secrets.POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET }}
+      CERTIFICATION_DATE: ${{ inputs.certification_date }}
+    steps:
+      - name: Call signed production fault-lifecycle certification endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${POLARIS_PRODUCTION_API_URL}" ] || [ -z "${POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET}" ]; then
+            echo "Production API URL or Motive trigger secret is not configured."
+            exit 1
+          fi
+
+          timestamp="$(date +%s)"
+          path="/api/v1/internal/motive/fault-lifecycle-certification"
+          base_url="${POLARIS_PRODUCTION_API_URL%/}"
+          trigger_url="${base_url}${path}?date=${CERTIFICATION_DATE}"
+          signature="$(
+            CANONICAL_METHOD="POST"             CANONICAL_PATH="${path}"             CANONICAL_TIMESTAMP="${timestamp}"             POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET="${POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET}"             python -c 'import hashlib,hmac,os; body=hashlib.sha256(b"").hexdigest(); canonical="\n".join([os.environ["CANONICAL_METHOD"], os.environ["CANONICAL_PATH"], os.environ["CANONICAL_TIMESTAMP"], body]); print(hmac.new(os.environ["POLARIS_MOTIVE_UTILIZATION_CRON_TRIGGER_SECRET"].encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest())'
+          )"
+
+          http_status="$(curl --silent --show-error             --output response.body             --write-out "%{http_code}"             --connect-timeout 30             --max-time 300             --request POST             --header "X-Polaris-Job-Timestamp: ${timestamp}"             --header "X-Polaris-Job-Signature: ${signature}"             "${trigger_url}")"
+          export HTTP_STATUS="${http_status}"
+
+          python - <<'PY'
+          import json
+          import os
+
+          status = int(os.environ.get("HTTP_STATUS") or "0")
+          with open("response.body", "r", encoding="utf-8", errors="replace") as handle:
+              text = handle.read()
+
+          print(f"Motive fault-lifecycle certification HTTP: {status}")
+          if not text.strip():
+              raise SystemExit("certification response was empty")
+          try:
+              raw = json.loads(text)
+          except ValueError as exc:
+              raise SystemExit("certification response was not JSON") from exc
+
+          payload = raw.get("detail") if isinstance(raw, dict) and isinstance(raw.get("detail"), dict) else raw
+          if not isinstance(payload, dict):
+              raise SystemExit("certification response was not an object")
+
+          allowed_top = {
+              "status", "provider", "operation", "certification_date", "lookback_days",
+              "fault_codes_available", "fault_code_window_complete", "records_observed",
+              "status_values_observed", "status_counts", "open_records_found", "closed_records_found",
+              "provider_record_id_present_all_records", "provider_record_id_unique_within_window",
+              "same_provider_id_observed_across_statuses", "first_last_observed_pairs",
+              "first_last_order_valid_count", "first_last_order_invalid_count",
+              "stable_identity_over_time_certified", "open_to_closed_transition_certified",
+              "durable_fault_memory_enabled", "provider_writes_performed", "database_writes_performed",
+              "maintenance_readiness_changed", "dispatch_readiness_changed",
+              "vehicle_identity_values_returned", "fault_code_values_returned",
+              "raw_provider_payloads_returned", "error_code"
+          }
+          sanitized = {key: value for key, value in payload.items() if key in allowed_top}
+          print(json.dumps(sanitized, indent=2, sort_keys=True))
+
+          if not 200 <= status < 300:
+              raise SystemExit(f"certification failed with HTTP {status}")
+          for key in (
+              "durable_fault_memory_enabled", "provider_writes_performed", "database_writes_performed",
+              "maintenance_readiness_changed", "dispatch_readiness_changed",
+              "vehicle_identity_values_returned", "fault_code_values_returned",
+              "raw_provider_payloads_returned",
+          ):
+              if payload.get(key) is not False:
+                  raise SystemExit(f"safety contract failed: {key}")
+          if "opened_records_found" in payload or "opened_to_closed_transition_certified" in payload:
+              raise SystemExit("obsolete opened_* lifecycle fields are still present")
+          for key in ("open_records_found", "same_provider_id_observed_across_statuses", "open_to_closed_transition_certified"):
+              if key not in payload:
+                  raise SystemExit(f"required lifecycle field missing: {key}")
+          PY
