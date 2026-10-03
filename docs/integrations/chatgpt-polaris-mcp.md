@@ -39,7 +39,7 @@ shared bearer token or a Polaris admin token is not the connection mechanism.
 
 Create the Polaris identity `polaris-chatgpt-readonly` with one active MOR
 membership and role `polaris_chatgpt_readonly`. This role has exactly
-`operations.pickups.read` and `operations.loaded_trailers.read`, with no connector,
+`operations.pickups.read`, `operations.loaded_trailers.read`, and `operations.analytics.read`, with no connector,
 financial, admin, or write permissions. Each request receives only the intersection
 of those permissions and its signed OAuth token scopes. A pickup-only token
 cannot call the loaded-trailer tool; a loaded-trailer-only token cannot read pickups. Do not give this identity a password, local token, or ordinary
@@ -228,7 +228,7 @@ membership-creation form. The loaded-trailer extension requires migration
 Issuer requirements: HTTPS OAuth/OIDC discovery, authorization code flow,
 PKCE S256 advertised and enforced, predefined client registration,
 `resource` accepted at authorization and token endpoints and reflected in `aud`,
-scopes `operations.pickups.read` and `operations.loaded_trailers.read`, and signed JWT access tokens (`typ: at+jwt`,
+scopes `operations.pickups.read`, `operations.loaded_trailers.read`, and `operations.analytics.read`, and signed JWT access tokens (`typ: at+jwt`,
 RS256, `kid`, integer `iat`/`exp`, `iss`, `aud`, `sub`, `client_id`, space-delimited
 `scope`). Token lifetime must not exceed 3600 seconds. Do not use an ID token.
 Restrict client consent/login to the approved owner. If the chosen issuer uses
@@ -261,7 +261,7 @@ and its credentials unchanged.
    current ChatGPT can use its stable callback; otherwise the callback is specific
    to the connection. Configure any client secret directly in the connection UI.
 4. Sign in as the configured approved owner and consent to
-   `operations.pickups.read` and `operations.loaded_trailers.read`. Keep
+   `operations.pickups.read`, `operations.loaded_trailers.read`, and `operations.analytics.read`. Keep
    access private to the authorized MOR workspace/owner.
 5. Inspect the tool list: `get_pickups` and `get_loaded_trailers`, both read-only.
    Refresh/reconnect the MCP definition after schema changes.
