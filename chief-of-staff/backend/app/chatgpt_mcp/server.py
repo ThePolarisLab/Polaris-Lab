@@ -179,12 +179,12 @@ def install_mcp(app, config=None):
             return await run_in_threadpool(handler, arguments, principal)
         except AuthorizationError:
             return error_result("FORBIDDEN")
+        except (PickupPlanLimitError, LoadedTrailerLimitError):
+            return error_result("RESULT_LIMIT_EXCEEDED")
         except ValueError as exc:
             if str(exc) == "INVALID_DATE_RANGE":
                 return error_result("INVALID_DATE_RANGE")
             return error_result("INVALID_INPUT")
-        except (PickupPlanLimitError, LoadedTrailerLimitError):
-            return error_result("RESULT_LIMIT_EXCEEDED")
         except Exception:
             logger.warning("Polaris MCP read query failed")
             return error_result("INTERNAL_ERROR")
