@@ -17,7 +17,7 @@ from app.security.service import AuthenticationError, AuthorizationError, Securi
 
 ROLE = "polaris_chatgpt_readonly"
 SCOPE = Permission.PICKUP_READ.value
-MCP_PERMISSIONS = frozenset({Permission.PICKUP_READ, Permission.LOADED_TRAILER_READ})
+MCP_PERMISSIONS = frozenset({Permission.PICKUP_READ, Permission.LOADED_TRAILER_READ, Permission.ANALYTICS_READ})
 SCOPES = sorted(p.value for p in MCP_PERMISSIONS)
 
 
