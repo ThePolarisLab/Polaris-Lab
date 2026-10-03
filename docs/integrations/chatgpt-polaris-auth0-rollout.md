@@ -41,6 +41,7 @@ Required scopes:
 ```text
 operations.pickups.read
 operations.loaded_trailers.read
+operations.analytics.read
 ```
 
 No write, connector, financial, admin, or generic proxy scopes belong on this client.
@@ -73,6 +74,7 @@ Configure:
 - scopes:
   - `operations.pickups.read`
   - `operations.loaded_trailers.read`
+  - `operations.analytics.read`
 
 Polaris does not depend on an Auth0 `permissions` claim; the access token must carry the requested OAuth scope string.
 
@@ -148,6 +150,7 @@ That role must remain exactly:
 ```text
 operations.pickups.read
 operations.loaded_trailers.read
+operations.analytics.read
 ```
 
 Do not give the identity a password, local login token, owner/admin role, connector permission, financial permission, or write permission.
