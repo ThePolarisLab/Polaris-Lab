@@ -1,5 +1,7 @@
 # Polaris Engineering Roadmap
 
+> **Current-status reconciliation — 2026-10-04:** This roadmap is historical planning, not current production certification. In particular, old draft/unfinished integration claims and sequencing do not override later accepted evidence. The next milestone designation is POLARIS V1 Owner Alpha; feature implementation is outside this reconciliation. See [PROJECT_STATE](../../PROJECT_STATE.md). Preserve the dated material below as evidence.
+
 Status: Active
 Owner: Polaris Lab
 Last updated: 2026-08-05

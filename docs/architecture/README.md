@@ -1,5 +1,7 @@
 # Polaris Architecture
 
+> **Current-status reconciliation — 2026-10-04:** This architecture index describes its original milestone. The deployed Python/React runtime, Neon persistence and tested TypeScript foundations are distinguished in the canonical state; old completion/pending-PR claims are historical. See [PROJECT_STATE](../../PROJECT_STATE.md). Preserve the dated material below as evidence.
+
 This directory contains the living architecture baseline for Polaris.
 
 ## ARC-001 status

@@ -1,6 +1,8 @@
 # Render Persistent Deployment Hardening
 
-Status date: 2026-07-30  
+> **Current baseline — 2026-10-04:** Neon holds durable data; Render is disposable runtime. See [PROJECT_STATE](../../PROJECT_STATE.md) and the [dated evidence register](production-baseline-2026-10-04.md). The original hardening/cutover sequence below is retained as historical procedure, not a claim that its old recovery resources or blockers remain current.
+
+Historical status date: 2026-07-30
 Scope: Phase 2.1 prerequisite before live QuickBooks production verification.
 
 ## Production Blocker
@@ -13,13 +15,13 @@ DATABASE_URL=sqlite:////tmp/polaris.db
 
 That storage is temporary container filesystem. It can be lost on redeploy, restart, free-tier spin-down, or instance replacement. Losing that file can remove Alembic revision state, organizations, memberships, QuickBooks OAuth credentials, encrypted refresh tokens, sync history, financial snapshots, and connector health evidence.
 
-Live QuickBooks OAuth and read-only financial synchronization must not be completed until the service uses persistent PostgreSQL.
+Historical prerequisite: live QuickBooks OAuth and read-only financial synchronization required persistent PostgreSQL. Bounded financial reconciliation was subsequently accepted; that does not certify recovery.
 
 ## Required Render Resources
 
 - Web service: `polaris-executive-api`.
-- Persistent database: Render PostgreSQL, same region as the web service when possible.
-- `DATABASE_URL`: the Render PostgreSQL Internal Database URL.
+- Persistent database: external Neon PostgreSQL; verified project/branch/database metadata and remaining target-verification gap are in the dated evidence register.
+- `DATABASE_URL`: operator-supplied Neon PostgreSQL secret, never committed. Verify the exact target directly before infrastructure changes.
 - `POLARIS_FRONTEND_URL`: the deployed Polaris frontend origin, not `localhost`.
 - QuickBooks secrets: set only in Render environment variables or a secret manager; never commit them.
 

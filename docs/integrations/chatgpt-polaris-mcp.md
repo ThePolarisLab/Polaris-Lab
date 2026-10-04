@@ -1,5 +1,12 @@
 # Private Polaris MCP operational intelligence
 
+## Accepted production boundary — 2026-10-04
+
+[Issue #323](https://github.com/ThePolarisLab/Polaris-Lab/issues/323) records accepted live Auth0 OAuth/discovery and `get_pickups` (`operations.pickups.read`) / `get_loaded_trailers` (`operations.loaded_trailers.read`) certification on 2026-10-03. Preserve that accepted connection; do not treat the original deployment-plan status as an instruction to disable it.
+
+PR #327 adds `get_lane_analytics` and `operations.analytics.read` to the least-privilege contract. It is **merged-awaiting-certification**: the new client grant/reauthorization and live tool acceptance are not recorded. Grant only the analytics permission when its rollout is explicitly approved; do not add connector, finance, admin or write scopes. The existing two-tool certificate does not cover analytics. New deployments and new scopes must still satisfy the runbook gates below. See [PROJECT_STATE](../../PROJECT_STATE.md).
+
+
 Phase 1 is tool-only, internal, and read-only. ChatGPT calls Polaris `/mcp`,
 which calls `app.services.pickup_planning.query_pickup_plan` directly and reads
 the durable Polaris database. The existing REST pickup endpoint uses that same
@@ -261,9 +268,9 @@ and its credentials unchanged.
    current ChatGPT can use its stable callback; otherwise the callback is specific
    to the connection. Configure any client secret directly in the connection UI.
 4. Sign in as the configured approved owner and consent to
-   `operations.pickups.read`, `operations.loaded_trailers.read`, and `operations.analytics.read`. Keep
+   `operations.pickups.read` and `operations.loaded_trailers.read`; add `operations.analytics.read` only for a separately approved analytics rollout. Keep
    access private to the authorized MOR workspace/owner.
-5. Inspect the tool list: `get_pickups` and `get_loaded_trailers`, both read-only.
+5. Inspect the PR #327 tool list: `get_pickups`, `get_loaded_trailers` and `get_lane_analytics`, all read-only. Discovery lists all three; it does not certify or grant analytics access. Verify that analytics calls fail without their exact scope and record live acceptance separately.
    Refresh/reconnect the MCP definition after schema changes.
 6. In a conversation with Polaris enabled ask “Check tomorrow's pickup in
    Manitoba.” ChatGPT resolves tomorrow in the user's timezone and calls with

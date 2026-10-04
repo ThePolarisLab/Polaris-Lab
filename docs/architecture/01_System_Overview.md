@@ -1,6 +1,6 @@
 # ARC-001 — Polaris System Overview
 
-**Status:** Complete  
+**Status:** Historical ARC-001 milestone; current operating architecture reconciled 2026-10-04
 **Repository:** `ThePolarisLab/Polaris-Lab`  
 **Baseline date:** 2026-07-20
 
@@ -12,10 +12,10 @@ ARC-001 records the verified architectural baseline for Polaris and establishes 
 
 Polaris now contains two related implementation areas:
 
-1. **Legacy Chief of Staff application** — a Python/FastAPI backend, React/Vite frontend, SQLite/SQLAlchemy persistence, operational dashboards, work context, memory, reasoning, missions, and GitHub integration.
-2. **Current TypeScript intelligence platform** — Athena orchestration, Executive Memory, Atlas knowledge-graph capabilities, and Decision Intelligence domain services with deterministic contracts, repository abstractions, tests, ADRs, and release verification.
+1. **Deployed Chief of Staff application** — Python/FastAPI backend and React/Vite frontend under `chief-of-staff/`, with SQLAlchemy/psycopg and Alembic-managed Neon PostgreSQL persistence. SQLite is local/test only. Capability deployment and live certification differ; see [PROJECT_STATE](../../PROJECT_STATE.md).
+2. **Tested TypeScript intelligence foundations** — Athena orchestration, Executive Memory, Atlas knowledge-graph capabilities, and Decision Intelligence domain services with deterministic contracts, repository abstractions, tests, ADRs, and release verification.
 
-The repository is therefore a transitional modular platform rather than a single uniform runtime. New work must clearly identify whether it extends the legacy application, the TypeScript intelligence core, shared documentation, or an integration boundary.
+The repository is therefore a transitional modular platform rather than a single uniform runtime. New work must clearly identify whether it extends the deployed application, the TypeScript intelligence core, shared documentation, or an integration boundary.
 
 ## Verified capability layers
 
