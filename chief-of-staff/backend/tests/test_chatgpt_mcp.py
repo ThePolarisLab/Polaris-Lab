@@ -125,8 +125,7 @@ def test_lane_analytics_requires_dedicated_scope_and_is_read_only(setup):
     assert denied.status_code == 200
     assert denied.json()["result"]["structuredContent"]["error"]["code"] == "FORBIDDEN"
 
-    all_scopes = " ".join(security.SCOPES)
-    response = rpc(setup, name="get_lane_analytics", arguments=args, headers={"Authorization": "Bearer " + token(setup, scope=all_scopes)})
+    response = rpc(setup, name="get_lane_analytics", arguments=args, headers={"Authorization": "Bearer " + token(setup, scope=Permission.ANALYTICS_READ.value)})
     assert response.status_code == 200
     result = response.json()["result"]["structuredContent"]
     assert result["target"]["load_count"] == 1
@@ -192,7 +191,7 @@ def test_authentication_required_for_every_protocol_request(setup, authorization
         response = rpc(setup, method, headers={"Authorization": authorization})
         assert response.status_code == 401
         assert response.json() == {"error": {"code": "AUTH_REQUIRED"}}
-        assert "oauth-protected-resource/mcp" in response.headers["www-authenticate"]
+        assert response.headers["www-authenticate"] == setup["config"].challenge
 
 
 @pytest.mark.parametrize("claims,status", [
@@ -285,6 +284,19 @@ def test_metadata_and_disabled_route(setup, monkeypatch):
     assert setup["client"].post("/mcp", json={}).status_code == 401
     response = setup["client"].get("/.well-known/oauth-protected-resource/mcp")
     assert response.json()["resource"] == setup["config"].resource_url
+    expected_scopes = ["operations.analytics.read", "operations.loaded_trailers.read", "operations.pickups.read"]
+    assert security.SCOPES == expected_scopes
+    assert response.json()["scopes_supported"] == expected_scopes
+    assert setup["config"].challenge == (
+        f'Bearer resource_metadata="{setup["config"].metadata_url}", '
+        f'scope="{" ".join(expected_scopes)}"'
+    )
+    result = server.error_result("AUTH_REQUIRED", setup["config"]).model_dump(by_alias=True)
+    assert result["_meta"]["mcp/www_authenticate"] == [setup["config"].challenge]
+    tools = rpc(setup, "tools/list").json()["result"]["tools"]
+    assert tools[2]["_meta"]["securitySchemes"] == [
+        {"type": "oauth2", "scopes": ["operations.analytics.read"]}
+    ]
     monkeypatch.delenv("POLARIS_CHATGPT_MCP_ENABLED", raising=False)
     app = FastAPI()
     assert server.install_mcp(app) is None

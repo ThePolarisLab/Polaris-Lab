@@ -72,7 +72,7 @@ class MCPSettings:
 
     @property
     def challenge(self):
-        return f'Bearer resource_metadata="{self.metadata_url}", scope="{SCOPE}"'
+        return f'Bearer resource_metadata="{self.metadata_url}", scope="{" ".join(SCOPES)}"'
 
 
 @contextmanager
