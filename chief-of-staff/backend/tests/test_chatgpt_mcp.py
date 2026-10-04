@@ -2,6 +2,7 @@
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 import json
+import re
 import time
 
 import jwt
@@ -9,11 +10,13 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from jsonschema import validate
+from jsonschema import ValidationError as SchemaValidationError, validate
+from pydantic import ValidationError
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 
 from app.chatgpt_mcp import security, server
+from app.chatgpt_mcp.analytics import LaneAnalyticsInput, LANE_ANALYTICS_TOOL
 from app.database.database import Base
 from app.identity.models import Identity, OrganizationMembership
 from app.models.torqueai import TorqueAIDispatchStop, TorqueAIDispatchSyncState
@@ -105,6 +108,65 @@ def test_protocol_initialize_and_registration(setup):
     assert tool["_meta"]["securitySchemes"] == [{"type": "oauth2", "scopes": [security.SCOPE]}]
     assert tool["outputSchema"]["type"] == "object"
 
+
+
+LANE_TEXT_FIELDS = (
+    "customer", "pickup_city", "pickup_province", "pickup_country",
+    "delivery_city", "delivery_province", "delivery_country",
+)
+
+
+def lane_input_arguments(**overrides):
+    return {"date_from": "2026-10-01", "date_to": "2026-10-01",
+            "customer": "LEONARD'S EXPRESS", **overrides}
+
+
+def lane_text_schema(field):
+    advertised = LANE_ANALYTICS_TOOL.model_dump(by_alias=True)["inputSchema"]["properties"][field]
+    return next(item for item in advertised["anyOf"] if item.get("type") == "string") if "anyOf" in advertised else advertised
+
+
+@pytest.mark.parametrize("field", LANE_TEXT_FIELDS)
+@pytest.mark.parametrize("value", ["LEONARD'S EXPRESS", "LAREDO", "TX", "USA", "Canada packers INC."])
+def test_lane_advertised_schema_accepts_multicharacter_text(field, value):
+    schema = lane_text_schema(field)
+    validate(value, schema)
+    # Also exercise validators that interpret an advertised regex as a full match.
+    assert re.fullmatch(schema["pattern"], value)
+    assert getattr(LaneAnalyticsInput(**lane_input_arguments(**{field: value})), field) == value
+
+
+@pytest.mark.parametrize("field", LANE_TEXT_FIELDS)
+@pytest.mark.parametrize("value", ["", " ", "   ", "\t\n"])
+def test_lane_advertised_schema_rejects_blank_text(field, value):
+    with pytest.raises(SchemaValidationError):
+        validate(value, lane_text_schema(field))
+    with pytest.raises(ValidationError):
+        LaneAnalyticsInput(**lane_input_arguments(**{field: value}))
+
+
+@pytest.mark.parametrize("field", LANE_TEXT_FIELDS)
+@pytest.mark.parametrize("value", ["LA\x00REDO", "LA\tREDO", "LA\nREDO", "LA\rREDO"])
+def test_lane_server_rejects_embedded_control_characters(field, value):
+    with pytest.raises(ValidationError):
+        LaneAnalyticsInput(**lane_input_arguments(**{field: value}))
+
+
+@pytest.mark.parametrize("field", LANE_TEXT_FIELDS)
+def test_lane_server_preserves_text_trimming(field):
+    parsed = LaneAnalyticsInput(**lane_input_arguments(**{field: "  LAREDO  "}))
+    assert getattr(parsed, field) == "LAREDO"
+
+
+def test_lane_http_discovery_advertises_portable_text_pattern(setup):
+    tools = rpc(setup, "tools/list").json()["result"]["tools"]
+    schema = next(tool["inputSchema"] for tool in tools if tool["name"] == "get_lane_analytics")
+    for field in LANE_TEXT_FIELDS:
+        advertised = schema["properties"][field]
+        string_schema = next(item for item in advertised["anyOf"] if item.get("type") == "string") if "anyOf" in advertised else advertised
+        assert string_schema["pattern"] == r".*\S.*"
+    validate(lane_input_arguments(pickup_city="LAREDO", pickup_province="TX", pickup_country="USA",
+                                  delivery_province="TX", delivery_country="USA"), schema)
 
 
 def test_lane_analytics_requires_dedicated_scope_and_is_read_only(setup):
