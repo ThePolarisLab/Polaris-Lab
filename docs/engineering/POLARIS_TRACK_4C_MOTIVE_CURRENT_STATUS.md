@@ -1,5 +1,7 @@
 # Polaris Track 4C — Motive Current Status
 
+> **Current-status reconciliation — 2026-10-04:** The original Track 4C status below describes its date. Daily utilization and bounded location refresh now have accepted live evidence; missing records remain unknown. Fault stable identity/observed transition certification remains unresolved in issue #325 and durable fault memory stays disabled. See [PROJECT_STATE](../../PROJECT_STATE.md). Preserve the dated material below as evidence.
+
 **Status date:** 2026-08-22
 
 This document is the current-status companion to `POLARIS_TRACK_4C_MOTIVE_ROADMAP.md`.

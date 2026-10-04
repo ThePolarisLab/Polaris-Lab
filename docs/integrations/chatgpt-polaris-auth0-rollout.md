@@ -1,6 +1,14 @@
 # Polaris MCP — Auth0 production rollout
 
-Status: **deployment plan only**. Keep `POLARIS_CHATGPT_MCP_ENABLED=false` until every preflight and acceptance check below passes.
+Status: **existing pickup/loaded-trailer connection certified; analytics scope pending live certification**. For a new unaccepted deployment, keep `POLARIS_CHATGPT_MCP_ENABLED=false` until its preflight and acceptance checks pass.
+
+## Accepted production boundary — 2026-10-04
+
+[Issue #323](https://github.com/ThePolarisLab/Polaris-Lab/issues/323) records accepted live Auth0 OAuth/discovery and `get_pickups` (`operations.pickups.read`) / `get_loaded_trailers` (`operations.loaded_trailers.read`) certification on 2026-10-03. Preserve that accepted connection; do not treat the original deployment-plan status as an instruction to disable it.
+
+PR #327 adds `get_lane_analytics` and `operations.analytics.read` to the least-privilege contract. It is **merged-awaiting-certification**: the new client grant/reauthorization and live tool acceptance are not recorded. Grant only the analytics permission when its rollout is explicitly approved; do not add connector, finance, admin or write scopes. The existing two-tool certificate does not cover analytics. New deployments and new scopes must still satisfy the runbook gates below. See [PROJECT_STATE](../../PROJECT_STATE.md).
+
+
 
 This guide chooses **Auth0 as the first production OAuth issuer** for the private MOR Logistics ChatGPT ↔ Polaris MCP connection. The existing Polaris resource-server implementation remains authoritative and unchanged.
 
@@ -90,7 +98,7 @@ Required behavior:
 - no client-credentials access to Polaris MCP;
 - owner login only for Phase 1;
 - requested resource exactly `https://polaris-executive-api.onrender.com/mcp`;
-- requested scopes limited to the two Polaris read scopes.
+- requested scopes limited to the accepted pickup/loaded-trailer read scopes; analytics is a separately accepted expansion using only `operations.analytics.read`.
 
 The final callback URI is supplied by ChatGPT when the Polaris connection is created. Add the **exact URI shown by ChatGPT** to Auth0 Allowed Callback URLs. Do not guess or hard-code a callback before that step.
 
@@ -110,7 +118,7 @@ iss == configured Auth0 issuer
 aud == https://polaris-executive-api.onrender.com/mcp
 sub == the approved owner's stable Auth0 subject
 client_id == the dedicated ChatGPT client ID
-scope contains operations.pickups.read and/or operations.loaded_trailers.read
+scope contains the approved subset of operations.pickups.read, operations.loaded_trailers.read, operations.analytics.read
 exp and iat are integers
 0 < exp - iat <= 3600
 ```
@@ -195,7 +203,7 @@ Immediately verify:
 2. Unauthenticated `/mcp` returns 401 with a resource-metadata challenge.
 3. Wrong issuer/audience/client/subject fails closed.
 4. Pickup-only scope cannot call loaded trailers and vice versa.
-5. `tools/list` exposes only `get_pickups` and `get_loaded_trailers`.
+5. At the PR #327 baseline, `tools/list` exposes `get_pickups`, `get_loaded_trailers` and `get_lane_analytics`. Listing analytics does not prove its grant or live acceptance; calls require `operations.analytics.read`. Test scope denial separately from discovery.
 6. No write/assignment tool exists.
 
 ## 9. Connect ChatGPT
@@ -237,6 +245,8 @@ If any authentication, tenant isolation, evidence, or schema issue appears:
 
 ## Production gate
 
+This checklist is for a new deployment or a separately approved scope rollout. Issue #323 is the accepted record for the existing pickup/loaded-trailer connection; unchecked template boxes are not its current status. Analytics needs its own live acceptance record.
+
 MCP may be enabled only after all of these are true:
 
 - [ ] Post-PR #321 Motive location sync is production-certified.
@@ -249,4 +259,4 @@ MCP may be enabled only after all of these are true:
 - [ ] Unauthorized and wrong-scope tests fail closed in production/staging.
 - [ ] ChatGPT connection acceptance tests pass.
 
-Until every box is checked, keep the feature flag OFF.
+For a new unaccepted deployment, keep the feature flag OFF until its applicable gates pass. Preserve the accepted existing connection; do not disable it merely because analytics certification remains pending.

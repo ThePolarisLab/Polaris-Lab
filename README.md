@@ -2,6 +2,10 @@
 
 Helping Builders Build Better.
 
+Current release, architecture and certification authority: [PROJECT_STATE](PROJECT_STATE.md). Dated deployment evidence: [2026-10-04 baseline](docs/deployment/production-baseline-2026-10-04.md).
+
+The current operating model uses Neon for durable structured data and Render for disposable runtime. Historical Render PostgreSQL instructions do not override that baseline; unresolved credential-target and recovery verification are recorded explicitly.
+
 ## Backend Database Setup
 
 From `chief-of-staff/backend`:

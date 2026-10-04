@@ -1,5 +1,7 @@
 # Neon Staging Database Cutover
 
+> **Current-status reconciliation — 2026-10-04:** Preserved 2026-08-28 cutover history. The old Render recovery grace-period instructions are historical, not proof that recovery remains available. The 2026-10-04 inventory showed no Render PostgreSQL service. render.yaml remains unchanged pending a separate verified infrastructure review. Neon currently exposes only a six-hour recovery window with no snapshots/schedule and no verified restore drill. See [PROJECT_STATE](../../PROJECT_STATE.md). Preserve the dated material below as evidence.
+
 Status date: 2026-08-28
 
 ## Goal

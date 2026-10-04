@@ -1,5 +1,7 @@
 # Polaris Technical Debt Register
 
+> **Current-status reconciliation — 2026-10-04:** The debt/status entries below retain their dated evidence. Early QuickBooks smoke and infrastructure blockers are not current blanket blockers; use the canonical certification matrix for their accepted boundaries and unresolved gates. See [PROJECT_STATE](../../PROJECT_STATE.md). Preserve the dated material below as evidence.
+
 **Baseline date:** 2026-07-20  
 **Last updated:** 2026-07-30
 

@@ -6,11 +6,11 @@ on:
       - main
   push:
     branches:
-      - phase1/security-gate
+      - main
 
 jobs:
   backend:
-    name: Backend security tests
+    name: Security Gate / Backend security tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -37,7 +37,7 @@ jobs:
         run: pytest
 
   typescript:
-    name: TypeScript tests
+    name: Security Gate / TypeScript tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -57,7 +57,7 @@ jobs:
         run: npm test
 
   frontend:
-    name: Frontend tests and build
+    name: Security Gate / Frontend tests and build
     runs-on: ubuntu-latest
     defaults:
       run:
