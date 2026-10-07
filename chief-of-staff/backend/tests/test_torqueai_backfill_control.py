@@ -348,3 +348,14 @@ def test_retry_cannot_clear_historical_identity_quarantine(database):
     assert len(rows(database, IDENTITY)) == 1
     with pytest.raises(ControlError):
         service.approve(window, operator="owner")
+
+
+def test_duplicate_and_overlapping_windows_across_manifests_forbidden(database):
+    service, _, window = plan(database, [(DAY, DAY + timedelta(days=6))])
+    for start, end in ((DAY, DAY + timedelta(days=6)), (DAY + timedelta(days=3), DAY + timedelta(days=8))):
+        with pytest.raises(ControlError):
+            service.plan(request_key="second-plan", operator="operator", code_sha=SHA, windows=[(start, end)])
+    assert len(rows(database, MANIFEST)) == len(rows(database, WINDOW)) == 1
+    manifest = service.plan(request_key="adjacent-plan", operator="operator", code_sha=SHA,
+        windows=[(DAY + timedelta(days=7), DAY + timedelta(days=13))])
+    assert len(service.windows(manifest)) == 1

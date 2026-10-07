@@ -47,7 +47,7 @@ def define_tables(metadata: MetaData):
         ForeignKeyConstraint(["organization_id", "manifest_id"],
                              ["torqueai_backfill_manifests.organization_id", "torqueai_backfill_manifests.id"]),
         UniqueConstraint("organization_id", "id", name="uq_tai_bf_window_tenant_id"),
-        UniqueConstraint("organization_id", "manifest_id", "date_from", "date_to", name="uq_tai_bf_window_interval"),
+        UniqueConstraint("organization_id", "date_from", "date_to", name="uq_tai_bf_window_interval"),
         CheckConstraint("date_to >= date_from", name="ck_tai_bf_window_order"),
         CheckConstraint("date_to - date_from <= 6", name="ck_tai_bf_window_seven_days").ddl_if(dialect="postgresql"),
         CheckConstraint("julianday(date_to) - julianday(date_from) <= 6", name="ck_tai_bf_window_seven_days_sqlite").ddl_if(dialect="sqlite"),

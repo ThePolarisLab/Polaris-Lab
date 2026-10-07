@@ -53,8 +53,9 @@ to production by this PR. The migration is forward-only to preserve evidence.
   manifests do not carry a second potentially contradictory status field.
 - `torqueai_backfill_windows`: exact inclusive source interval, state, created,
   preview-start/completion and approval timestamps, reviewer, active preview
-  attempt and lease. Exact duplicate windows within a tenant/manifest are unique.
-  Independent manifests may revisit an interval intentionally under new keys.
+  attempt and lease. Exact tenant intervals are database-unique across manifests;
+  the planner rejects all tenant interval overlaps under the tenant row lock.
+  Repeated previews use the existing window's attempt ledger.
 - `torqueai_backfill_attempts`: immutable completed preview evidence, retry key,
   initiator, SHA, start/completion, pagination totals/pages, provider/validated
   counts, projected insert/update/unchanged/conflict counts, missing-stop counts,
@@ -146,3 +147,7 @@ permissions against arbitrary administrator SQL.
   order revisions. No workbook import or automatic conflict resolution is allowed.
 - No Auth0/MCP, lane analytics, normal hourly ingestion, provider limits or
   production configuration changes are part of this release.
+- Planned intervals remain reserved even after failure. Splitting/replacing an
+  existing interval, resolving quarantine, reopening approval or enabling execution
+  requires a separately reviewed evidence-preserving transition; none is exposed
+  in this foundation. Initial intervals should be sized using read-only preview.

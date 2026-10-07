@@ -87,7 +87,7 @@ class BackfillControl:
         return row
 
     def plan(self, *, request_key, operator, code_sha, windows):
-        """Idempotent immutable plan, no overlap within a manifest; adjacent is valid."""
+        """Idempotent immutable plan, no tenant interval overlap; adjacent is valid."""
         _label(request_key); _label(operator); _sha(code_sha)
         intervals = sorted(windows)
         if not intervals:
@@ -116,6 +116,13 @@ class BackfillControl:
                 if list(map(tuple, stored)) != intervals or previous["code_sha"] != code_sha or previous["operator"] != operator:
                     raise ControlError("Request key reused with different plan")
                 return previous["id"]
+            for start, end in intervals:
+                overlap = connection.execute(select(WINDOW.c.id).where(
+                    WINDOW.c.organization_id == self.organization_id,
+                    WINDOW.c.date_from <= end, WINDOW.c.date_to >= start
+                ).limit(1)).first()
+                if overlap:
+                    raise ControlError("Tenant interval already planned; reuse its window ledger")
             manifest_id = str(uuid4())
             now = utcnow()
             connection.execute(insert(MANIFEST).values(id=manifest_id, organization_id=self.organization_id,
