@@ -13,6 +13,10 @@ Verified `main` and deployed API baseline: [`e4775e094e36e0a6b413b1aab2cf35289a1
 - **Polaris owns intelligence, policy, memory and workflows.** Root TypeScript Athena/Atlas/Decision Intelligence/Hermes modules are tested foundations; their tests do not establish a fully deployed management copilot. The Python connector runtime owns live OAuth, encrypted token refresh and ingestion. Hermes contracts/reference adapters must not become a second live token owner; see [ADR-026](docs/architecture/ADR-026-quickbooks-runtime-ownership.md).
 - AI providers remain replaceable. MCP/tools are least privilege, fixed-tenant and bounded. Consequential actions require human approval. Prefer free infrastructure where practical, with explicit recovery and availability tradeoffs.
 
+## Core operating domains
+
+**Fuel Intelligence** is a permanent core Polaris operating domain. The [Fuel Intelligence Constitution](docs/operations/POLARIS_FUEL_INTELLIGENCE_CONSTITUTION.md) records MOR-confirmed rules, the current management-described manual workflow, proposed automation and authority limits. End-to-end dispatch-triggered planning and automatic driver-plan delivery are future work; existing bounded connector/import certification below remains unchanged.
+
 ## Capability status
 
 **Production-certified** means bounded, accepted live evidence exists for the behavior described. It does not certify every adjacent feature or guarantee today's freshness. **Merged-awaiting-certification** means code exists but live acceptance is incomplete. **Experimental/limited** covers constrained implementations and tested foundations. **Disabled/HOLD** is an explicit operating boundary. **Historical** records superseded states without deleting evidence.
