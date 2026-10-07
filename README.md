@@ -6,6 +6,8 @@ Current release, architecture and certification authority: [PROJECT_STATE](PROJE
 
 The current operating model uses Neon for durable structured data and Render for disposable runtime. Historical Render PostgreSQL instructions do not override that baseline; unresolved credential-target and recovery verification are recorded explicitly.
 
+Permanent operating-domain specifications: [Operations index](docs/operations/README.md), including the [Fuel Intelligence Constitution](docs/operations/POLARIS_FUEL_INTELLIGENCE_CONSTITUTION.md).
+
 ## Backend Database Setup
 
 From `chief-of-staff/backend`:
