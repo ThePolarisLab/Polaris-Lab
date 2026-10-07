@@ -49,6 +49,7 @@ from app.models.torqueai import (  # noqa: F401
     TorqueAIDispatchSyncState,
 )
 from app.models.truck import Truck  # noqa: F401
+from app.models.torqueai_backfill import MANIFEST, WINDOW, ATTEMPT, IDENTITY  # noqa: F401
 from app.organizations.models import Organization  # noqa: F401
 
 
