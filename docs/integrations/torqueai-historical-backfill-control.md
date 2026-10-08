@@ -3,8 +3,10 @@
 This release stores control/evidence records only. It does not execute historical
 backfill, mutate dispatches/stops, expose an operator write command, or apply
 rollback. The existing `torqueai_history_preview` command remains read-only and
-does not create manifests. No API, MCP tool, scheduler task or startup hook calls
-the new internal library.
+does not create manifests. PR #333 originally exposed no caller for the internal
+library. The disabled-by-default signed certification bridge described below
+adds one preview-only API caller; no MCP tool, scheduler task or startup hook
+calls the library.
 
 ## Coverage semantics and evidence
 
@@ -151,3 +153,63 @@ permissions against arbitrary administrator SQL.
   existing interval, resolving quarantine, reopening approval or enabling execution
   requires a separately reviewed evidence-preserving transition; none is exposed
   in this foundation. Initial intervals should be sized using read-only preview.
+# Signed production preview certification bridge (awaiting live certification)
+
+Render Free has no shell or one-off jobs, and operator/GitHub environments do not
+hold the TorqueAI or database credentials. A manual GitHub Actions workflow may
+therefore trigger one bounded preview through
+`POST /api/v1/internal/torqueai/historical-preview-certification`.
+This is a preview-only bridge to `BackfillControl`, not a historical write executor.
+
+The bridge reuses `verify_job_signature` and
+`POLARIS_TORQUEAI_SYNC_TRIGGER_SECRET`. GitHub Actions is only the signed trigger
+authority; Render retains the provider and database credentials. The request
+contains only `date_from` and `date_to`. MOR is resolved on the server; pagination
+remains 100/page, ten pages, 1,000 records and seven inclusive days per interval.
+The server records `RENDER_GIT_COMMIT`; missing deployment identity fails closed.
+
+`POLARIS_TORQUEAI_HISTORICAL_PREVIEW_CERTIFICATION_ENABLED` is unset/false by
+default. An operator must manually set it to `true` on Render for controlled
+certification, then disable it afterward. This PR does not enable it. Existing
+GitHub `POLARIS_PRODUCTION_API_URL` and HMAC secret configuration is reused; no
+TorqueAI/database credentials belong in Actions. There is no automatic schedule.
+
+After merge and deployment, the first live target is **2026-08-25 through
+2026-08-31**, provided it remains unreserved. Provider retrieval means
+`Dispatch.date` / observed `orderDate`, not `shipDate`; September ship dates can
+appear in the August response. An order date is not certified as an immutable
+creation timestamp. No overlap, source cleanup, aliases or workbook imports are
+introduced. Retrieval coverage and analytical ship-date/lane coverage stay distinct.
+
+The certification uses a separate database pool with a SQL guard permitting only
+SELECT and compiled INSERT/UPDATE against the four control ledger tables. It
+does not share normal scheduled sessions or claims. A before/after snapshot
+streams tenant rows into hashes and returns only aggregate counts/fingerprints
+and normal sync-run identifiers/timestamps. The returned `database_writes=false`
+means **no operational database writes**; expected control-ledger inserts/updates
+are reported separately. No approval, running/completed execution transition,
+historical dispatch/stop write or rollback is authorized or implemented here.
+
+A signed duplicate or overlapping interval is refused without another provider
+fetch. Stable per-interval request keys and existing tenant reservations serialize
+concurrent duplicates; there is no retry. Conflict-free previews remain `previewed`,
+quarantined conflicts remain `blocked`, and provider-validation failures remain
+`failed`. Unexpected interruption may preserve a partial ledger/30-minute lease;
+operators must inspect that evidence before separately authorizing recovery.
+
+If normal state changes during the preview, sync-run hashes and latest run
+identifiers/timestamps expose concurrent activity. The isolated SQL boundary proves
+this path cannot write those tables, but the bridge conservatively returns
+`inconclusive` / non-2xx rather than asserting that another writer explains every
+change. Concurrent ledger activity also invalidates exact expected count deltas.
+The workflow fails these cases and never retries. No operational mutation is
+repaired automatically.
+
+The manual workflow `.github/workflows/torqueai-historical-preview-certification.yml`
+signs the exact JSON body, refuses redirects, uses a fixed endpoint and bounded
+timeout, and prints only type-checked counts, dates, statuses and safety flags.
+Disabled/authentication/request failures do not echo inputs or secrets. No raw
+provider/business records or load/order/customer identities are returned.
+
+**Live certification remains incomplete until the merged workflow passes in
+production. Historical completeness and write-enabled backfill remain uncertified.**
