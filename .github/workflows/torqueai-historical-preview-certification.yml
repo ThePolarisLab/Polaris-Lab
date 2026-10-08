@@ -1,0 +1,116 @@
+name: TorqueAI Historical Preview Certification
+
+on:
+  workflow_dispatch:
+    inputs:
+      date_from:
+        description: TorqueAI dispatch/order date start (inclusive)
+        required: true
+        default: "2026-08-25"
+        type: string
+      date_to:
+        description: TorqueAI dispatch/order date end (inclusive; maximum seven days)
+        required: true
+        default: "2026-08-31"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: torqueai-historical-preview-certification-production
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    name: Certify one preview-only historical window
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      POLARIS_PRODUCTION_API_URL: ${{ vars.POLARIS_PRODUCTION_API_URL }}
+      POLARIS_TORQUEAI_SYNC_TRIGGER_SECRET: ${{ secrets.POLARIS_TORQUEAI_SYNC_TRIGGER_SECRET }}
+      DATE_FROM: ${{ inputs.date_from }}
+      DATE_TO: ${{ inputs.date_to }}
+    steps:
+      - name: Send one signed preview request; no retry
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import datetime
+          import hashlib
+          import hmac
+          import json
+          import os
+          import re
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          def fail():
+              raise SystemExit("Preview certification failed; inspect sanitized evidence. No retry attempted.")
+
+          dates = {"date_from": os.environ.get("DATE_FROM", ""), "date_to": os.environ.get("DATE_TO", "")}
+          try:
+              if any(re.fullmatch(r"\d{4}-\d{2}-\d{2}", v) is None for v in dates.values()):
+                  fail()
+              start, end = (datetime.date.fromisoformat(dates[k]) for k in ("date_from", "date_to"))
+              if not 0 <= (end - start).days <= 6:
+                  fail()
+          except ValueError:
+              fail()
+          origin = os.environ.get("POLARIS_PRODUCTION_API_URL", "").rstrip("/")
+          secret = os.environ.get("POLARIS_TORQUEAI_SYNC_TRIGGER_SECRET", "")
+          parsed = urllib.parse.urlsplit(origin)
+          if (not secret.strip() or parsed.scheme != "https" or not parsed.hostname
+                  or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment):
+              fail()
+          path = "/api/v1/internal/torqueai/historical-preview-certification"
+          body = json.dumps(dates, separators=(",", ":")).encode()
+          timestamp = str(int(time.time()))
+          canonical = "\n".join(["POST", path, timestamp, hashlib.sha256(body).hexdigest()])
+          signature = hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+          request = urllib.request.Request(origin + path, data=body, method="POST", headers={
+              "Content-Type": "application/json", "X-Polaris-Job-Timestamp": timestamp,
+              "X-Polaris-Job-Signature": signature})
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+
+          try:
+              with urllib.request.build_opener(NoRedirect()).open(request, timeout=480) as response:
+                  http_status = response.status
+                  payload = json.loads(response.read(65537))
+          except (urllib.error.URLError, OSError, ValueError):
+              fail()
+          if not isinstance(payload, dict) or not 200 <= http_status < 300:
+              fail()
+          counts = ("provider_records_received", "validated_records", "would_insert", "would_update",
+                    "unchanged", "identity_conflicts", "quarantined", "missing_usable_lane_stops",
+                    "pages_fetched", "provider_total_count", "page_size")
+          flags = ("database_writes", "provider_writes", "checkpoint_modified", "claims_modified",
+                   "raw_provider_payload_returned", "operational_rows_modified", "secrets_exposed")
+          if any(type(payload.get(k)) is not int or not 0 <= payload[k] <= 1000 for k in counts):
+              fail()
+          if (payload.get("status") not in {"previewed", "blocked"}
+                  or payload.get("window_status") != payload["status"]
+                  or payload.get("attempt_status") != payload["status"]
+                  or payload.get("provider") != "torqueai"
+                  or payload.get("operation") != "historical_preview_certification"
+                  or payload.get("request") != {"from": dates["date_from"], "to": dates["date_to"]}
+                  or payload.get("window_semantics") != "dispatch_order_date"
+                  or payload.get("safety_verified") is not True
+                  or payload.get("observed_normal_state_change") is not False
+                  or any(payload.get(k) is not False for k in flags)
+                  or payload["page_size"] != 100 or not 1 <= payload["pages_fetched"] <= 10
+                  or payload["quarantined"] != payload["identity_conflicts"]
+                  or payload["validated_records"] != payload["provider_total_count"]
+                  or payload["validated_records"] != sum(payload[k] for k in (
+                      "would_insert", "would_update", "unchanged", "identity_conflicts"))):
+              fail()
+          # Print only type-checked counts, validated dates/enums and literal flags.
+          print(json.dumps({"status": payload["status"], "request": dates,
+                            **{k: payload[k] for k in counts}, **{k: False for k in flags}}, sort_keys=True))
+          PY
