@@ -6,13 +6,15 @@ import time
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
-from sqlalchemy import insert, select, text
+from sqlalchemy import insert, select, text, update
 
 from app.api import internal_torqueai_history as route
 from app.connectors import torqueai_history_certification as certification
 from app.connectors import torqueai_history_preview as preview_module
 from app.connectors.torqueai_backfill_control import BackfillControl, ControlError
-from app.models.torqueai import TorqueAIDispatch
+from app.models.torqueai import (TorqueAIDispatch, TorqueAIDispatchOperational,
+                                TorqueAIDispatchStop, TorqueAIDispatchSyncState,
+                                TorqueAIDispatchSyncRun)
 from app.models.torqueai_backfill import MANIFEST, WINDOW, ATTEMPT, IDENTITY
 from app.security.job_auth import sign_job_request
 from test_torqueai_backfill_control import database, rows
@@ -73,8 +75,9 @@ def test_bad_auth_no_work(client, database, monkeypatch, signature, caplog):
 
 @pytest.mark.parametrize('offset', [-301, 301])
 def test_stale_future_auth(client, monkeypatch, offset):
+    monkeypatch.setattr('app.security.job_auth.time.time', lambda: 1000)
     monkeypatch.setattr(route, 'certify_history', lambda **kw: pytest.fail('unexpected work'))
-    assert request(client, timestamp=str(int(time.time()) + offset)).status_code == 401
+    assert request(client, timestamp=str(1000 + offset)).status_code == 401
 
 
 @pytest.mark.parametrize('timestamp', ['not-a-time', '', False])
@@ -226,6 +229,11 @@ def test_failed_preview_retained_no_retry(enabled, database):
 
 @pytest.mark.parametrize('statement', [
     lambda: insert(TorqueAIDispatch.__table__).values(organization_id='mor'),
+    lambda: update(TorqueAIDispatchOperational.__table__).values(source_fingerprint='bad'),
+    lambda: update(TorqueAIDispatchStop.__table__).values(source_fingerprint='bad'),
+    lambda: update(TorqueAIDispatchSyncState.__table__).values(last_successful_run_id='bad'),
+    lambda: update(TorqueAIDispatchSyncRun.__table__).values(status='bad'),
+    lambda: select(1).add_cte(update(TorqueAIDispatch.__table__).values(customer_name='bad').cte()),
     lambda: text('DELETE FROM torqueai_backfill_manifests'),
     lambda: text('UPDATE torqueai_dispatch_sync_state SET last_successful_run_id=\'bad\''),
     lambda: text('SELECT 1'),  # Arbitrary text is not a SQLAlchemy Select.

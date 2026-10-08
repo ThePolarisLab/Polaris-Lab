@@ -12,8 +12,9 @@ import re
 from fastapi import HTTPException
 from sqlalchemy import create_engine, event, func, select, text
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.sql.dml import Insert, Update
+from sqlalchemy.sql.dml import Delete, Insert, Update
 from sqlalchemy.sql.selectable import Select
+from sqlalchemy.sql.visitors import iterate
 
 from app.connectors.torqueai import TorqueAIConnectorError, _validated_configuration
 from app.connectors.torqueai_backfill_control import BackfillControl, CONTROL_TABLES, ControlError, fingerprint
@@ -40,6 +41,8 @@ def _isolated_engine():
     def restrict(conn, cursor, statement, parameters, context, executemany):
         compiled = context.compiled.statement if context.compiled else None
         if isinstance(compiled, Select):
+            if any(isinstance(node, (Insert, Update, Delete)) for node in iterate(compiled)):
+                raise ControlError("Data-modifying SELECT/CTE forbidden")
             return
         if statement == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY":
             return
