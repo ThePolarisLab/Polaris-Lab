@@ -13,6 +13,14 @@ Verified `main` and deployed API baseline: [`e4775e094e36e0a6b413b1aab2cf35289a1
 - **Polaris owns intelligence, policy, memory and workflows.** Root TypeScript Athena/Atlas/Decision Intelligence/Hermes modules are tested foundations; their tests do not establish a fully deployed management copilot. The Python connector runtime owns live OAuth, encrypted token refresh and ingestion. Hermes contracts/reference adapters must not become a second live token owner; see [ADR-026](docs/architecture/ADR-026-quickbooks-runtime-ownership.md).
 - AI providers remain replaceable. MCP/tools are least privilege, fixed-tenant and bounded. Consequential actions require human approval. Prefer free infrastructure where practical, with explicit recovery and availability tradeoffs.
 
+## Governed MOR business baseline
+
+Recorded 2026-10-11 (America/Toronto): [MOR Governed Business Rules — Baseline v1.0](docs/operations/POLARIS_MOR_GOVERNED_BUSINESS_RULES.md) is the durable owner-approved business baseline. It separates **CONFIRMED MOR RULES**, **TECHNICAL RECOMMENDATIONS** and **OPEN/FUTURE ITEMS**. Only Surinder / MOR owner may change core policy or consequential authority; material ambiguity requires human clarification. This documentation addition changes no runtime, integration, provider behavior, schema or production configuration.
+
+Owner-confirmed historical-backfill state: [PR #335](https://github.com/ThePolarisLab/Polaris-Lab/pull/335) update-evidence layer is production-certified; September 1–7 certified preview: 22 provider records, 18 `would_update`, 2 unchanged, 2 identity conflicts/quarantined, zero operational writes. This records Surinder's supplied certification state, not an independent live rerun. Historical writer remains unauthorized; operational enrichment needs appropriate field-level evidence before write execution is considered. Existing quarantined conflicts remain untouched.
+
+Open gates include operational-enrichment evidence, WhatsApp integration mechanics, secured Ollama deployment architecture/certification, backup/restore certification and any future write-enabled historical executor. Recommended RPO <= 1 hour / RTO <= 4 hours are technical targets, not achieved recovery certification. Restore-test evidence is required before a historical writer or broader autonomy; passing that gate does not grant write authority.
+
 ## Core operating domains
 
 **Fuel Intelligence** is a permanent core Polaris operating domain. The [Fuel Intelligence Constitution](docs/operations/POLARIS_FUEL_INTELLIGENCE_CONSTITUTION.md) records MOR-confirmed rules, the current management-described manual workflow, proposed automation and authority limits. End-to-end dispatch-triggered planning and automatic driver-plan delivery are future work; existing bounded connector/import certification below remains unchanged.
@@ -96,7 +104,7 @@ The Render inventory showed no PostgreSQL service. `render.yaml` still declares 
 ## Known Production Risks / Unresolved Gates
 
 1. **Material recovery risk:** Neon has only a six-hour history window, no snapshots and no backup schedule. No successful restore drill was verified. Establish agreed recovery objectives, an affordable independent backup/export policy and an isolated restore drill with evidence before calling recovery certified. GitHub cannot recover business data or encrypted connector state.
-2. **Merge protection absent:** `main` is unprotected and the ruleset list was empty at inspection. This PR proposes protection but does not change repository settings; see [protection proposal](docs/governance/repository-protection.md).
+2. **Merge protection:** the 2026-10-04 inspection recorded unprotected `main`. Reverified 2026-10-11 for this docs baseline: `main` is protected at `a8de55fa5bf911ec4ce143b00675340bec1e7f2a`, with required Backend security tests, Frontend tests and build, and TypeScript tests (Security Gate). The ruleset list is empty; branch protection is separately enabled. No repository settings were changed; see the historical [protection proposal](docs/governance/repository-protection.md).
 3. **Certification gaps:** lane analytics live grant/acceptance and fault stable-identity/transition gates remain unresolved. Preserve accepted #323 certification for the existing two tools.
 4. **Deployment ambiguity:** staging labels, old Render DB declaration, unverified frontend SHA and uninspected Render database-secret target need operator reconciliation. No production configuration/removal occurs here.
 5. **Availability/freshness:** free runtime/compute suspension and manual/skipped feeds can delay data. Owner-facing answers must disclose unknown, stale and partial evidence.
