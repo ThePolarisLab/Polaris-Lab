@@ -21,6 +21,10 @@ Owner-confirmed historical-backfill state: [PR #335](https://github.com/ThePolar
 
 Open gates include operational-enrichment evidence, WhatsApp integration mechanics, secured Ollama deployment architecture/certification, backup/restore certification and any future write-enabled historical executor. Recommended RPO <= 1 hour / RTO <= 4 hours are technical targets, not achieved recovery certification. Restore-test evidence is required before a historical writer or broader autonomy; passing that gate does not grant write authority.
 
+## Recovery readiness assessment — 2026-10-12
+
+[Read-only assessment and isolated restore plan](docs/database/RECOVERY_READINESS_2026-10-12.md): connected Neon metadata still reports six-hour history, one default production-labelled branch, no snapshots and no snapshot schedule. Runtime-to-database mapping, independent backup custody, key/configuration recovery and timed restore remain unverified. Recovery is **NOT CERTIFIED** against recommended RPO <= 1 hour / RTO <= 4 hours. No backup, restore, production setting or operational write was executed. Resolve source mapping/custody and prepare a bounded isolated-drill approval package next; historical writer remains unauthorized.
+
 ## Core operating domains
 
 **Fuel Intelligence** is a permanent core Polaris operating domain. The [Fuel Intelligence Constitution](docs/operations/POLARIS_FUEL_INTELLIGENCE_CONSTITUTION.md) records MOR-confirmed rules, the current management-described manual workflow, proposed automation and authority limits. End-to-end dispatch-triggered planning and automatic driver-plan delivery are future work; existing bounded connector/import certification below remains unchanged.
