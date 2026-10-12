@@ -121,15 +121,32 @@ Surinder's confirmed state for this baseline: [PR #335](https://github.com/ThePo
 
 The historical writer remains unauthorized. Operational enrichment still needs appropriate field-level evidence before any write execution is considered. Existing quarantined conflicts must remain untouched. Update-evidence certification does not certify operational-enrichment rollback, historical completeness or a write-enabled executor.
 
+### 23. Backup, Restore, and Recovery Governance
+
+**CONFIRMED MOR RULES** — recorded 2026-10-12 (America/Toronto). Authority: Surinder / MOR owner, through the explicit instruction to record these ten recovery requirements before infrastructure action. This revision promotes the previously recommended recovery targets and gates to governing requirements; it does not establish technical capability or certification. The original baseline is preserved in Git history.
+
+1. **Recovery gate:** historical writes or broader autonomy remain blocked until recovery is certified.
+2. **Recovery objectives:** target recovery point objective (RPO) <= 1 hour and recovery time objective (RTO) <= 4 hours. These are required certification targets, not achieved service guarantees.
+3. **Tested restoration:** certification requires a tested restore with evidence; the existence or readability of backups alone is insufficient.
+4. **Production protection:** restore tests must use an isolated non-production environment and must not modify production data.
+5. **Original-state integrity:** validate restored data before migrations or upgrades. Preserve tenant isolation, audit history, TorqueAI backfill evidence and the two quarantined identity conflicts; do not resolve, merge or alter those conflicts during recovery testing.
+6. **Recoverability verification:** verify the actual production database mapping; Neon backup, PITR, snapshot and export capabilities; independent backup availability; encryption-key and configuration recovery; and documented recovery ownership. Record unavailable or unverified capabilities as gaps, not assumptions.
+7. **Containment:** external integrations and side effects must be disabled during restore testing, including schedules, ingestion, provider refresh, outbound communications, financial posting and historical execution.
+8. **Evidence:** record timestamps with timezone, elapsed recovery time, measured RPO/RTO and explicit pass/fail against each target, integrity and isolation evidence, and unresolved gaps. Missing evidence must remain visible; a documentation merge or passing CI is not recovery certification.
+9. **Cloud approval:** any cloud action that creates or deletes resources, changes production settings, incurs cost, rotates keys or alters backup policy requires explicit human approval before execution. Approval must cover the concrete action and scope; this documentation authorizes none of those actions.
+10. **Separate write approval:** historical write execution requires separate explicit approval even after recovery certification. Certification does not grant broader autonomy or waive field-level evidence, identity-safety or execution controls.
+
+Execution planning and certificate evidence belong in the [recovery-readiness assessment and isolated restore plan](../database/RECOVERY_READINESS_2026-10-12.md) and [rollback and recovery runbook](../database/rollback-and-recovery.md). Recovery remains **NOT CERTIFIED**; no infrastructure action is performed by this revision.
+
 ## TECHNICAL RECOMMENDATIONS
 
 These recommendations require implementation review and certification. They are not claims of existing capability or authorization to change production.
 
 ### Backup and disaster recovery
 
-Target recovery point objective (RPO) <= 1 hour and recovery time objective (RTO) <= 4 hours. Before a historical writer or broader autonomy, require automated backups, point-in-time recovery (PITR) or frequent snapshots, a tested restore procedure, documented recovery ownership, protected audit/evidence data, configuration recovery procedure and recovery-test evidence.
+**TECHNICAL RECOMMENDATIONS** — implementation choices supporting [rule 23](#23-backup-restore-and-recovery-governance), not additional MOR rules or execution authority.
 
-A backup is not certified merely because it exists. Successful restore testing is the production gate. Targets and their implementation/certification remain technical recommendations; historical write authority requires separate approval even after recovery gates pass.
+Consider automated backup coverage through PITR or frequent snapshots plus encrypted independent exports, failure/coverage monitoring, secure key/configuration custody and a recurring restore-test cadence. Select frequencies, retention, service tier, export destination and isolation architecture only after verifying actual capabilities, cost and required human approval. The recovery plan proposes separate PITR and independent-export tests; implementation and technical certification remain open.
 
 ### Identity and field design
 
@@ -144,7 +161,7 @@ For trailers, separate MOR trailer number, vendor trailer number, plate and owne
 | Operational-enrichment field-level evidence | Appropriate before/proposed field-level evidence and review/rollback sufficiency before any operational write is considered. Fingerprints alone do not close the gate. |
 | WhatsApp integration mechanics | Define access, permissions, evidence-based linking, retention and certification for the initial read scope. Outbound messaging needs separate approval. |
 | Ollama deployment architecture/certification | Select secured MOR-controlled hosting, network controls, model/version audit, validation, logging/retention and routing criteria; certify before relying on the deployment. |
-| Backup/restore certification | Implement and prove the recovery recommendation with successful restore evidence, ownership and configuration recovery. |
+| Backup/restore certification | Satisfy confirmed rule 23 with tested restore evidence, measured RPO/RTO, ownership and key/configuration recovery; implementation remains unverified. |
 | Future write-enabled historical executor | Remains unauthorized; requires separately approved scope, field evidence, identity safety, recovery certification and execution controls. Keep quarantined conflicts untouched. |
 | Identity implementation | Review and certify effective-period tractor identity and trailer field separation without inventing business reassignment. |
 | Future accounting posting / outbound communication | Separate approved automation gates; neither is enabled by this baseline. |

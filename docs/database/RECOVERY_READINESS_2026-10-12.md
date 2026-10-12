@@ -4,7 +4,9 @@ Status: **ASSESSMENT COMPLETE / RECOVERY NOT CERTIFIED / PLAN ONLY**.
 
 Recorded: 2026-10-12 (America/Toronto). Repository baseline: `56b65cfd8a44c2d296cdb542a24749bb86efcb42` ([PR #336](https://github.com/ThePolarisLab/Polaris-Lab/pull/336)). Scope: read-only infrastructure metadata and repository inspection; no backup, restore, database query, migration, deployment or configuration change was performed.
 
-Authority: [MOR governed business baseline](../operations/POLARIS_MOR_GOVERNED_BUSINESS_RULES.md). Recommended targets are **RPO <= 1 hour** and **RTO <= 4 hours**. These are technical targets requiring implementation and certification, not achieved service guarantees. Successful restore testing is the production gate before considering historical writes or broader autonomy; it never grants historical-write authority.
+Authority: [MOR rule 23: Backup, Restore, and Recovery Governance](../operations/POLARIS_MOR_GOVERNED_BUSINESS_RULES.md#23-backup-restore-and-recovery-governance), owner-confirmed 2026-10-12. Required certification targets are **RPO <= 1 hour** and **RTO <= 4 hours**, not achieved service guarantees. Historical writes and broader autonomy remain blocked until recovery is certified; historical write execution still needs separate explicit approval afterward. The proposed design below remains **TECHNICAL RECOMMENDATIONS** subject to the confirmed rule.
+
+Governance revision only, based on verified main `fdbcc21167d45e94c10a2ae754c16dbe1080d093` (merged [PR #337](https://github.com/ThePolarisLab/Polaris-Lab/pull/337)). Original assessment observations below are retained, not newly verified. Any cloud action creating/deleting resources, changing production settings, incurring cost, rotating keys or altering backup policy requires explicit human approval before execution. No infrastructure action or historical write is authorized or executed here.
 
 ## 1. Evidence and present readiness
 
@@ -27,7 +29,7 @@ Authority: [MOR governed business baseline](../operations/POLARIS_MOR_GOVERNED_B
 | Gap | Required resolution / evidence |
 | --- | --- |
 | Exact production source | Operator verifies Render's active database host/database/branch against Neon, using redacted identifiers in public evidence; records deployed application SHA and live Alembic revision. Do not infer from names. |
-| Recoverable points and retention | Confirm oldest/latest restorable points, coverage gaps and failure alerts. Owner chooses retention covering detection delays; six-hour history alone is insufficient evidence for that choice. |
+| Recoverable points and retention | Verify Neon backup/PITR/snapshot/export capabilities and their availability for the actual production source. Confirm oldest/latest restorable points, coverage gaps and failure alerts. Owner chooses retention covering detection delays; six-hour history alone is insufficient evidence for that choice. |
 | Independent copy | Select an encrypted, access-controlled export destination outside the primary database failure domain, with retention, integrity verification and tested retrieval. Repository and disposable runtime disks are unsuitable custody. |
 | Recovery-point target | Design backup/PITR coverage so newest successfully recoverable point remains <= 1 hour old, including failures and retry time. A nominal hourly schedule alone does not prove the target. |
 | Keys and configuration | Inventory required encryption keys, active key versions, auth/session settings, provider credentials, tenant bindings, callbacks, schedules and endpoint settings in approved secret custody. Record retrieval/rotation ownership without secret values. |
@@ -74,11 +76,11 @@ Certificate template (complete only after execution):
 | Source and target | Privately verified identities; source deployed SHA/schema; isolated target |
 | Artifact and point | Recovery point, backup manifest/checksum, retention and key versions; no secret values |
 | Timeline | Incident declaration, recovery point, retrieval, restore, validation and usable-app timestamps |
-| RPO / RTO | Measured values and sustained-coverage evidence; target comparison |
+| RPO / RTO | Measured values, elapsed recovery time and sustained-coverage evidence; explicit PASS/FAIL for each governed target |
 | Integrity | Aggregate manifests/hashes, tenant/access checks, quarantined conflicts and audit preservation |
 | Configuration / keys | Secure retrieval and decryption outcome; reauthorization dependencies |
 | Isolation / cleanup | Disabled external actions, target access and approved retention/disposition |
-| Result | PASS or FAIL, failures, remediation, acceptance and next review date |
+| Result | PASS or FAIL, evidence references, unresolved gaps, failures, remediation, acceptance and next review date |
 
 ## 6. Next approval package
 
