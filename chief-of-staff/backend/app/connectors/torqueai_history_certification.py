@@ -22,14 +22,14 @@ from app.database.database import engine as application_engine
 from app.models.torqueai import (TorqueAIDispatch, TorqueAIDispatchOperational,
                                 TorqueAIDispatchStop, TorqueAIDispatchSyncRun,
                                 TorqueAIDispatchSyncState)
-from app.models.torqueai_backfill import MANIFEST, WINDOW, ATTEMPT, IDENTITY
+from app.models.torqueai_backfill import MANIFEST, WINDOW, ATTEMPT, IDENTITY, UPDATE_EVIDENCE
 from app.organizations.models import Organization
 
 OPERATOR = "github-actions/historical-preview-certification"
 NORMAL = (TorqueAIDispatch.__table__, TorqueAIDispatchOperational.__table__,
           TorqueAIDispatchStop.__table__, TorqueAIDispatchSyncState.__table__,
           TorqueAIDispatchSyncRun.__table__)
-LEDGER = (MANIFEST, WINDOW, ATTEMPT, IDENTITY)
+LEDGER = (MANIFEST, WINDOW, ATTEMPT, IDENTITY, UPDATE_EVIDENCE)
 FLAGS = ("database_writes", "provider_writes", "checkpoint_modified", "claims_modified",
          "raw_provider_payload_returned", "operational_rows_modified", "secrets_exposed")
 
@@ -52,6 +52,8 @@ def _isolated_engine():
                                         "show transaction isolation level", "show standard_conforming_strings"}:
             return
         if isinstance(compiled, (Insert, Update)) and compiled.table.name in CONTROL_TABLES:
+            if isinstance(compiled, Update) and compiled.table.name == UPDATE_EVIDENCE.name:
+                raise ControlError("Update review evidence is insert-only")
             return
         raise ControlError("Certification permits control-ledger writes only")
     event.listen(engine, "before_cursor_execute", restrict)
@@ -117,7 +119,7 @@ def _certify(engine, *, organization_id, date_from, date_to, code_sha):
     runs = TorqueAIDispatchSyncRun.__tablename__
     normal_sync_activity = before["normal"][runs] != after["normal"][runs]
     expected = {MANIFEST.name: 1, WINDOW.name: 1, ATTEMPT.name: 1,
-                IDENTITY.name: len(report["identities"])}
+                IDENTITY.name: len(report["identities"]), UPDATE_EVIDENCE.name: report["would_update"]}
     deltas = {t: after["control_counts"][t] - before["control_counts"][t]
               for t in before["control_counts"]}
     evidence_valid = (attempt["evidence_fingerprint"] == fingerprint(attempt["evidence"])
@@ -125,8 +127,9 @@ def _certify(engine, *, organization_id, date_from, date_to, code_sha):
                       and final_window["active_attempt_id"] is None and final_window["lease_until"] is None
                       and final_window["approved_at"] is None
                       and quarantined == report["identity_conflicts"])
+    update_summary = service.update_evidence_summary(attempt["id"])
     safety = (all(report[k] is False for k in FLAGS[:5]) and not normal_changed
-              and deltas == expected and evidence_valid)
+              and deltas == expected and evidence_valid and update_summary["update_evidence_integrity_valid"])
     payload = {"status": final_window["status"] if safety else "inconclusive",
         "provider": "torqueai", "operation": "historical_preview_certification",
         "request": report["request"], "window_semantics": "dispatch_order_date",
@@ -139,7 +142,7 @@ def _certify(engine, *, organization_id, date_from, date_to, code_sha):
         "returned_ship_dates": report["returned_ship_dates"], "before": before, "after": after,
         "control_row_deltas": deltas, "observed_normal_state_change": normal_changed,
         "normal_sync_activity_observed": normal_sync_activity, "safety_verified": safety,
-        **{k: False for k in FLAGS}}
+        **{k: False for k in FLAGS}, **update_summary}
     for key in ("provider_records_received", "validated_records", "would_insert", "would_update",
                 "unchanged", "identity_conflicts", "missing_usable_lane_stops"):
         payload[key] = report[key]

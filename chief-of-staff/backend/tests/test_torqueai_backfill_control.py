@@ -11,7 +11,7 @@ from app.connectors import torqueai_backfill_control as control_module
 from app.connectors.torqueai_backfill_control import (
     BackfillControl, ControlError, _ledger_connection, fingerprint, rollback_eligible,
 )
-from app.models.torqueai_backfill import MANIFEST, WINDOW, ATTEMPT, IDENTITY
+from app.models.torqueai_backfill import MANIFEST, WINDOW, ATTEMPT, IDENTITY, UPDATE_EVIDENCE
 from app.models.torqueai import TorqueAIDispatch, TorqueAIDispatchOperational, TorqueAIDispatchStop
 from test_torqueai_history_preview import TABLES, Provider, dispatch, seed, snapshot
 from app.organizations.models import Organization
@@ -26,7 +26,7 @@ def database(tmp_path, monkeypatch):
     @event.listens_for(engine, "connect")
     def foreign_keys(dbapi_connection, connection_record):
         dbapi_connection.execute("PRAGMA foreign_keys=ON")
-    for table in [*TABLES, MANIFEST, WINDOW, ATTEMPT, IDENTITY]:
+    for table in [*TABLES, MANIFEST, WINDOW, ATTEMPT, IDENTITY, UPDATE_EVIDENCE]:
         table.create(engine)
     with engine.begin() as connection:
         connection.execute(insert(Organization.__table__), [

@@ -15,7 +15,7 @@ from app.connectors.torqueai_backfill_control import BackfillControl, ControlErr
 from app.models.torqueai import (TorqueAIDispatch, TorqueAIDispatchOperational,
                                 TorqueAIDispatchStop, TorqueAIDispatchSyncState,
                                 TorqueAIDispatchSyncRun)
-from app.models.torqueai_backfill import MANIFEST, WINDOW, ATTEMPT, IDENTITY
+from app.models.torqueai_backfill import MANIFEST, WINDOW, ATTEMPT, IDENTITY, UPDATE_EVIDENCE
 from app.security.job_auth import sign_job_request
 from test_torqueai_backfill_control import database, rows
 from test_torqueai_history_preview import Provider, dispatch, seed, snapshot, DAY
@@ -176,7 +176,7 @@ def test_one_real_control_preview_no_operational_changes(enabled, database, monk
     assert all(payload[k] is False for k in certification.FLAGS)
     assert payload['before']['normal'] == payload['after']['normal']
     assert snapshot(database) == before
-    assert payload['control_row_deltas'] == {MANIFEST.name: 1, WINDOW.name: 1, ATTEMPT.name: 1, IDENTITY.name: 3}
+    assert payload['control_row_deltas'] == {MANIFEST.name: 1, WINDOW.name: 1, ATTEMPT.name: 1, IDENTITY.name: 3, UPDATE_EVIDENCE.name: 1}
     assert len(calls) == len(provider.calls) == 1
     assert len(rows(database, MANIFEST)) == len(rows(database, WINDOW)) == len(rows(database, ATTEMPT)) == 1
     assert rows(database, MANIFEST)[0]['code_sha'] == SHA
@@ -290,6 +290,7 @@ def test_manual_workflow_contract():
 
 
 @pytest.mark.parametrize('violation', [None, *certification.FLAGS, 'status', 'count',
+                                      'update_evidence_integrity_valid', 'rollback_preconditions_recorded', 'update_count',
                                      'request', 'safety_verified', 'http_error', 'network_error'])
 def test_workflow_executes_once_and_fails_closed(monkeypatch, capsys, violation):
     import io
@@ -311,6 +312,8 @@ def test_workflow_executes_once_and_fails_closed(monkeypatch, capsys, violation)
                'validated_records': 1, 'would_insert': 1, 'would_update': 0, 'unchanged': 0,
                'identity_conflicts': 0, 'quarantined': 0, 'missing_usable_lane_stops': 0,
                'pages_fetched': 1, 'provider_total_count': 1, 'page_size': 100,
+               'update_evidence_count': 0, 'changed_field_count_total': 0,
+               'update_evidence_integrity_valid': True, 'rollback_preconditions_recorded': True,
                'raw_extra': 'DO_NOT_PRINT', **{k: False for k in certification.FLAGS}}
     if violation in certification.FLAGS:
         payload[violation] = True
@@ -322,6 +325,10 @@ def test_workflow_executes_once_and_fails_closed(monkeypatch, capsys, violation)
         payload['request'] = {'secret': 'DO_NOT_PRINT'}
     elif violation == 'safety_verified':
         payload['safety_verified'] = False
+    elif violation in ('update_evidence_integrity_valid', 'rollback_preconditions_recorded'):
+        payload[violation] = False
+    elif violation == 'update_count':
+        payload['update_evidence_count'] = 1
     requests = []
     class Response(io.BytesIO):
         status = 200

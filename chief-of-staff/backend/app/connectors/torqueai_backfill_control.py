@@ -1,6 +1,7 @@
 """Internal control-plane library. No CLI, HTTP route, scheduler or dispatch writer.
 
-Transactions may mutate only the four backfill ledger tables. Caller transactions
+Transactions may mutate only backfill ledger tables. Proposed review evidence
+is insert-only. Caller transactions
 and scheduled claims/checkpoints never enter this service. Preview execution uses
 the existing isolated read-only provider/database boundary.
 """
@@ -17,10 +18,11 @@ from sqlalchemy.sql.selectable import Select
 
 from app.connectors.torqueai_history_preview import preview_torqueai_history
 from app.connectors.torqueai_ingestion import TorqueAIDispatchIngestionError, _validate_window
-from app.models.torqueai_backfill import ATTEMPT, CLAIM_NAMESPACE, IDENTITY, MANIFEST, SEMANTICS, WINDOW, utcnow
+from app.connectors.torqueai_update_evidence import EvidenceError, digest, envelope, validate_review, validate_record
+from app.models.torqueai_backfill import ATTEMPT, CLAIM_NAMESPACE, IDENTITY, MANIFEST, SEMANTICS, WINDOW, UPDATE_EVIDENCE, utcnow
 from app.organizations.models import Organization
 
-CONTROL_TABLES = frozenset(t.name for t in (MANIFEST, WINDOW, ATTEMPT, IDENTITY))
+CONTROL_TABLES = frozenset(t.name for t in (MANIFEST, WINDOW, ATTEMPT, IDENTITY, UPDATE_EVIDENCE))
 
 
 class ControlError(ValueError):
@@ -56,6 +58,8 @@ def _ledger_connection(engine):
             compiled = context.compiled.statement if context.compiled else None
             if isinstance(compiled, Select):
                 return
+            if isinstance(compiled, Update) and compiled.table.name == UPDATE_EVIDENCE.name:
+                raise ControlError("Update review evidence is insert-only")
             if not isinstance(compiled, (Insert, Update)) or compiled.table.name not in CONTROL_TABLES:
                 raise ControlError("Control plane permits ledger writes only")
         event.listen(connection, "before_cursor_execute", restrict)
@@ -186,9 +190,9 @@ class BackfillControl:
             if not attempt:
                 raise ControlError("Unknown tenant attempt")
             evidence, identities = _preview_evidence(report, window)
-            digest = fingerprint(evidence)
+            report_digest = fingerprint(evidence)
             if attempt["completed_at"]:
-                if attempt["evidence_fingerprint"] != digest:
+                if attempt["evidence_fingerprint"] != report_digest:
                     raise ControlError("Completed evidence is immutable")
                 return attempt["status"]
             if window["active_attempt_id"] != attempt_id or _aware(window["lease_until"]) <= utcnow():
@@ -200,15 +204,29 @@ class BackfillControl:
             status = ("failed" if report["status"] != "success" else "blocked"
                       if evidence["identity_conflicts"] or historical_conflict else "previewed")
             now = utcnow()
+            reviews = {(r["provider_load_number"], r["provider_order_number"]): r
+                       for r in report.get("update_reviews", [])}
             for item in identities:
-                connection.execute(insert(IDENTITY).values(id=str(uuid4()), organization_id=self.organization_id,
+                identity_id = str(uuid4())
+                connection.execute(insert(IDENTITY).values(id=identity_id, organization_id=self.organization_id,
                     attempt_id=attempt_id, provider_load_number=item["provider_load_number"],
                     provider_order_number=item["provider_order_number"], classification=item["classification"],
                     quarantined=int(item["classification"] == "identity_conflict"),
                     conflicting_order_numbers=item["conflicting_order_numbers"]))
+                review = reviews.get((item["provider_load_number"], item["provider_order_number"]))
+                if review is not None:
+                    if review["organization_id"] != self.organization_id:
+                        raise ControlError("Cross-tenant update review")
+                    payload = envelope(review, manifest_id=window["manifest_id"], window_id=window_id,
+                        attempt_id=attempt_id, identity_evidence_id=identity_id, code_sha=attempt["code_sha"], created_at=now)
+                    connection.execute(insert(UPDATE_EVIDENCE).values(id=str(uuid4()),
+                        organization_id=self.organization_id, manifest_id=window["manifest_id"], window_id=window_id,
+                        attempt_id=attempt_id, identity_evidence_id=identity_id, dispatch_id=review["dispatch_id"],
+                        provider_load_number=item["provider_load_number"], provider_order_number=item["provider_order_number"],
+                        created_at=now, evidence=payload, evidence_fingerprint=digest(payload)))
             connection.execute(update(ATTEMPT).where(ATTEMPT.c.id == attempt_id,
                 ATTEMPT.c.organization_id == self.organization_id).values(status=status, completed_at=now,
-                evidence=evidence, evidence_fingerprint=digest))
+                evidence=evidence, evidence_fingerprint=report_digest))
             connection.execute(update(WINDOW).where(WINDOW.c.id == window_id,
                 WINDOW.c.organization_id == self.organization_id).values(status=status, completed_at=now,
                 active_attempt_id=None, lease_until=None))
@@ -228,9 +246,42 @@ class BackfillControl:
             if not created:
                 raise ControlError("Preview request already in progress; do not refetch")
         report = preview_torqueai_history(self.engine, date_from=window["date_from"],
-                                         date_to=window["date_to"], connector=connector)
+                                         date_to=window["date_to"], connector=connector, capture_update_evidence=True)
         self.finish_preview(window_id, attempt_id, report)
         return report
+
+    def update_evidence_summary(self, attempt_id):
+        """Safe aggregates only; full values remain in the operator review ledger."""
+        with _ledger_connection(self.engine) as connection:
+            self._tenant(connection)
+            attempt = connection.execute(select(ATTEMPT).where(ATTEMPT.c.organization_id == self.organization_id,
+                ATTEMPT.c.id == attempt_id)).mappings().one()
+            window = self._window(connection, attempt["window_id"])
+            records = connection.execute(select(UPDATE_EVIDENCE).where(
+                UPDATE_EVIDENCE.c.organization_id == self.organization_id,
+                UPDATE_EVIDENCE.c.attempt_id == attempt_id)).mappings().all()
+            identities = {r["id"]: r for r in connection.execute(select(IDENTITY).where(
+                IDENTITY.c.organization_id == self.organization_id, IDENTITY.c.attempt_id == attempt_id)).mappings()}
+        valid = attempt["completed_at"] is not None and attempt["evidence_fingerprint"] == fingerprint(attempt["evidence"])
+        expected = attempt["evidence"].get("update_review_fingerprints")
+        observed, changed = [], 0
+        try:
+            for row in records:
+                validate_record(row)
+                identity = identities[row["identity_evidence_id"]]
+                if (identity["classification"] != "would_update" or identity["quarantined"]
+                        or (identity["provider_load_number"], identity["provider_order_number"]) !=
+                           (row["provider_load_number"], row["provider_order_number"])
+                        or row["window_id"] != window["id"] or row["manifest_id"] != window["manifest_id"]
+                        or row["evidence"]["code_sha"] != attempt["code_sha"]):
+                    raise EvidenceError("Update evidence linkage mismatch")
+                review = row["evidence"]["review"]
+                observed.append(digest(review)); changed += len(review["changed_fields"])
+            valid = valid and expected is not None and sorted(observed) == expected and len(records) == attempt["evidence"]["would_update"]
+        except (EvidenceError, KeyError, TypeError, ValueError):
+            valid = False
+        return {"update_evidence_count": len(records), "update_evidence_integrity_valid": valid,
+                "changed_field_count_total": changed, "rollback_preconditions_recorded": valid}
 
     def approve(self, window_id, *, operator):
         """Approval records review only; cannot enable execution."""
@@ -323,6 +374,22 @@ def _preview_evidence(report, window):
     elif report["status"] != "failed" or identities or not evidence["validation_failures"]:
         raise ControlError("Invalid failure evidence")
     evidence["identities"] = identities
+    if "update_reviews" in report:
+        reviews = report["update_reviews"]
+        expected = {(i["provider_load_number"], i["provider_order_number"]) for i in identities if i["classification"] == "would_update"}
+        seen_reviews = set()
+        try:
+            for review in reviews:
+                validate_review(review)
+                key = (review["provider_load_number"], review["provider_order_number"])
+                if key not in expected or key in seen_reviews:
+                    raise EvidenceError("Update review requires unique nonconflicting identity")
+                seen_reviews.add(key)
+            if seen_reviews != expected:
+                raise EvidenceError("Missing deterministic update review")
+        except EvidenceError as exc:
+            raise ControlError("Invalid minimized update evidence") from exc
+        evidence["update_review_fingerprints"] = sorted(digest(r) for r in reviews)
     return evidence, identities
 
 

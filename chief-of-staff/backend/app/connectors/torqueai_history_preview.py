@@ -22,6 +22,7 @@ from app.connectors.torqueai_ingestion import (
     TorqueAIDispatchIngestionError, _normalize_pages, _required_pages, _validate_window,
 )
 from app.connectors.torqueai_operational_ingestion import _operational_snapshot
+from app.connectors.torqueai_update_evidence import FIELDS, EvidenceError, build_review
 from app.models.torqueai import TorqueAIDispatch, TorqueAIDispatchOperational
 from app.organizations.models import Organization
 
@@ -51,6 +52,7 @@ def _select_only_connection(engine: Engine):
 def preview_torqueai_history(
     engine: Engine, *, date_from: date, date_to: date,
     connector: TorqueAIConnector | None = None,
+    capture_update_evidence: bool = False,
 ) -> dict[str, Any]:
     """Preview one bounded window for configured active MOR, using provider truth only.
 
@@ -70,6 +72,8 @@ def preview_torqueai_history(
         "checkpoint_modified": False, "claims_modified": False,
         "raw_provider_payload_returned": False,
     }
+    if capture_update_evidence:
+        result["update_reviews"] = []
     try:
         date_from = _coerce_date(date_from, "from")
         date_to = _coerce_date(date_to, "to")
@@ -133,12 +137,19 @@ def preview_torqueai_history(
                 TorqueAIDispatch.provider_load_number, TorqueAIDispatch.provider_order_number,
                 TorqueAIDispatch.source_fingerprint,
                 TorqueAIDispatchOperational.source_fingerprint.label("operational_fingerprint"),
+                TorqueAIDispatch.id, TorqueAIDispatch.organization_id,
+                *(getattr(TorqueAIDispatch, field) for field in FIELDS
+                  if field not in {"provider_load_number", "provider_order_number"}),
             ).outerjoin(TorqueAIDispatchOperational, (
                 (TorqueAIDispatchOperational.dispatch_id == TorqueAIDispatch.id)
                 & (TorqueAIDispatchOperational.organization_id == organization_id)
             )).where(TorqueAIDispatch.organization_id == organization_id,
                      TorqueAIDispatch.provider_load_number.in_([item.provider_load_number for item in normalized]))).all()
         existing = {(row[0], row[1]): (row[2], row[3]) for row in rows}
+        current = {}
+        for row in rows:
+            current.setdefault((row[0], row[1]), []).append(dict(row._mapping))
+        reviews = []
         orders: dict[str, set[str]] = {}
         for load, order in [*existing, *(item.identity for item in normalized)]:
             orders.setdefault(load, set()).add(order)
@@ -159,6 +170,11 @@ def preview_torqueai_history(
                 "conflicting_order_numbers": sorted(orders[item.provider_load_number]) if conflict else [],
                 "missing_usable_lane_stops": not usable_stops,
             })
+            if capture_update_evidence and classification == "would_update":
+                candidates = current[item.identity]
+                if len(candidates) != 1:
+                    raise EvidenceError("Update requires exactly one composite match")
+                reviews.append(build_review(candidates[0], item, snapshot.source_fingerprint))
             try:
                 ship_date = date.fromisoformat(item.ship_date_text or "")
                 ship_dates.append(ship_date)
@@ -168,6 +184,10 @@ def preview_torqueai_history(
         if ship_dates:
             result["returned_ship_dates"].update(minimum=min(ship_dates).isoformat(), maximum=max(ship_dates).isoformat())
         result["status"] = "success"
+        if capture_update_evidence:
+            result["update_reviews"] = reviews
+    except EvidenceError:
+        result["validation_failures"] = [{"code": "update_evidence_invalid"}]
     except (TorqueAIConnectorError, TorqueAIDispatchIngestionError) as exc:
         result["validation_failures"] = [{"code": exc.code}]
     except SQLAlchemyError:
