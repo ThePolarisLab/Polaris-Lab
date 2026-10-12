@@ -89,10 +89,11 @@ jobs:
               fail()
           counts = ("provider_records_received", "validated_records", "would_insert", "would_update",
                     "unchanged", "identity_conflicts", "quarantined", "missing_usable_lane_stops",
-                    "pages_fetched", "provider_total_count", "page_size")
+                    "pages_fetched", "provider_total_count", "page_size", "update_evidence_count",
+                    "changed_field_count_total")
           flags = ("database_writes", "provider_writes", "checkpoint_modified", "claims_modified",
                    "raw_provider_payload_returned", "operational_rows_modified", "secrets_exposed")
-          if any(type(payload.get(k)) is not int or not 0 <= payload[k] <= 1000 for k in counts):
+          if any(type(payload.get(k)) is not int or not 0 <= payload[k] <= (13000 if k == "changed_field_count_total" else 1000) for k in counts):
               fail()
           if (payload.get("status") not in {"previewed", "blocked"}
                   or payload.get("window_status") != payload["status"]
@@ -103,6 +104,9 @@ jobs:
                   or payload.get("window_semantics") != "dispatch_order_date"
                   or payload.get("safety_verified") is not True
                   or payload.get("observed_normal_state_change") is not False
+                  or payload.get("update_evidence_integrity_valid") is not True
+                  or payload.get("rollback_preconditions_recorded") is not True
+                  or payload["update_evidence_count"] != payload["would_update"]
                   or any(payload.get(k) is not False for k in flags)
                   or payload["page_size"] != 100 or not 1 <= payload["pages_fetched"] <= 10
                   or payload["quarantined"] != payload["identity_conflicts"]
@@ -112,5 +116,7 @@ jobs:
               fail()
           # Print only type-checked counts, validated dates/enums and literal flags.
           print(json.dumps({"status": payload["status"], "request": dates,
-                            **{k: payload[k] for k in counts}, **{k: False for k in flags}}, sort_keys=True))
+                            **{k: payload[k] for k in counts}, **{k: False for k in flags},
+                            "update_evidence_integrity_valid": True,
+                            "rollback_preconditions_recorded": True}, sort_keys=True))
           PY

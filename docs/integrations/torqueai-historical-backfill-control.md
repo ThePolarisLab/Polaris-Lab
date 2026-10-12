@@ -46,8 +46,10 @@ could still cause omissions; these tests do not prove multi-page completeness.
 
 ## Durable model
 
-Migration `202610070001`, parent `202609120002`, adds four tables. It is not applied
-to production by this PR. The migration is forward-only to preserve evidence.
+Migration `202610070001`, parent `202609120002`, added the original four tables.
+The update-review extension adds only `torqueai_backfill_update_evidence` through
+forward-only migration `202610110001` (parent `202610070001`). No production
+migration or preview is performed while preparing the update-review PR.
 
 - `torqueai_backfill_manifests`: immutable tenant/request-key plan, operator,
   exact code SHA, created timestamp, `dispatch_order_date` semantics and
@@ -99,7 +101,8 @@ creation. There are no automatic retries or scheduled backfill tasks.
 ## Structural isolation
 
 The service owns SQLAlchemy Core transactions, not a caller ORM session. An SQL
-boundary allows INSERT/UPDATE only to the four control tables and rejects raw SQL
+boundary allows INSERT/UPDATE only to the original four control tables, INSERT
+only to the new update-review table, and rejects raw SQL
 and DELETE. It has no operational persistence callback. Claims are window-local
 with namespace `torqueai_historical_preview`; normal scheduled-sync claim and
 checkpoint tables are neither read for coordination nor updated.
@@ -153,7 +156,7 @@ permissions against arbitrary administrator SQL.
   existing interval, resolving quarantine, reopening approval or enabling execution
   requires a separately reviewed evidence-preserving transition; none is exposed
   in this foundation. Initial intervals should be sized using read-only preview.
-# Signed production preview certification bridge (awaiting live certification)
+# Signed production preview certification bridge
 
 Render Free has no shell or one-off jobs, and operator/GitHub environments do not
 hold the TorqueAI or database credentials. A manual GitHub Actions workflow may
@@ -174,15 +177,17 @@ certification, then disable it afterward. This PR does not enable it. Existing
 GitHub `POLARIS_PRODUCTION_API_URL` and HMAC secret configuration is reused; no
 TorqueAI/database credentials belong in Actions. There is no automatic schedule.
 
-After merge and deployment, the first live target is **2026-08-25 through
-2026-08-31**, provided it remains unreserved. Provider retrieval means
+The first live certification used **2026-08-25 through 2026-08-31**. That interval
+is now reserved and must not be dispatched again through the certification bridge.
+Provider retrieval means
 `Dispatch.date` / observed `orderDate`, not `shipDate`; September ship dates can
 appear in the August response. An order date is not certified as an immutable
 creation timestamp. No overlap, source cleanup, aliases or workbook imports are
 introduced. Retrieval coverage and analytical ship-date/lane coverage stay distinct.
 
 The certification uses a separate database pool with a SQL guard permitting only
-SELECT and compiled INSERT/UPDATE against the four control ledger tables. It
+SELECT and compiled INSERT/UPDATE against the original four control ledger tables,
+plus INSERT-only proposed update evidence. It
 does not share normal scheduled sessions or claims. A before/after snapshot
 streams tenant rows into hashes and returns only aggregate counts/fingerprints
 and normal sync-run identifiers/timestamps. The returned `database_writes=false`
@@ -213,3 +218,79 @@ provider/business records or load/order/customer identities are returned.
 
 **Live certification remains incomplete until the merged workflow passes in
 production. Historical completeness and write-enabled backfill remain uncertified.**
+
+
+## Proposed update review evidence (not execution authorization)
+
+The October 8, 2026 live run [37721893570](https://github.com/ThePolarisLab/Polaris-Lab/actions/runs/37721893570)
+at `5bd7a2c21768c7aa4b8942069c9af8e677c2d38d` safely previewed 29 records:
+27 projected updates and two quarantined conflicts. Both window and attempt
+remain blocked. Attempt `4909d0e9-4ee8-4770-a795-8ad1934b21d1` remains immutable;
+this extension does not populate it retroactively. Its 27 updates were
+identity-safe but lacked durable field-level before/after review evidence.
+The unresolved identities `4813 / VOID - ATL-29017` and
+`4824 / VOID - 31461-64338` remain quarantined pending authoritative evidence.
+No VOID stripping, aliases, load-only matching or status/date heuristics are allowed.
+
+There are four distinct gates:
+
+1. **Identity certification:** one exact tenant/load/order match and no competing
+   order pairing for the same load. The existing conflict rule is unchanged.
+2. **Proposed update evidence:** a separate insert-only review record for each
+   deterministic `would_update`, linked to its manifest, window, attempt, identity
+   evidence and durable dispatch row. A completed attempt binds the sorted review
+   fingerprints; retries cannot replace them. Conflicts, unchanged records and
+   proposed inserts receive no update-review images.
+3. **Execution authorization:** no historical writer, scheduler or new approval
+   path is provided. Review evidence is not permission to apply a change.
+4. **Rollback eligibility:** future design must verify the live row still matches
+   the certified applied image, tenant and exact row identity, and recheck under
+   a lock. A proposal is not an applied image. No restore/delete function exists.
+
+### Approved minimized image fields
+
+Images contain only these already-persisted dispatch fields:
+`provider_load_number`, `provider_order_number`, `status`, `order_date_text`,
+`ship_date_text`, `delivery_date_text`, `customer_name`, `dispatcher_name`,
+`driver_name`, `carrier_name`, `truck_number`, `trailer_number`, `loaded_miles`.
+Decimal miles use the existing ingestion canonical string representation.
+The deterministic sorted changed-field list compares normalized before/proposed
+values; unchanged fields are excluded. These business values remain in the
+restricted durable review ledger, never the certification response or Actions logs.
+
+Separate metadata retains current/proposed dispatch source fingerprints and
+current/proposed operational source fingerprints. Operational enrichment changes
+are **hash-only**: no billing, total charge, address, coordinate, note, raw provider
+payload or deferred field is copied into review images. An operational-only change
+can therefore have zero dispatch changed fields but different operational hashes.
+This is not full field-level certification or rollback readiness for enrichment
+or stops. Those changes require separately approved review design before writes.
+
+Each record has a creation timestamp, code SHA and explicit nonquarantined
+`would_update` classification. SHA-256 hashes cover each image and the complete
+metadata envelope; the attempt fingerprint binds the review hashes. Validation
+rejects altered images, diffs, hashes, tenant/row/attempt linkage and extra fields.
+A read-only precondition decision compares the current normalized dispatch image,
+row ID, tenant, exact pairing and both source fingerprints with the certified
+before state. This excludes observation timestamps, which scheduled sync may
+advance without changing normalized business state. It is not a writer.
+
+The SQL application boundaries deny UPDATE/DELETE of the new review table.
+Administrator SQL is outside those boundaries; integrity validation detects
+out-of-band tampering. Hashes are integrity checks, not signed attestations against
+an administrator able to rewrite every related hash and ledger record.
+
+Certification adds only `update_evidence_count`,
+`update_evidence_integrity_valid`, `changed_field_count_total`, and
+`rollback_preconditions_recorded`. The last flag means the minimized dispatch
+precondition evidence is present, not that rollback or execution is authorized.
+The manual-only workflow fails closed if evidence is missing or invalid and
+prints only type-checked aggregate metadata. Normal ingestion, checkpoint/claim
+namespace, scopes, credentials and provider pagination/retry behavior are unchanged.
+
+After merge, additive migration rollout and one separately approved bounded live
+certification remain required. Use an unreserved interval; never overwrite the
+old blocked attempt. Source/provider truth remains authoritative. Retrieval
+coverage remains Dispatch.date/orderDate; analytical ship-date coverage and
+historical completeness remain separate and uncertified. Strengthening production
+backup/restore evidence remains a prerequisite to operational writes.
