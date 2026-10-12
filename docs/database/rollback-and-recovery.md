@@ -2,6 +2,8 @@
 
 Status date: 2026-07-30
 
+Current readiness and execution gates: [2026-10-12 recovery assessment and isolated restore plan](RECOVERY_READINESS_2026-10-12.md). The dated procedures below do not establish recovery certification; validate the original recovered state before considering migrations, and account for application encryption-key/configuration recovery.
+
 ## Backup Requirement
 
 Production migrations must not proceed without a verified backup.
