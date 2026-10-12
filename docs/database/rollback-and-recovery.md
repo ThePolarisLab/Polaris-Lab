@@ -4,6 +4,14 @@ Status date: 2026-07-30
 
 Current readiness and execution gates: [2026-10-12 recovery assessment and isolated restore plan](RECOVERY_READINESS_2026-10-12.md). The dated procedures below do not establish recovery certification; validate the original recovered state before considering migrations, and account for application encryption-key/configuration recovery.
 
+## Governing recovery authority
+
+[Confirmed MOR rule 23: Backup, Restore, and Recovery Governance](../operations/POLARIS_MOR_GOVERNED_BUSINESS_RULES.md#23-backup-restore-and-recovery-governance) governs this runbook. RPO <= 1 hour / RTO <= 4 hours are required certification targets; recovery remains **NOT CERTIFIED**. Historical writes and broader autonomy stay blocked until certification, and historical execution still requires separate explicit approval afterward.
+
+The commands below are technical procedure examples, not execution approval. Verify actual production mapping, Neon backup/PITR/snapshot/export capabilities, independent backup availability, encryption-key/configuration recovery and assigned recovery ownership before a drill. Any cloud resource creation/deletion, production-setting change, cost, key rotation or backup-policy change requires explicit human approval before execution. A readable backup is a pre-migration check, not tested-restore certification.
+
+Restore testing must use an isolated non-production target without modifying production data, with external integrations and side effects disabled. Preserve tenant isolation, audit history, TorqueAI backfill evidence and both quarantined identity conflicts. Record timezone-qualified timestamps, elapsed recovery time, RPO/RTO pass/fail, evidence and unresolved gaps using the [certificate template](RECOVERY_READINESS_2026-10-12.md#5-passfail-and-certificate).
+
 ## Backup Requirement
 
 Production migrations must not proceed without a verified backup.
@@ -43,15 +51,16 @@ For Render PostgreSQL, use the database's managed backup/snapshot capability whe
 
 ## Restore Validation
 
-After restore to an isolated database:
+After an approved restore to an isolated non-production database, first validate the original recovered state using the compatible application revision, without migrations or upgrades:
 
 ```bash
 python -m app.database.validate_schema
 alembic current
-alembic upgrade head
 ```
 
-Then run application smoke tests against the restored database.
+Then validate tenant boundaries, audit history, TorqueAI backfill evidence, both quarantined conflicts and matching-key/configuration recovery; run tenant-scoped read-only application smoke tests with external integrations and side effects disabled. Review startup behavior first: the current Blueprint automatically upgrades schema. Use a reviewed isolated startup procedure that preserves the recovered state.
+
+Only after original-state validation may a separately reviewed upgrade rehearsal run on a disposable isolated copy; `alembic upgrade head` is not part of initial restore validation. No production cutover or migration is authorized by this runbook.
 
 ## Rollback Decision Criteria
 
